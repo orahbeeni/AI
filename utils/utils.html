@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dev Utils</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --text:#1c2230; --muted:#667085; --border:#d9dde5; --accent:#2f6fed; --accent-text:#fff; --err:#d92d3a; --ok:#12a150; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151c; --card:#1b1f29; --text:#e8ebf2; --muted:#98a2b3; --border:#2d3342; --accent:#5b8cff; --accent-text:#0b1020; --err:#ff6b75; --ok:#3ccf7e; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px 16px; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,sans-serif; }
+  main { max-width:860px; margin:0 auto; display:grid; gap:18px; }
+  h1 { font-size:22px; margin:0; }
+  h2 { font-size:16px; margin:0 0 14px; }
+  nav { display:flex; gap:4px; border-bottom:1px solid var(--border); }
+  nav button { background:none; color:var(--muted); border:0; border-bottom:2px solid transparent; border-radius:0; padding:10px 16px; margin-bottom:-1px; font-weight:600; }
+  nav button[aria-selected=true] { color:var(--accent); border-bottom-color:var(--accent); }
+  .panel[hidden] { display:none; }
+  .panel { display:grid; gap:20px; }
+  section { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:20px; }
+  .row { display:flex; flex-wrap:wrap; gap:12px 20px; align-items:center; margin-bottom:14px; }
+  .row:last-child { margin-bottom:0; }
+  label { display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
+  input[type=number], input[type=text], select { background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:5px 8px; font:inherit; }
+  input[type=number] { width:72px; }
+  input[type=range] { flex:1; min-width:140px; }
+  textarea { width:100%; min-height:160px; resize:vertical; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:10px 12px; font:13px/1.45 ui-monospace,Menlo,Consolas,monospace; tab-size:2; }
+  button { background:var(--accent); color:var(--accent-text); border:0; border-radius:8px; padding:8px 16px; font:inherit; font-weight:600; cursor:pointer; }
+  button.secondary { background:transparent; color:var(--text); border:1px solid var(--border); }
+  .out { display:flex; gap:8px; align-items:stretch; margin-bottom:8px; }
+  .val { flex:1; min-width:0; font:15px/1.4 ui-monospace,Menlo,Consolas,monospace; background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:9px 12px; word-break:break-all; user-select:all; }
+  .meter { height:6px; border-radius:3px; background:var(--border); overflow:hidden; margin:4px 0 6px; }
+  .meter > div { height:100%; width:0; transition:width .2s, background .2s; }
+  .hint { color:var(--muted); font-size:13px; }
+  .status { font-size:13px; min-height:20px; }
+  .status.err { color:var(--err); } .status.ok { color:var(--ok); }
+  .list { display:grid; gap:6px; margin-top:12px; }
+  .drop { border:2px dashed var(--border); border-radius:10px; padding:22px; text-align:center; color:var(--muted); }
+  .drop.over { border-color:var(--accent); color:var(--accent); }
+  .preview { max-width:100%; max-height:300px; border:1px solid var(--border); border-radius:8px; margin-top:12px; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:640px) { .cols { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Dev Utils</h1>
+  <nav role="tablist">
+    <button role="tab" data-tab="gen" aria-selected="true">Generators</button>
+    <button role="tab" data-tab="b64" aria-selected="false">Base64</button>
+    <button role="tab" data-tab="fmt" aria-selected="false">Formatter</button>
+  </nav>
+
+  <!-- ================= TAB 1: GENERATORS ================= -->
+  <div class="panel" id="tab-gen" role="tabpanel">
+    <section>
+      <h2>Password</h2>
+      <div class="row">
+        <label>Length <input type="range" id="len" min="4" max="128" value="20"> <input type="number" id="lenNum" min="4" max="128" value="20"></label>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="lower" checked> a–z</label>
+        <label><input type="checkbox" id="upper" checked> A–Z</label>
+        <label><input type="checkbox" id="digits" checked> 0–9</label>
+        <label><input type="checkbox" id="symbols" checked> Symbols</label>
+        <label><input type="checkbox" id="ambig"> Exclude look-alikes (O0Il1)</label>
+      </div>
+      <div class="out">
+        <div class="val" id="pw"></div>
+        <button class="secondary" id="copyPw">Copy</button>
+        <button id="genPw">Generate</button>
+      </div>
+      <div class="meter"><div id="bar"></div></div>
+      <div class="hint" id="entropy"></div>
+    </section>
+
+    <section>
+      <h2>GUID / UUID</h2>
+      <div class="row">
+        <label>Version
+          <select id="ver"><option value="4">v4 (random)</option><option value="7">v7 (time-ordered)</option></select>
+        </label>
+        <label>Count <input type="number" id="count" min="1" max="100" value="1"></label>
+        <label><input type="checkbox" id="upGuid"> Uppercase</label>
+        <label><input type="checkbox" id="braces"> Braces</label>
+        <label><input type="checkbox" id="nodash"> No dashes</label>
+      </div>
+      <div class="row">
+        <button id="genGuid">Generate</button>
+        <button class="secondary" id="copyAll">Copy all</button>
+      </div>
+      <div class="list" id="guids"></div>
+    </section>
+    <div class="hint">Generated locally with <code>crypto.getRandomValues</code>. Nothing leaves your browser.</div>
+  </div>
+
+  <!-- ================= TAB 2: BASE64 ================= -->
+  <div class="panel" id="tab-b64" role="tabpanel" hidden>
+    <section>
+      <h2>Text</h2>
+      <div class="row">
+        <button id="tEnc">Encode →</button>
+        <button id="tDec">← Decode</button>
+        <label><input type="checkbox" id="urlSafe"> URL-safe (<code>-_</code>, no padding)</label>
+        <button class="secondary" id="tSwap">Swap</button>
+      </div>
+      <div class="cols">
+        <div><div class="hint">Text</div><textarea id="tPlain" spellcheck="false"></textarea></div>
+        <div><div class="hint">Base64</div><textarea id="tB64" spellcheck="false"></textarea></div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="secondary" data-copy="tPlain">Copy text</button>
+        <button class="secondary" data-copy="tB64">Copy Base64</button>
+        <span class="status" id="tStatus"></span>
+      </div>
+    </section>
+
+    <section>
+      <h2>File / image → Base64</h2>
+      <div class="drop" id="drop">Drop any file here or <label style="color:var(--accent);text-decoration:underline">browse<input type="file" id="fileIn" hidden></label></div>
+      <div class="row" style="margin-top:14px">
+        <label><input type="checkbox" id="asDataUri" checked> Include data URI prefix</label>
+        <button class="secondary" data-copy="fOut">Copy</button>
+        <button class="secondary" id="fSave">Save as .txt</button>
+        <span class="status" id="fStatus"></span>
+      </div>
+      <textarea id="fOut" spellcheck="false" readonly placeholder="Base64 output appears here"></textarea>
+    </section>
+
+    <section>
+      <h2>Base64 → file / image</h2>
+      <textarea id="dIn" spellcheck="false" placeholder="Paste Base64 or a data: URI"></textarea>
+      <div class="row" style="margin-top:12px">
+        <label>File name <input type="text" id="dName" placeholder="auto"></label>
+        <button id="dGo">Decode &amp; preview</button>
+        <button class="secondary" id="dSave" disabled>Download</button>
+        <span class="status" id="dStatus"></span>
+      </div>
+      <div id="dPreview"></div>
+    </section>
+  </div>
+
+  <!-- ================= TAB 3: FORMATTER ================= -->
+  <div class="panel" id="tab-fmt" role="tabpanel" hidden>
+    <section>
+      <div class="row">
+        <label>Language
+          <select id="lang">
+            <option value="json">JSON</option>
+            <option value="xml">XML</option>
+            <option value="html">HTML</option>
+            <option value="css">CSS</option>
+          </select>
+        </label>
+        <label>Indent
+          <select id="indent"><option value="2">2 spaces</option><option value="4">4 spaces</option><option value="tab">Tab</option></select>
+        </label>
+        <label id="sortWrap"><input type="checkbox" id="sortKeys"> Sort keys</label>
+      </div>
+      <div class="row">
+        <button id="fmtBtn">Format</button>
+        <button class="secondary" id="minBtn">Minify</button>
+        <button class="secondary" id="fmtCopy">Copy result</button>
+        <button class="secondary" id="fmtMove">Result → input</button>
+        <span class="status" id="fmtStatus"></span>
+      </div>
+      <div class="cols">
+        <div><div class="hint">Input</div><textarea id="fmtIn" spellcheck="false" style="min-height:360px"></textarea></div>
+        <div><div class="hint">Output</div><textarea id="fmtOut" spellcheck="false" readonly style="min-height:360px"></textarea></div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+async function copyText(text, btn) {
+  try { await navigator.clipboard.writeText(text); }
+  catch { const t = document.createElement('textarea'); t.value = text; document.body.append(t); t.select(); document.execCommand('copy'); t.remove(); }
+  const old = btn.textContent; btn.textContent = 'Copied ✓'; setTimeout(() => btn.textContent = old, 1000);
+}
+function setStatus(id, msg, kind) { const el = $(id); el.textContent = msg || ''; el.className = 'status ' + (kind || ''); }
+function download(blob, name) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+document.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => copyText($(b.dataset.copy).value, b));
+
+// ---------- Tabs ----------
+function showTab(name) {
+  document.querySelectorAll('nav [role=tab]').forEach(t => t.setAttribute('aria-selected', t.dataset.tab === name));
+  document.querySelectorAll('.panel').forEach(p => p.hidden = p.id !== 'tab-' + name);
+  try { localStorage.setItem('utilsTab', name); } catch {}
+}
+document.querySelectorAll('nav [role=tab]').forEach(t => t.onclick = () => showTab(t.dataset.tab));
+try { const s = localStorage.getItem('utilsTab'); if (s && $('tab-' + s)) showTab(s); } catch {}
+
+/* =====================================================
+   TAB 1: generators
+   ===================================================== */
+// Uniform random int in [0, n) via rejection sampling (no modulo bias)
+function randInt(n) {
+  const limit = Math.floor(0x100000000 / n) * n, buf = new Uint32Array(1);
+  do { crypto.getRandomValues(buf); } while (buf[0] >= limit);
+  return buf[0] % n;
+}
+const SETS = {
+  lower: 'abcdefghijklmnopqrstuvwxyz',
+  upper: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+  digits: '0123456789',
+  symbols: '!@#$%^&*()-_=+[]{};:,.?/~'
+};
+function genPassword() {
+  const len = Math.min(128, Math.max(4, +$('lenNum').value || 20));
+  const strip = s => $('ambig').checked ? s.replace(/[O0Il1]/g, '') : s;
+  const sets = Object.keys(SETS).filter(k => $(k).checked).map(k => strip(SETS[k]));
+  if (!sets.length) { $('pw').textContent = ''; $('entropy').textContent = 'Select at least one character set.'; $('bar').style.width = '0'; return; }
+  const pool = sets.join('');
+  const chars = sets.map(s => s[randInt(s.length)]);          // guarantee one of each selected set
+  while (chars.length < len) chars.push(pool[randInt(pool.length)]);
+  for (let i = chars.length - 1; i > 0; i--) { const j = randInt(i + 1); [chars[i], chars[j]] = [chars[j], chars[i]]; }
+  $('pw').textContent = chars.join('').slice(0, len);
+  const bits = Math.round(len * Math.log2(pool.length));
+  const [label, color] = bits < 40 ? ['Weak', '#e5484d'] : bits < 60 ? ['Fair', '#f5a524'] : bits < 90 ? ['Strong', '#3ccf7e'] : ['Very strong', '#12a150'];
+  $('entropy').textContent = `${label} · ~${bits} bits of entropy · pool of ${pool.length} characters`;
+  $('bar').style.width = Math.min(100, bits / 1.28) + '%';
+  $('bar').style.background = color;
+}
+
+const hex = b => [...b].map(x => x.toString(16).padStart(2, '0')).join('');
+function uuid(version) {
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  if (version === 7) {
+    let t = Date.now();
+    for (let i = 5; i >= 0; i--) { b[i] = t % 256; t = Math.floor(t / 256); }
+  }
+  b[6] = (b[6] & 0x0f) | (version << 4);
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = hex(b);
+  return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+}
+function fmtGuid(g) {
+  if ($('nodash').checked) g = g.replace(/-/g, '');
+  if ($('upGuid').checked) g = g.toUpperCase();
+  if ($('braces').checked) g = `{${g}}`;
+  return g;
+}
+function genGuids() {
+  const n = Math.min(100, Math.max(1, +$('count').value || 1));
+  const box = $('guids'); box.textContent = '';
+  for (let i = 0; i < n; i++) {
+    const row = document.createElement('div'); row.className = 'out';
+    const v = document.createElement('div'); v.className = 'val'; v.textContent = fmtGuid(uuid(+$('ver').value));
+    const c = document.createElement('button'); c.className = 'secondary'; c.textContent = 'Copy';
+    c.onclick = () => copyText(v.textContent, c);
+    row.append(v, c); box.append(row);
+  }
+}
+$('len').oninput = () => { $('lenNum').value = $('len').value; genPassword(); };
+$('lenNum').oninput = () => { $('len').value = $('lenNum').value; genPassword(); };
+['lower','upper','digits','symbols','ambig'].forEach(id => $(id).onchange = genPassword);
+$('genPw').onclick = genPassword;
+$('copyPw').onclick = e => copyText($('pw').textContent, e.target);
+$('genGuid').onclick = genGuids;
+['ver','count','upGuid','braces','nodash'].forEach(id => $(id).onchange = genGuids);
+$('copyAll').onclick = e => copyText([...document.querySelectorAll('#guids .val')].map(v => v.textContent).join('\n'), e.target);
+genPassword(); genGuids();
+
+/* =====================================================
+   TAB 2: base64
+   ===================================================== */
+function bytesToB64(bytes) {
+  let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function b64ToBytes(str) {
+  str = str.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+  str += '='.repeat((4 - str.length % 4) % 4);
+  const bin = atob(str), out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+const stripDataUri = s => s.trim().replace(/^data:[^,]*,/i, '');
+
+$('tEnc').onclick = () => {
+  let b = bytesToB64(new TextEncoder().encode($('tPlain').value));
+  if ($('urlSafe').checked) b = b.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  $('tB64').value = b; setStatus('tStatus', 'Encoded ' + $('tPlain').value.length + ' chars', 'ok');
+};
+$('tDec').onclick = () => {
+  try {
+    $('tPlain').value = new TextDecoder('utf-8', { fatal: true }).decode(b64ToBytes(stripDataUri($('tB64').value)));
+    setStatus('tStatus', 'Decoded', 'ok');
+  } catch (e) {
+    setStatus('tStatus', e instanceof TypeError ? 'Decoded bytes are not valid UTF-8 text — use "Base64 → file" below.' : 'Invalid Base64 input.', 'err');
+  }
+};
+$('tSwap').onclick = () => { const a = $('tPlain').value; $('tPlain').value = $('tB64').value; $('tB64').value = a; setStatus('tStatus'); };
+
+// file -> base64
+let fileB64 = '', fileName = 'file';
+function encodeFile(file) {
+  if (!file) return;
+  const r = new FileReader();
+  r.onload = () => {
+    const uri = r.result, comma = uri.indexOf(',');
+    // readAsDataURL yields "data:;base64," for unknown types; normalise
+    fileB64 = { raw: uri.slice(comma + 1), prefix: (file.type ? 'data:' + file.type : 'data:application/octet-stream') + ';base64,' };
+    fileName = file.name;
+    refreshFileOut();
+    setStatus('fStatus', `${file.name} · ${file.size.toLocaleString()} bytes → ${fileB64.raw.length.toLocaleString()} chars`, 'ok');
+  };
+  r.onerror = () => setStatus('fStatus', 'Could not read file.', 'err');
+  r.readAsDataURL(file);
+}
+function refreshFileOut() { if (fileB64) $('fOut').value = ($('asDataUri').checked ? fileB64.prefix : '') + fileB64.raw; }
+$('asDataUri').onchange = refreshFileOut;
+$('fileIn').onchange = e => encodeFile(e.target.files[0]);
+$('fSave').onclick = () => $('fOut').value && download(new Blob([$('fOut').value], { type: 'text/plain' }), fileName + '.b64.txt');
+const drop = $('drop');
+['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => encodeFile(e.dataTransfer.files[0]));
+
+// base64 -> file
+const MAGIC = [
+  [[0x89,0x50,0x4e,0x47], 'image/png', 'png'], [[0xff,0xd8,0xff], 'image/jpeg', 'jpg'], [[0x47,0x49,0x46,0x38], 'image/gif', 'gif'],
+  [[0x25,0x50,0x44,0x46], 'application/pdf', 'pdf'], [[0x50,0x4b,0x03,0x04], 'application/zip', 'zip'], [[0x42,0x4d], 'image/bmp', 'bmp'],
+  [[0x1f,0x8b], 'application/gzip', 'gz']
+];
+function sniff(bytes) {
+  for (const [sig, mime, ext] of MAGIC) if (sig.every((v, i) => bytes[i] === v)) return { mime, ext };
+  if (bytes.length > 12 && String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF' && String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP') return { mime: 'image/webp', ext: 'webp' };
+  const head = new TextDecoder().decode(bytes.slice(0, 256)).trimStart();
+  if (/^<svg|^<\?xml[\s\S]*<svg/i.test(head)) return { mime: 'image/svg+xml', ext: 'svg' };
+  return { mime: 'application/octet-stream', ext: 'bin' };
+}
+let decoded = null;
+$('dGo').onclick = () => {
+  const input = $('dIn').value.trim();
+  const uriMime = (input.match(/^data:([^;,]+)/i) || [])[1];
+  try {
+    const bytes = b64ToBytes(stripDataUri(input));
+    const s = sniff(bytes), mime = uriMime || s.mime;
+    const ext = uriMime ? (uriMime.split('/')[1] || 'bin').split('+')[0] : s.ext;
+    if (decoded) URL.revokeObjectURL(decoded.url);
+    const blob = new Blob([bytes], { type: mime });
+    decoded = { blob, url: URL.createObjectURL(blob), name: $('dName').value.trim() || 'decoded.' + ext };
+    $('dSave').disabled = false;
+    setStatus('dStatus', `${bytes.length.toLocaleString()} bytes · ${mime}`, 'ok');
+    const box = $('dPreview'); box.textContent = '';
+    if (mime.startsWith('image/')) { const img = document.createElement('img'); img.className = 'preview'; img.src = decoded.url; box.append(img); }
+    else if (mime === 'application/pdf') { const f = document.createElement('iframe'); f.className = 'preview'; f.style.cssText = 'width:100%;height:400px'; f.src = decoded.url; box.append(f); }
+  } catch { setStatus('dStatus', 'Invalid Base64 input.', 'err'); $('dSave').disabled = true; $('dPreview').textContent = ''; }
+};
+$('dSave').onclick = () => decoded && download(decoded.blob, $('dName').value.trim() || decoded.name);
+
+/* =====================================================
+   TAB 3: formatter
+   ===================================================== */
+const VOID = new Set('area base br col embed hr img input link meta param source track wbr'.split(' '));
+const indentStr = () => $('indent').value === 'tab' ? '\t' : ' '.repeat(+$('indent').value);
+
+function sortDeep(v) {
+  if (Array.isArray(v)) return v.map(sortDeep);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.keys(v).sort().map(k => [k, sortDeep(v[k])]));
+  return v;
+}
+
+function formatMarkup(src, ind, html) {
+  const tokenRe = html
+    ? /<!--[\s\S]*?-->|<(script|style|pre|textarea)\b[^>]*>[\s\S]*?<\/\1\s*>|<!\[CDATA\[[\s\S]*?\]\]>|<[^>]+>|[^<]+/gi
+    : /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<[^>]+>|[^<]+/g;
+  const toks = (src.match(tokenRe) || []).map(t => t.trim() ).filter(Boolean);
+  const isOpen = t => /^<[A-Za-z]/.test(t) && !t.endsWith('/>') && !(html && VOID.has(t.match(/^<([\w:-]+)/)[1].toLowerCase()));
+  const isClose = t => /^<\//.test(t);
+  const nameOf = t => t.match(/^<\/?([\w:.-]+)/)[1].toLowerCase();
+  const lines = []; let d = 0;
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (isClose(t)) { d = Math.max(0, d - 1); lines.push(ind.repeat(d) + t); continue; }
+    if (isOpen(t) && !(html && /^<(script|style|pre|textarea)\b[\s\S]*<\/\1\s*>$/i.test(t))) {
+      const n1 = toks[i + 1], n2 = toks[i + 2];
+      if (n1 && isClose(n1) && nameOf(n1) === nameOf(t)) { lines.push(ind.repeat(d) + t + n1); i += 1; continue; }
+      if (n1 && !n1.startsWith('<') && n2 && isClose(n2) && nameOf(n2) === nameOf(t)) { lines.push(ind.repeat(d) + t + n1.replace(/\s+/g, ' ') + n2); i += 2; continue; }
+      lines.push(ind.repeat(d) + t); d++; continue;
+    }
+    // text, comments, doctype, PI, self-closing, raw blocks
+    lines.push(ind.repeat(d) + (t.startsWith('<') ? t : t.replace(/\s+/g, ' ')));
+  }
+  return lines.join('\n');
+}
+function minifyMarkup(src) {
+  return src.replace(/<!--[\s\S]*?-->/g, '').replace(/>\s+</g, '><').replace(/\s{2,}/g, ' ').trim();
+}
+
+function formatCss(src, ind, minify) {
+  let out = '', depth = 0, paren = 0, quote = '', buf = '';
+  const nl = () => minify ? '' : '\n' + ind.repeat(depth);
+  const flush = () => { let b = buf.trim().replace(/\s+/g, ' '); if (minify && depth) b = b.replace(/\s*:\s*/, ':'); out += b; buf = ''; };
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (quote) { buf += c; if (c === '\\') buf += src[++i]; else if (c === quote) quote = ''; continue; }
+    if (c === '"' || c === "'") { quote = c; buf += c; continue; }
+    if (c === '/' && src[i + 1] === '*') {
+      const end = src.indexOf('*/', i + 2), stop = end < 0 ? src.length : end + 2;
+      if (!minify) { flush(); out += (out && !out.endsWith('\n') ? nl() : '') + src.slice(i, stop) + nl(); }
+      i = stop - 1; continue;
+    }
+    if (c === '(') paren++; if (c === ')') paren = Math.max(0, paren - 1);
+    if (paren) { buf += c; continue; }
+    if (c === '{') { flush(); out += (minify ? '{' : ' {'); depth++; out += nl(); }
+    else if (c === '}') { const had = buf.trim(); flush(); if (!minify && had) out += ';'; out = out.replace(/[ \t]+$/, ''); depth = Math.max(0, depth - 1); out = minify ? out.replace(/;?$/, '') : out.replace(/\n[ \t]*$/, ''); out += (minify ? '}' : '\n' + ind.repeat(depth) + '}'); out += depth ? nl() : (minify ? '' : '\n\n'); }
+    else if (c === ';') { flush(); out += ';' + nl(); }
+    else if (c === ':' && !minify) { buf += ': '; }
+    else buf += c;
+  }
+  flush();
+  return out.replace(/:\s+(?=\s)/g, ': ').replace(/[ \t]+\n/g, '\n').trim();
+}
+
+function runFormat(minify) {
+  const lang = $('lang').value, src = $('fmtIn').value, ind = indentStr();
+  if (!src.trim()) { $('fmtOut').value = ''; return setStatus('fmtStatus'); }
+  try {
+    let res;
+    if (lang === 'json') {
+      let v = JSON.parse(src);
+      if ($('sortKeys').checked) v = sortDeep(v);
+      res = minify ? JSON.stringify(v) : JSON.stringify(v, null, ind);
+    } else if (lang === 'xml') {
+      const doc = new DOMParser().parseFromString(src, 'application/xml');
+      const err = doc.querySelector('parsererror');
+      if (err) throw new Error(err.textContent.split('\n')[0].replace(/^error on line/i, 'Line').trim());
+      res = minify ? minifyMarkup(src) : formatMarkup(src, ind, false);
+    } else if (lang === 'html') {
+      res = minify ? minifyMarkup(src) : formatMarkup(src, ind, true);
+    } else {
+      res = formatCss(src, ind, minify);
+    }
+    $('fmtOut').value = res;
+    setStatus('fmtStatus', `Valid ${lang.toUpperCase()} · ${src.length.toLocaleString()} → ${res.length.toLocaleString()} chars`, 'ok');
+  } catch (e) { $('fmtOut').value = ''; setStatus('fmtStatus', e.message, 'err'); }
+}
+$('fmtBtn').onclick = () => runFormat(false);
+$('minBtn').onclick = () => runFormat(true);
+$('fmtCopy').onclick = e => copyText($('fmtOut').value, e.target);
+$('fmtMove').onclick = () => { if ($('fmtOut').value) { $('fmtIn').value = $('fmtOut').value; $('fmtOut').value = ''; } };
+$('lang').onchange = () => { $('sortWrap').style.display = $('lang').value === 'json' ? '' : 'none'; };
+$('fmtIn').addEventListener('keydown', e => {
+  if (e.key === 'Tab') { e.preventDefault(); document.execCommand('insertText', false, indentStr()); }
+});
+</script>
+</body>
+</html>
