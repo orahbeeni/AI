@@ -1,0 +1,9 @@
+node_modules/
+dist/
+target/
+gen/
+.DS_Store
+*.log
+# Data created when running in portable mode during development
+ytgrab-data/
+downloads/
