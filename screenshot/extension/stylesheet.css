@@ -1,0 +1,15 @@
+.screenshot-annotate-button {
+  border-radius: 99px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  margin-right: 4px;
+  color: white;
+  background-color: rgba(255, 255, 255, 0.12);
+}
+.screenshot-annotate-button:hover { background-color: rgba(255, 255, 255, 0.2); }
+.screenshot-annotate-button:checked { background-color: -st-accent-color; color: -st-accent-fg-color; }
+.screenshot-annotate-button StIcon { icon-size: 14px; }
+
+/* Show-pointer toggle: same "on" look as the other toggles */
+.screenshot-ui-show-pointer-button:checked { background-color: -st-accent-color; color: -st-accent-fg-color; }

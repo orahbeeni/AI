@@ -1,0 +1,696 @@
+#!/usr/bin/python3
+"""Screenshot Annotator: a small GTK4/libadwaita editor for marking up screenshots."""
+
+import io
+import math
+import os
+import shutil
+import statistics
+import sys
+import tempfile
+
+import gi
+
+gi.require_version('Gtk', '4.0')
+gi.require_version('Adw', '1')
+gi.require_version('Gdk', '4.0')
+gi.require_version('Pango', '1.0')
+gi.require_version('PangoCairo', '1.0')
+
+import cairo
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango, PangoCairo
+
+APP_ID = 'com.omar.ScreenshotAnnotator'
+
+TOOLS = [
+    ('pen', 'document-edit-symbolic', 'Pen (P)', 'p'),
+    ('line', 'list-remove-symbolic', 'Line (L)', 'l'),
+    ('arrow', 'go-next-symbolic', 'Arrow (A)', 'a'),
+    ('rect', 'shape:rect', 'Rectangle (R)', 'r'),
+    ('ellipse', 'shape:ellipse', 'Ellipse (E)', 'e'),
+    ('text', 'format-text-bold-symbolic', 'Text (T)', 't'),
+    ('eraser', 'edit-clear-symbolic', 'Eraser (X)', 'x'),
+]
+
+COLORS = ['#e01b24', '#ff7800', '#f6d32d', '#33d17a', '#3584e4', '#9141ac', '#000000', '#ffffff']
+
+
+def rgba(hexstr):
+    c = Gdk.RGBA()
+    c.parse(hexstr)
+    return c
+
+
+# ---------------------------------------------------------------- rendering
+
+def draw_item(cr, it):
+    c = it['color']
+    cr.set_source_rgba(c.red, c.green, c.blue, 1)
+    cr.set_line_width(it['width'])
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+    t = it['type']
+    if t in ('pen', 'eraser'):
+        cr.save()
+        if t == 'eraser':
+            cr.set_operator(cairo.OPERATOR_CLEAR)  # only affects the annotation layer, not the screenshot
+        pts = it['points']
+        cr.move_to(*pts[0])
+        if len(pts) == 1:
+            cr.line_to(pts[0][0] + 0.01, pts[0][1])
+        for p in pts[1:]:
+            cr.line_to(*p)
+        cr.stroke()
+        cr.restore()
+        return
+    (x1, y1), (x2, y2) = it['p1'], it['p2']
+    if t == 'line':
+        cr.move_to(x1, y1)
+        cr.line_to(x2, y2)
+        cr.stroke()
+    elif t == 'arrow':
+        cr.move_to(x1, y1)
+        cr.line_to(x2, y2)
+        cr.stroke()
+        ang = math.atan2(y2 - y1, x2 - x1)
+        head = max(12, it['width'] * 4)
+        cr.move_to(x2, y2)
+        for d in (math.pi - 0.45, math.pi + 0.45):
+            cr.line_to(x2 + head * math.cos(ang + d), y2 + head * math.sin(ang + d))
+            cr.move_to(x2, y2)
+        cr.stroke()
+    elif t == 'rect':
+        cr.rectangle(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
+        cr.stroke()
+    elif t == 'ellipse':
+        w, h = abs(x2 - x1) / 2, abs(y2 - y1) / 2
+        if w > 0 and h > 0:
+            cr.save()
+            cr.translate((x1 + x2) / 2, (y1 + y2) / 2)
+            cr.scale(w, h)
+            cr.arc(0, 0, 1, 0, 2 * math.pi)
+            cr.restore()
+            cr.stroke()
+    elif t == 'text':
+        layout = PangoCairo.create_layout(cr)
+        layout.set_font_description(Pango.FontDescription(f'Sans Bold {it["size"]}px'))
+        layout.set_text(it['text'], -1)
+        cr.move_to(x1, y1)
+        PangoCairo.show_layout(cr, layout)
+
+
+def render(cr, surface, items):
+    cr.set_source_surface(surface, 0, 0)
+    cr.paint()
+    cr.push_group()  # annotations live on their own layer so the eraser can cut through them
+    for it in items:
+        draw_item(cr, it)
+    cr.pop_group_to_source()
+    cr.paint()
+
+
+def load_surface(path):
+    tex = Gdk.Texture.new_from_filename(path)
+    w, h = tex.get_width(), tex.get_height()
+    dl = Gdk.TextureDownloader.new(tex)
+    dl.set_format(Gdk.MemoryFormat.B8G8R8A8_PREMULTIPLIED)  # same layout as cairo ARGB32 on little-endian
+    data, stride = dl.download_bytes()
+    return cairo.ImageSurface.create_for_data(bytearray(data.get_data()), cairo.FORMAT_ARGB32, w, h, stride)
+
+
+# ---------------------------------------------------------------------- OCR
+
+def layout_from_tsv(tsv):
+    """Rebuild text from Tesseract TSV, keeping line breaks, blank lines, indentation and column gaps."""
+    lines = {}
+    for row in tsv.splitlines()[1:]:
+        c = row.split('\t')
+        if len(c) < 12 or c[0] != '5' or not c[11].strip() or float(c[10]) < 0:
+            continue
+        if len(c[11].strip()) == 1 and not c[11].strip().isalnum() and float(c[10]) < 85:
+            continue  # stray border/bullet artefacts
+        key = (int(c[2]), int(c[3]), int(c[4]))  # block, paragraph, line
+        lines.setdefault(key, []).append((int(c[6]), int(c[7]), int(c[8]), int(c[9]), c[11]))
+    if not lines:
+        return ''
+    widths = [w / len(t) for ws in lines.values() for (_l, _t, w, _h, t) in ws if len(t) > 1]
+    charw = statistics.median(widths) if widths else 10
+    heights = [statistics.median([h for (_l, _t, _w, h, _x) in ws]) for ws in lines.values()]
+    lineh = statistics.median(heights)
+    rows = sorted((min(w[1] for w in ws), sorted(ws)) for ws in lines.values())
+    # Words on one visual row can be split into several Tesseract lines (columns); merge by vertical overlap.
+    merged = []
+    for top, ws in rows:
+        cy = statistics.median([w[1] + w[3] / 2 for w in ws])
+        if merged and abs(cy - merged[-1]['cy']) < lineh * 0.5:
+            merged[-1]['words'] += ws
+            continue
+        merged.append({'cy': cy, 'words': list(ws)})
+    left0 = min(w[0] for m in merged for w in m['words'])
+    out, prev_cy = [], None
+    for m in merged:
+        if prev_cy is not None:
+            ratio = (m['cy'] - prev_cy) / lineh  # ~1.5-2 for normal line spacing
+            out.extend([''] * (0 if ratio < 2.7 else 1 if ratio < 5.5 else 2))
+        prev_cy = m['cy']
+        text, col = '', 0
+        for (left, _t, w, _h, word) in sorted(m['words']):
+            target = round((left - left0) / charw)
+            if text and target - col >= 6:
+                while col + (8 - col % 8) <= target + 2:  # jump over wide gaps with tab stops
+                    text += '\t'
+                    col += 8 - col % 8
+            if target > col:
+                text += ' ' * (target - col)
+                col = target
+            elif text:
+                text += ' '
+                col += 1
+            text += word
+            col += len(word)
+        out.append(text.rstrip())
+    return '\n'.join(out)
+
+
+# ------------------------------------------------------------------- window
+
+class AnnotatorWindow(Adw.ApplicationWindow):
+    def __init__(self, app, path):
+        super().__init__(application=app, title='Annotate Screenshot')
+        self.path = path
+        self.surface = load_surface(path)
+        self.items, self.redo, self.current = [], [], None
+        self.tool, self.color, self.width, self.font_size = 'pen', rgba(COLORS[0]), 4, 24
+        self.scale, self.off = 1.0, (0, 0)
+        self.dirty = False
+        self.saved = []  # annotated copies written during this session
+        self.eraser_size, self.hover = 24, None
+
+        iw, ih = self.surface.get_width(), self.surface.get_height()
+        mon = Gdk.Display.get_default().get_monitors().get_item(0)
+        geo = mon.get_geometry() if mon else None
+        maxw, maxh = (geo.width * 0.85, geo.height * 0.8) if geo else (1200, 800)
+        fit = min(1.0, maxw / iw, maxh / ih)
+        self.set_default_size(max(720, int(iw * fit)), max(480, int(ih * fit) + 100))
+
+        self.area = Gtk.DrawingArea(hexpand=True, vexpand=True)
+        self.area.set_draw_func(self.on_draw)
+        self.area.set_cursor_from_name('crosshair')
+        drag = Gtk.GestureDrag()
+        drag.connect('drag-begin', self.on_begin)
+        drag.connect('drag-update', self.on_update)
+        drag.connect('drag-end', self.on_end)
+        self.area.add_controller(drag)
+        motion = Gtk.EventControllerMotion()
+        motion.connect('motion', self.on_motion)
+        motion.connect('leave', lambda *_: self.set_hover(None))
+        self.area.add_controller(motion)
+
+        self.toast = Adw.ToastOverlay(child=self.area)
+        view = Adw.ToolbarView(content=self.toast)
+        view.add_top_bar(self.build_header())
+        view.add_bottom_bar(self.build_toolbar())
+        self.set_content(view)
+
+        self.text_pop = Gtk.Popover(autohide=True, has_arrow=False)
+        self.text_pop.set_parent(self.area)
+        self.text_entry = Gtk.Entry(placeholder_text='Type text, Enter to add', width_chars=24)
+        self.text_entry.connect('activate', self.commit_text)
+        self.text_pop.set_child(self.text_entry)
+        self.text_pos = (0, 0)
+
+        keys = Gtk.EventControllerKey()
+        keys.connect('key-pressed', self.on_key)
+        self.add_controller(keys)
+        self.connect('close-request', self.on_close)
+
+    # -- UI construction
+    def build_header(self):
+        header = Adw.HeaderBar()
+        save = Gtk.Button(label='Save', css_classes=['suggested-action'],
+                          tooltip_text='Save annotated copy and copy to clipboard (Ctrl+S)')
+        save.connect('clicked', lambda *_: self.save())
+        header.pack_end(save)
+        saveas = Gtk.Button(icon_name='document-save-as-symbolic', tooltip_text='Save As… (Ctrl+Shift+S)')
+        saveas.connect('clicked', lambda *_: self.save_as())
+        header.pack_end(saveas)
+        copy = Gtk.Button(icon_name='edit-copy-symbolic', tooltip_text='Copy to clipboard (Ctrl+C)')
+        copy.connect('clicked', lambda *_: self.copy())
+        header.pack_end(copy)
+        ocr = Gtk.Button(label='OCR', tooltip_text='Extract text from the image (Ctrl+Shift+O)')
+        ocr.connect('clicked', lambda *_: self.run_ocr())
+        header.pack_end(ocr)
+        self.undo_btn = Gtk.Button(icon_name='edit-undo-symbolic', tooltip_text='Undo (Ctrl+Z)', sensitive=False)
+        self.undo_btn.connect('clicked', lambda *_: self.undo())
+        self.redo_btn = Gtk.Button(icon_name='edit-redo-symbolic', tooltip_text='Redo (Ctrl+Shift+Z)', sensitive=False)
+        self.redo_btn.connect('clicked', lambda *_: self.do_redo())
+        discard = Gtk.Button(label='Discard', css_classes=['destructive-action'],
+                             tooltip_text='Delete this capture as if it was never taken')
+        discard.connect('clicked', lambda *_: self.discard())
+        header.pack_start(discard)
+        header.pack_start(self.undo_btn)
+        header.pack_start(self.redo_btn)
+        return header
+
+    def build_toolbar(self):
+        bar = Gtk.Box(spacing=12, margin_top=8, margin_bottom=8, margin_start=12, margin_end=12,
+                      halign=Gtk.Align.CENTER)
+        tools = Gtk.Box(css_classes=['linked'])
+        first = None
+        for name, icon, tip, _k in TOOLS:
+            b = Gtk.ToggleButton(tooltip_text=tip, active=(name == 'pen'))
+            if icon.startswith('shape:'):
+                b.set_child(self.shape_icon(icon[6:]))
+            else:
+                b.set_icon_name(icon)
+            if first:
+                b.set_group(first)
+            else:
+                first = b
+            b.connect('toggled', self.on_tool, name)
+            tools.append(b)
+        bar.append(tools)
+
+        colors = Gtk.Box(spacing=4)
+        first = None
+        for hx in COLORS:
+            b = Gtk.ToggleButton(active=(hx == COLORS[0]), css_classes=['circular'],
+                                 tooltip_text=hx, width_request=26, height_request=26)
+            cls = 'swatch-' + hx[1:]
+            b.add_css_class(cls)
+            prov = Gtk.CssProvider()
+            prov.load_from_string(f'button.{cls} {{ background: {hx}; min-width: 22px; min-height: 22px; padding: 0; '
+                                  f'border: 2px solid alpha(gray, .6); }} button.{cls}:checked {{ border-color: @accent_bg_color; '
+                                  f'box-shadow: 0 0 0 2px @accent_bg_color; }}')
+            Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+            if first:
+                b.set_group(first)
+            else:
+                first = b
+            b.connect('toggled', self.on_color, hx)
+            colors.append(b)
+        bar.append(colors)
+
+        bar.append(Gtk.Image(icon_name='format-justify-fill-symbolic', tooltip_text='Line thickness'))
+        scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 1, 24, 1)
+        scale.set_value(self.width)
+        scale.set_size_request(110, -1)
+        scale.set_tooltip_text('Line thickness')
+        scale.connect('value-changed', lambda s: setattr(self, 'width', int(s.get_value())))
+        bar.append(scale)
+
+        bar.append(Gtk.Label(label='Aa', tooltip_text='Font size'))
+        fs = Gtk.SpinButton.new_with_range(8, 200, 2)
+        fs.set_value(self.font_size)
+        fs.set_tooltip_text('Font size (px)')
+        fs.connect('value-changed', lambda s: setattr(self, 'font_size', int(s.get_value())))
+        bar.append(fs)
+
+        self.eraser_box = Gtk.Box(spacing=6, visible=False)
+        self.eraser_box.append(Gtk.Label(label='Eraser'))
+        es = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 4, 120, 2)
+        es.set_value(self.eraser_size)
+        es.set_size_request(120, -1)
+        es.set_tooltip_text('Eraser size')
+        es.connect('value-changed', lambda s: (setattr(self, 'eraser_size', int(s.get_value())), self.area.queue_draw()))
+        self.eraser_box.append(es)
+        bar.append(self.eraser_box)
+
+        clear = Gtk.Button(icon_name='edit-clear-all-symbolic', tooltip_text='Remove ALL annotations (can be undone)')
+        clear.connect('clicked', lambda *_: self.clear())
+        bar.append(clear)
+        return bar
+
+    @staticmethod
+    def shape_icon(kind):
+        def draw(area, cr, w, h):
+            fg = area.get_color()
+            cr.set_source_rgba(fg.red, fg.green, fg.blue, fg.alpha)
+            cr.set_line_width(2)
+            if kind == 'rect':
+                cr.rectangle(2, 2, w - 4, h - 4)
+            else:
+                cr.arc(w / 2, h / 2, min(w, h) / 2 - 2, 0, 2 * math.pi)
+            cr.stroke()
+        a = Gtk.DrawingArea(content_width=16, content_height=16)
+        a.set_draw_func(draw)
+        return a
+
+    def on_tool(self, btn, name):
+        if btn.get_active():
+            self.tool = name
+            self.eraser_box.set_visible(name == 'eraser')
+            self.area.set_cursor_from_name('text' if name == 'text' else 'none' if name == 'eraser' else 'crosshair')
+            self.area.queue_draw()
+
+    def on_color(self, btn, hx):
+        if btn.get_active():
+            self.color = rgba(hx)
+
+    # -- coordinates and drawing
+    def layout(self, w, h):
+        iw, ih = self.surface.get_width(), self.surface.get_height()
+        self.scale = min((w - 24) / iw, (h - 24) / ih, 1.0 if max(iw, ih) < 900 else 10)
+        self.scale = max(self.scale, 0.05)
+        self.off = ((w - iw * self.scale) / 2, (h - ih * self.scale) / 2)
+
+    def to_img(self, x, y):
+        return ((x - self.off[0]) / self.scale, (y - self.off[1]) / self.scale)
+
+    def on_draw(self, area, cr, w, h):
+        self.layout(w, h)
+        cr.set_source_rgba(0, 0, 0, 0.25)
+        cr.rectangle(self.off[0] + 3, self.off[1] + 4, self.surface.get_width() * self.scale,
+                     self.surface.get_height() * self.scale)
+        cr.fill()
+        cr.translate(*self.off)
+        cr.scale(self.scale, self.scale)
+        cr.rectangle(0, 0, self.surface.get_width(), self.surface.get_height())
+        cr.clip()
+        render(cr, self.surface, self.items + ([self.current] if self.current else []))
+        if self.tool == 'eraser' and self.hover:
+            cr.identity_matrix()
+            cr.set_source_rgba(0, 0, 0, 0.8)
+            cr.set_line_width(1.5)
+            cr.arc(*self.hover, self.eraser_size * self.scale / 2, 0, 2 * math.pi)
+            cr.stroke_preserve()
+            cr.set_source_rgba(1, 1, 1, 0.9)
+            cr.set_line_width(0.75)
+            cr.stroke()
+
+    def on_motion(self, ctl, x, y):
+        self.set_hover((x, y))
+
+    def set_hover(self, pos):
+        self.hover = pos
+        if self.tool == 'eraser':
+            self.area.queue_draw()
+
+    def new_item(self, p):
+        it = {'type': self.tool, 'color': self.color, 'width': self.width}
+        if self.tool == 'eraser':
+            it['width'] = self.eraser_size
+        if self.tool in ('pen', 'eraser'):
+            it['points'] = [p]
+        else:
+            it['p1'] = it['p2'] = p
+        return it
+
+    def on_begin(self, g, x, y):
+        self.start = (x, y)
+        p = self.to_img(x, y)
+        if self.tool == 'text':
+            self.text_pos = p
+            rect = Gdk.Rectangle()
+            rect.x, rect.y, rect.width, rect.height = int(x), int(y), 1, 1
+            self.text_pop.set_pointing_to(rect)
+            self.text_entry.set_text('')
+            self.text_pop.popup()
+            self.text_entry.grab_focus()
+            return
+        self.current = self.new_item(p)
+        self.area.queue_draw()
+
+    def on_update(self, g, dx, dy):
+        if not self.current:
+            return
+        p = self.to_img(self.start[0] + dx, self.start[1] + dy)
+        self.hover = (self.start[0] + dx, self.start[1] + dy)
+        if self.current['type'] in ('pen', 'eraser'):
+            self.current['points'].append(p)
+        else:
+            if g.get_current_event_state() & Gdk.ModifierType.SHIFT_MASK:
+                p = self.constrain(self.current['p1'], p)
+            self.current['p2'] = p
+        self.area.queue_draw()
+
+    @staticmethod
+    def constrain(a, b):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        if abs(dx) > 2 * abs(dy):
+            return (b[0], a[1])
+        if abs(dy) > 2 * abs(dx):
+            return (a[0], b[1])
+        m = max(abs(dx), abs(dy))
+        return (a[0] + math.copysign(m, dx), a[1] + math.copysign(m, dy))
+
+    def on_end(self, g, dx, dy):
+        if not self.current:
+            return
+        self.on_update(g, dx, dy)
+        it, self.current = self.current, None
+        if 'points' not in it and it['p1'] == it['p2']:
+            self.area.queue_draw()
+            return
+        self.push(it)
+
+    def commit_text(self, entry):
+        txt = entry.get_text().strip()
+        self.text_pop.popdown()
+        if txt:
+            self.push({'type': 'text', 'color': self.color, 'text': txt, 'width': 1,
+                       'size': self.font_size, 'p1': self.text_pos, 'p2': self.text_pos})
+
+    # -- history
+    def push(self, it):
+        self.items.append(it)
+        self.redo.clear()
+        self.dirty = True
+        self.refresh()
+
+    def refresh(self):
+        self.undo_btn.set_sensitive(bool(self.items))
+        self.redo_btn.set_sensitive(bool(self.redo))
+        self.area.queue_draw()
+
+    def undo(self):
+        if self.items:
+            self.redo.append(self.items.pop())
+            self.refresh()
+
+    def do_redo(self):
+        if self.redo:
+            self.items.append(self.redo.pop())
+            self.refresh()
+
+    def clear(self):
+        if self.items:
+            self.redo = list(reversed(self.items)) + self.redo
+            self.items = []
+            self.refresh()
+
+    def on_key(self, ctl, keyval, code, state):
+        ctrl = state & Gdk.ModifierType.CONTROL_MASK
+        shift = state & Gdk.ModifierType.SHIFT_MASK
+        name = Gdk.keyval_name(keyval).lower()
+        if self.text_pop.is_visible():
+            return False
+        if ctrl:
+            if name == 'z':
+                self.do_redo() if shift else self.undo()
+            elif name == 'y':
+                self.do_redo()
+            elif name == 's':
+                self.save_as() if shift else self.save()
+            elif name == 'o' and shift:
+                self.run_ocr()
+            elif name == 'c':
+                self.copy()
+            else:
+                return False
+            return True
+        if name == 'escape':
+            self.close()
+            return True
+        return False
+
+    # -- output
+    def flatten(self):
+        out = cairo.ImageSurface(cairo.FORMAT_ARGB32, self.surface.get_width(), self.surface.get_height())
+        render(cairo.Context(out), self.surface, self.items)
+        return out
+
+    def copy_quiet(self):
+        # Offer plain PNG bytes: other apps reliably paste image/png, while a GdkTexture value may offer no formats.
+        buf = io.BytesIO()
+        self.flatten().write_to_png(buf)
+        provider = Gdk.ContentProvider.new_for_bytes('image/png', GLib.Bytes.new(buf.getvalue()))
+        self.get_clipboard().set_content(provider)
+
+    def copy(self):
+        self.copy_quiet()
+        self.toast.add_toast(Adw.Toast(title='Copied to clipboard', timeout=2))
+
+    def default_output(self):
+        base, _ext = os.path.splitext(self.path)
+        return base + '-annotated.png'
+
+    def save(self, path=None):
+        path = path or self.default_output()
+        self.flatten().write_to_png(path)
+        if path not in self.saved:
+            self.saved.append(path)
+        self.dirty = False
+        self.copy_quiet()
+        self.toast.add_toast(Adw.Toast(title=f'Saved {os.path.basename(path)} and copied to clipboard', timeout=3))
+
+    def save_as(self):
+        dlg = Gtk.FileDialog(title='Save Annotated Screenshot', initial_name=os.path.basename(self.default_output()))
+        d = os.path.dirname(self.path)
+        dlg.set_initial_folder(Gio.File.new_for_path(d))
+
+        def done(dialog, res):
+            try:
+                f = dialog.save_finish(res)
+            except GLib.Error:
+                return
+            self.save(f.get_path())
+        dlg.save(self, None, done)
+
+    # -- OCR
+    def run_ocr(self):
+        if not shutil.which('tesseract'):
+            d = Adw.AlertDialog(heading='OCR engine not installed',
+                                body='Install Tesseract first:\n\nsudo apt install tesseract-ocr')
+            d.add_response('ok', 'OK')
+            d.present(self)
+            return
+        tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+        tmp.close()
+        src = self.surface
+        if src.get_width() < 1600:  # Tesseract reads small UI text much better when enlarged
+            big = cairo.ImageSurface(cairo.FORMAT_ARGB32, src.get_width() * 2, src.get_height() * 2)
+            cr = cairo.Context(big)
+            cr.set_source_rgb(1, 1, 1)
+            cr.paint()
+            cr.scale(2, 2)
+            cr.set_source_surface(src, 0, 0)
+            cr.get_source().set_filter(cairo.FILTER_BEST)
+            cr.paint()
+            src = big
+        src.write_to_png(tmp.name)
+        self.toast.add_toast(Adw.Toast(title='Reading text…', timeout=2))
+        proc = Gio.Subprocess.new(
+            ['tesseract', tmp.name, 'stdout', '--psm', '4', '-c', 'preserve_interword_spaces=1', 'tsv'],
+            Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE)
+
+        def done(p, res):
+            os.unlink(tmp.name)
+            try:
+                ok, out, err = p.communicate_utf8_finish(res)
+                if not p.get_successful():
+                    raise RuntimeError(err.strip() or 'tesseract failed')
+                text = layout_from_tsv(out)
+            except Exception as e:  # noqa: BLE001
+                self.toast.add_toast(Adw.Toast(title=f'OCR failed: {e}', timeout=5))
+                return
+            self.show_ocr(text)
+        proc.communicate_utf8_async(None, None, done)
+
+    def show_ocr(self, text):
+        dlg = Adw.Dialog(title='Extracted Text', content_width=640, content_height=460)
+        view = Adw.ToolbarView()
+        header = Adw.HeaderBar()
+        copy = Gtk.Button(label='Copy All', css_classes=['suggested-action'])
+        header.pack_end(copy)
+        view.add_top_bar(header)
+        tv = Gtk.TextView(monospace=True, editable=True, wrap_mode=Gtk.WrapMode.NONE,
+                          left_margin=12, right_margin=12, top_margin=10, bottom_margin=10)
+        tv.get_buffer().set_text(text or '(No text found)')
+        sw = Gtk.ScrolledWindow(child=tv, hexpand=True, vexpand=True)
+        overlay = Adw.ToastOverlay(child=sw)
+
+        def do_copy(*_):
+            b = tv.get_buffer()
+            t = b.get_text(b.get_start_iter(), b.get_end_iter(), False)
+            self.get_clipboard().set_content(Gdk.ContentProvider.new_for_value(t))
+            overlay.add_toast(Adw.Toast(title='Text copied', timeout=2))
+        copy.connect('clicked', do_copy)
+        view.set_content(overlay)
+        dlg.set_child(view)
+        dlg.present(self)
+
+    def discard(self):
+        dlg = Adw.AlertDialog(heading='Discard this capture?',
+                              body=f'This permanently deletes {os.path.basename(self.path)}'
+                                   + (' and the annotated copies you saved' if self.saved else '')
+                                   + ', and clears it from the clipboard.')
+        dlg.add_response('cancel', 'Cancel')
+        dlg.add_response('discard', 'Delete Capture')
+        dlg.set_response_appearance('discard', Adw.ResponseAppearance.DESTRUCTIVE)
+        dlg.set_default_response('cancel')
+        dlg.set_close_response('cancel')
+
+        def resp(d, r):
+            if r != 'discard':
+                return
+            for p in [self.path] + self.saved:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+            cb = self.get_clipboard()
+            if cb.get_formats().contain_mime_type('image/png'):  # only clear it if it still holds an image
+                cb.set_content(None)
+            self.dirty = False
+            self.close()
+        dlg.connect('response', resp)
+        dlg.present(self)
+
+    def on_close(self, *_):
+        if not self.dirty or not self.items:
+            return False
+        dlg = Adw.AlertDialog(heading='Discard annotations?',
+                              body='Your annotations have not been saved.')
+        dlg.add_response('cancel', 'Cancel')
+        dlg.add_response('save', 'Save')
+        dlg.add_response('discard', 'Discard')
+        dlg.set_response_appearance('discard', Adw.ResponseAppearance.DESTRUCTIVE)
+        dlg.set_response_appearance('save', Adw.ResponseAppearance.SUGGESTED)
+        dlg.set_default_response('save')
+
+        def resp(d, r):
+            if r == 'save':
+                self.save()
+            if r in ('save', 'discard'):
+                self.dirty = False
+                self.close()
+        dlg.connect('response', resp)
+        dlg.present(self)
+        return True
+
+
+class App(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_OPEN)
+
+    def do_open(self, files, n, hint):
+        for f in files:
+            AnnotatorWindow(self, f.get_path()).present()
+
+    def do_activate(self):
+        dlg = Gtk.FileDialog(title='Open Screenshot')
+        flt = Gtk.FileFilter(name='Images')
+        flt.add_mime_type('image/png')
+        flt.add_mime_type('image/jpeg')
+        store = Gio.ListStore.new(Gtk.FileFilter)
+        store.append(flt)
+        dlg.set_filters(store)
+        pics = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_PICTURES)
+        if pics:
+            dlg.set_initial_folder(Gio.File.new_for_path(pics))
+
+        self.hold()
+
+        def done(d, res):
+            try:
+                f = d.open_finish(res)
+                AnnotatorWindow(self, f.get_path()).present()
+            except GLib.Error:
+                pass
+            self.release()
+        dlg.open(None, None, done)
+
+
+if __name__ == '__main__':
+    sys.exit(App().run(sys.argv))

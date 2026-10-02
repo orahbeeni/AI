@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Screenshot Annotator
+Comment=Annotate screenshots with lines, arrows, shapes and text
+Exec=screenshot-annotator %f
+Icon=applets-screenshooter
+MimeType=image/png;image/jpeg;
+Categories=Graphics;Utility;
+StartupWMClass=com.omar.ScreenshotAnnotator
