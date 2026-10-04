@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>txted</title>
+<meta name="theme-color" content="#1e1f1c">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div id="side-head"><span id="folder-name">No folder</span><button id="open-folder" title="Open folder (Ctrl+Shift+O)">Open</button></div>
+    <div id="tree"></div>
+  </aside>
+  <div id="splitter"></div>
+  <main>
+    <div id="tabs"></div>
+    <div id="editor"></div>
+    <div id="diffwrap" hidden>
+      <div id="diffbar">
+        <span id="diff-title"></span><span id="diff-count"></span><span class="grow"></span>
+        <button id="d-prev" title="Previous difference (Shift+F7)">↑ Prev</button>
+        <button id="d-next" title="Next difference (F7)">↓ Next</button>
+        <button id="d-mode">Inline</button>
+        <button id="d-ws">Ignore whitespace: off</button>
+        <button id="d-close">Close ✕</button>
+      </div>
+      <div id="diff"></div>
+    </div>
+    <div id="status">
+      <span id="st-pos">Ln 1, Col 1</span>
+      <span id="st-sel"></span>
+      <span class="grow"></span>
+      <span id="st-indent" title="Click to toggle tabs/spaces"></span>
+      <span id="st-eol"></span>
+      <span id="st-lang" title="Click to change syntax"></span>
+    </div>
+  </main>
+</div>
+<div id="quick" hidden><input id="quick-input" placeholder="Go to file…" spellcheck="false"><div id="quick-list"></div></div>
+<script src="vendor/vs/loader.js"></script>
+<script src="transform.js"></script>
+<script src="convert.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
