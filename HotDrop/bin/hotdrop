@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# HotDrop launcher for Linux and macOS. Uses JAVA_HOME if set, otherwise java from PATH.
+dir="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ]; then JAVA="$JAVA_HOME/bin/java"; else JAVA=java; fi
+exec "$JAVA" -jar "$dir/build/hotdrop-daemon.jar" "$@"

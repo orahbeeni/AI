@@ -1,0 +1,33 @@
+name: HotDrop
+
+on:
+  push:
+    paths: ['HotDrop/**', '.github/workflows/hotdrop.yml']
+  pull_request:
+    paths: ['HotDrop/**', '.github/workflows/hotdrop.yml']
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Java ${{ matrix.java }} / ${{ matrix.watch }} watcher
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        java: ['17', '21']
+        watch: [auto, poll]
+    defaults:
+      run:
+        working-directory: HotDrop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+      - name: Build
+        run: java Build.java
+      - name: End-to-end test (fake server JVM + agent + daemon)
+        env:
+          HOTDROP_WATCH: ${{ matrix.watch }}
+        run: java it/IntegrationTest.java

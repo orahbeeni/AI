@@ -1,0 +1,25 @@
+package hotdrop.daemon;
+
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+
+final class Config {
+    Path hybris;
+    final List<Root> manualRoots = new ArrayList<>();
+    final List<Path> extraClasspath = new ArrayList<>();
+    Path home = Path.of(System.getProperty("user.home"), ".hotdrop");
+    int debounceMs = 40;
+    boolean index = true;
+    /** auto: native events where they are fast (Linux, Windows), polling on macOS; native | poll force a choice. */
+    String watch = "auto";
+    int pollMs = 100;
+
+    Path agentsDir() {
+        return home.resolve("agents");
+    }
+
+    Path platformHome() {
+        return hybris == null ? null : hybris.resolve("bin").resolve("platform");
+    }
+}
