@@ -1,5 +1,10 @@
 #!/usr/bin/env sh
 # HotDrop launcher for Linux and macOS. Uses JAVA_HOME if set, otherwise java from PATH.
+# Builds the jars on first use. 'hotdrop up' switches to the running server's JDK by itself.
 dir="$(cd "$(dirname "$0")/.." && pwd)"
 if [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ]; then JAVA="$JAVA_HOME/bin/java"; else JAVA=java; fi
+if [ ! -f "$dir/build/hotdrop-daemon.jar" ]; then
+  echo "first run: building HotDrop ..." >&2
+  (cd "$dir" && "$JAVA" Build.java) || exit 1
+fi
 exec "$JAVA" -jar "$dir/build/hotdrop-daemon.jar" "$@"

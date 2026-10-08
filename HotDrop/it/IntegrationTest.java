@@ -84,7 +84,7 @@ public class IntegrationTest {
         boolean windows = System.getProperty("os.name").toLowerCase().contains("win");
         String java = Path.of(System.getProperty("java.home"), "bin", windows ? "java.exe" : "java").toString();
         String watch = System.getenv().getOrDefault("HOTDROP_WATCH", "auto");
-        Process app = start(work, appOut, "app", java, "-javaagent:" + agentJar + "=dir=" + home.resolve("agents") + ",quiet=true",
+        Process app = start(work, appOut, "app", java, "-javaagent:" + agentJar + "=dir=" + home.resolve("agents") + "",
                 "-cp", appDir.toString(), "App", classes.toString());
         Process daemon = null;
         try {
@@ -101,15 +101,17 @@ public class IntegrationTest {
             step("1. method body change is swapped live");
             long ms = edit("demo/Service.java", service("v2", false, false), appOut, "OUT hello v2 p1 tag", 5_000);
             check("   live in the running JVM", ms >= 0);
+            check("   server console says it reloaded the class", waitFor(appOut, "[HotDrop] Reloaded class 'demo.Service'", 3_000) >= 0);
             latency("body change", ms);
 
             // 2. refers to a class that does not exist yet -> pending
             step("2. file using a not-yet-written class stays pending");
-            int before = appOut.size();
+            int before = appLines();
             Files.writeString(src.resolve("demo/Service.java"), service("v3", true, false));
             check("   daemon reports Service as broken", waitFor(daemonOut, "[broken] Service.java", 5_000) >= 0);
+            check("   server console says why it was not reloaded", waitFor(appOut, "[HotDrop] Not reloaded: Service.java does not compile", 3_000) >= 0);
             Thread.sleep(500);
-            check("   running JVM untouched", appOut.size() == before);
+            check("   running JVM untouched", appLines() == before);
 
             // 3. the class appears but is itself broken -> Service must be held, not swapped
             step("3. dependent of a broken class is held, not swapped");
@@ -117,14 +119,21 @@ public class IntegrationTest {
             check("   Extra reported broken", waitFor(daemonOut, "[broken] Extra.java", 5_000) >= 0);
             check("   Service reported held", waitFor(daemonOut, "[held] Service.java", 5_000) >= 0);
             Thread.sleep(500);
-            check("   running JVM still untouched", appOut.size() == before);
+            check("   running JVM still untouched", appLines() == before);
 
             // 4. fix the other file -> both go live together
             step("4. fixing the other file releases both, in one batch");
             ms = edit("demo/Extra.java", extra("\"e1\""), appOut, "OUT hello v3 p1 tag e1", 5_000);
             check("   both classes live (new class loaded from disk)", ms >= 0);
             latency("pending fix + new class", ms);
-            check("   swapped in one cycle", daemonOut.stream().anyMatch(l -> l.contains("swapped") && l.contains("Service") && l.contains("Extra")));
+            boolean oneCycle = false;
+            for (int i = 0; i < 40 && !oneCycle; i++) {
+                synchronized (daemonOut) {
+                    oneCycle = daemonOut.stream().anyMatch(l -> l.contains("swapped") && l.contains("Service") && l.contains("Extra"));
+                }
+                if (!oneCycle) Thread.sleep(50);
+            }
+            check("   swapped in one cycle", oneCycle);
 
             // 5. changed constant: Service has the old value inlined -> must be recompiled
             step("5. changed constant ripples to the class that inlined it");
@@ -134,11 +143,12 @@ public class IntegrationTest {
 
             // 6. lambda added: standard JVM cannot swap it -> clear message, no damage
             step("6. a change the JVM cannot swap is reported, not hidden");
-            before = appOut.size();
+            before = appLines();
             Files.writeString(src.resolve("demo/Service.java"), service("v4", true, true));
             check("   daemon says restart required", waitFor(daemonOut, "[restart required]", 5_000) >= 0);
+            check("   server console says restart required", waitFor(appOut, "[HotDrop] Could not reload class 'demo.Service' - restart required", 3_000) >= 0);
             Thread.sleep(300);
-            check("   running JVM unharmed", appOut.size() == before);
+            check("   running JVM unharmed", appLines() == before);
             ms = edit("demo/Service.java", service("v5", true, false), appOut, "OUT hello v5 p2 tag e1", 5_000);
             check("   removing the lambda recovers", ms >= 0);
 
@@ -164,6 +174,13 @@ public class IntegrationTest {
             synchronized (daemonOut) { daemonOut.forEach(System.out::println); }
         }
         System.exit(failures == 0 ? 0 : 1);
+    }
+
+    /** Lines the application itself printed; the agent's own "[HotDrop] ..." console messages are checked separately. */
+    static int appLines() {
+        synchronized (appOut) {
+            return (int) appOut.stream().filter(l -> !l.contains("[HotDrop]")).count();
+        }
     }
 
     static void step(String name) { System.out.println(name); }

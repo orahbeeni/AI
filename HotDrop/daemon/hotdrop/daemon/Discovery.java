@@ -20,7 +20,7 @@ import java.util.stream.Stream;
 final class Discovery {
     private Discovery() {}
 
-    record BuildSettings(String level, String encoding, List<String> exports) {}
+    record BuildSettings(String level, String encoding, List<String> exports, boolean parameters) {}
 
     static BuildSettings buildSettings(Path hybris) {
         Properties p = new Properties();
@@ -45,7 +45,9 @@ final class Discovery {
             String t = tok.replace("\"", "");
             if (t.startsWith("--add-exports=")) exports.add(t);
         }
-        return new BuildSettings(level, enc, exports);
+        // Hybris compiles with -parameters by default (build.parameter-metadata); Spring 6 needs the names for @PathVariable etc.
+        boolean parameters = !"false".equalsIgnoreCase(p.getProperty("build.parameter-metadata", "true").trim());
+        return new BuildSettings(level, enc, exports, parameters);
     }
 
     static List<Root> discover(Path hybris) throws IOException {

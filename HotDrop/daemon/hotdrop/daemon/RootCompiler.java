@@ -113,6 +113,8 @@ final class RootCompiler {
     private static final class CachingFileManager extends ForwardingJavaFileManager<StandardJavaFileManager> {
         final Map<String, List<JavaFileObject>> cache = new ConcurrentHashMap<>();
         final List<MemClass> outputs = new ArrayList<>();
+        /** Identifies the classpath currently set, so listings of different classpaths never mix. */
+        volatile int classpathId;
 
         CachingFileManager(StandardJavaFileManager fm) {
             super(fm);
@@ -124,7 +126,7 @@ final class RootCompiler {
             String n = loc.getName();
             if (loc == StandardLocation.CLASS_PATH || loc == StandardLocation.PLATFORM_CLASS_PATH
                     || n.startsWith("SYSTEM_MODULES")) {
-                String key = n + "|" + pkg + "|" + kinds + "|" + recurse;
+                String key = classpathId + "|" + n + "|" + pkg + "|" + kinds + "|" + recurse;
                 List<JavaFileObject> hit = cache.get(key);
                 if (hit == null) {
                     hit = new ArrayList<>();
@@ -155,35 +157,85 @@ final class RootCompiler {
         }
     }
 
+    /**
+     * One file manager for all roots. Every file manager opens its own index of every jar on the classpath, which is
+     * about 40 MB for a Hybris classpath; one per root (55 on a real project) ran the daemon out of memory. The roots
+     * share the open jars and only switch the classpath, which is cheap because the jars stay open.
+     */
+    static final class Shared {
+        private final JavaCompiler javac = ToolProvider.getSystemJavaCompiler();
+        private final List<Path> sourcepath;
+        private final Map<List<Path>, Integer> classpathIds = new LinkedHashMap<>();
+        private StandardJavaFileManager std;
+        private CachingFileManager fm;
+        private List<Path> current;
+
+        Shared(List<Path> sourcepath) throws IOException {
+            if (javac == null) {
+                throw new IllegalStateException("No system Java compiler: run HotDrop on a JDK, not a JRE");
+            }
+            this.sourcepath = List.copyOf(sourcepath);
+            open();
+        }
+
+        private void open() throws IOException {
+            std = javac.getStandardFileManager(null, Locale.ENGLISH, StandardCharsets.UTF_8);
+            std.setLocationFromPaths(StandardLocation.SOURCE_PATH, sourcepath);
+            fm = new CachingFileManager(std);
+            current = null;
+            classpathIds.clear();
+        }
+
+        /** Drops everything cached (jars changed, or a new server with a different classpath). */
+        synchronized void reset() throws IOException {
+            if (std != null) std.close();
+            open();
+        }
+
+        private void use(List<Path> classpath) throws IOException {
+            if (classpath.equals(current)) return;
+            std.setLocationFromPaths(StandardLocation.CLASS_PATH, classpath);
+            current = classpath;
+            fm.classpathId = classpathIds.computeIfAbsent(classpath, k -> classpathIds.size());
+        }
+
+        synchronized void invalidatePackage(String pkg) {
+            fm.invalidatePackage(pkg);
+        }
+    }
+
     private final JavaCompiler javac = ToolProvider.getSystemJavaCompiler();
-    private final StandardJavaFileManager std;
-    private final CachingFileManager fm;
+    private final Shared shared;
     private final List<String> baseOptions;
     final List<Path> classpath;
 
-    RootCompiler(List<Path> classpath, List<Path> sourcepath, List<String> baseOptions) throws IOException {
-        if (javac == null) {
-            throw new IllegalStateException("No system Java compiler: run HotDrop on a JDK, not a JRE");
-        }
+    RootCompiler(Shared shared, List<Path> classpath, List<String> baseOptions) {
+        this.shared = shared;
         this.classpath = List.copyOf(classpath);
         this.baseOptions = List.copyOf(baseOptions);
-        this.std = javac.getStandardFileManager(null, Locale.ENGLISH, StandardCharsets.UTF_8);
-        this.std.setLocationFromPaths(StandardLocation.CLASS_PATH, classpath);
-        this.std.setLocationFromPaths(StandardLocation.SOURCE_PATH, sourcepath);
-        this.fm = new CachingFileManager(std);
-    }
-
-    void invalidatePackage(String pkg) {
-        fm.invalidatePackage(pkg);
     }
 
     /**
      * Compiles {@code files}. With {@code generate} false javac stops after flow analysis (used to build the index).
      * Javac keeps attributing every class after the first error so all broken files are found in one run.
      */
-    synchronized Output compile(List<Path> files, boolean generate) {
+    Output compile(List<Path> files, boolean generate) {
+        synchronized (shared) {
+            return compileLocked(files, generate);
+        }
+    }
+
+    private Output compileLocked(List<Path> files, boolean generate) {
         long t0 = System.nanoTime();
         Output out = new Output();
+        CachingFileManager fm = shared.fm;
+        try {
+            shared.use(classpath);
+        } catch (IOException e) {
+            out.unattributed.add("cannot set the classpath: " + e.getMessage());
+            out.anyErrors = true;
+            return out;
+        }
         fm.outputs.clear();
 
         List<StringSource> units = new ArrayList<>();

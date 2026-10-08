@@ -28,6 +28,8 @@ public final class Wire {
     public static final byte ERROR = 7;
     public static final byte PING = 8;
     public static final byte PONG = 9;
+    /** Daemon -> agent: a line of text for the server console (broken file, held class); answered with PONG. */
+    public static final byte NOTICE = 10;
 
     public static final byte SWAPPED = 0;
     public static final byte REJECTED = 1;

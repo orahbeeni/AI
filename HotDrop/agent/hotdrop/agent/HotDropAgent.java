@@ -6,7 +6,7 @@ import java.util.Map;
 
 /**
  * Entry point of the in-server agent. Loaded with -javaagent (premain) or through the Attach API (agentmain).
- * Agent options are comma separated key=value pairs: dir=&lt;agents dir&gt;, quiet=true.
+ * Agent options are comma separated key=value pairs: dir=&lt;agents dir&gt;, quiet=true, autostart=false.
  * Must never throw: a failing dev tool must not stop the server from starting.
  */
 public final class HotDropAgent {
@@ -15,14 +15,15 @@ public final class HotDropAgent {
     private HotDropAgent() {}
 
     public static void premain(String args, Instrumentation inst) {
-        start(args, inst);
+        start(args, inst, true);
     }
 
     public static void agentmain(String args, Instrumentation inst) {
-        start(args, inst);
+        start(args, inst, false);
     }
 
-    private static synchronized void start(String args, Instrumentation inst) {
+    /** autostart: only for -javaagent at server start; an attach comes from a watcher that is already running. */
+    private static synchronized void start(String args, Instrumentation inst, boolean autostart) {
         if (started) {
             return;
         }
@@ -35,7 +36,7 @@ public final class HotDropAgent {
                     if (i > 0) opts.put(kv.substring(0, i).trim(), kv.substring(i + 1).trim());
                 }
             }
-            new AgentServer(inst, opts).start();
+            new AgentServer(inst, opts).start(autostart);
         } catch (Throwable t) {
             System.err.println("[HotDrop] agent failed to start: " + t);
         }

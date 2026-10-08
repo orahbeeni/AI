@@ -20,6 +20,17 @@ java Build.java
 Produces `build/hotdrop-agent.jar` and `build/hotdrop-daemon.jar`.
 
 ## Use with Hybris
+### Easiest: one command, or one-time setup
+- **`bin/hotdrop up`** - finds the running Hybris server by itself, runs on the server's own JDK (no `JAVA_HOME` needed),
+  loads the agent if the server has none (also after a server restart) and starts watching. Builds HotDrop on first use.
+- **`bin/hotdrop install`** - one-time: adds the `-javaagent` line to `local.properties` (it shows the change and asks first;
+  `--remove` undoes it). Run `ant server` once afterwards. From then on the agent starts the watcher together with the
+  server (log: `~/.hotdrop/daemon.log`) and stops it with the server. `hotdrop up` still works: if the watcher is
+  already running it shows its log instead of starting a second one. Opt out with `-Dhotdrop.autostart=false`.
+  Keep `hotdrop-daemon.jar` next to `hotdrop-agent.jar`. Debug start (`ystartDebug`) uses `tomcat.debugjavaoptions`
+  instead of `tomcat.javaoptions`; `install` handles both.
+
+### By hand
 1. Add the agent to `hybris/config/local.properties` (use forward slashes, also on Windows):
    ```properties
    # Linux / macOS
@@ -46,6 +57,17 @@ Produces `build/hotdrop-agent.jar` and `build/hotdrop-daemon.jar`.
 ### Other commands
 `swap <files>` compile and swap once, then exit - `attach` - `status` - `flush [file]` - `pause` / `resume` - `rescan` - `stop` - `doctor`.
 `doctor` checks the JDK, the Hybris settings, whether the agent is in `wrapper.conf`, and the connected server.
+
+## In the server log
+The agent prints one line per class to the server console (so it lands in the Hybris log, like JRebel does):
+```
+[HotDrop] Reloaded class 'za.co.shoprite.secfacade.product.converters.populator.SecProductBasicPopulator'
+[HotDrop] Compiled class 'x.NewClass' (not loaded yet, used when first needed)
+[HotDrop] Could not reload class 'x.Y' - restart required: a method, constructor or lambda was added (...)
+[HotDrop] Not reloaded: Y.java does not compile (1 error(s)), first: Y.java:28:9: cannot find symbol ... - kept pending until it compiles
+[HotDrop] Held back: Z.java - waiting on x.Y
+```
+Silence them with `-Dhotdrop.log=false` or the agent option `quiet=true`. `-Dhotdrop.debug=true` adds a timing line per swap.
 
 ## What can be swapped
 | Change | Standard JVM | JetBrains Runtime with `-XX:+AllowEnhancedClassRedefinition` |

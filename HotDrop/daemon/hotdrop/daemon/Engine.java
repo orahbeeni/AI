@@ -75,9 +75,29 @@ final class Engine implements AutoCloseable {
         int rounds;
         long compileNanos;
         long sendNanos;
+        long writeNanos;
+        long agentNanos;
         long totalNanos;
         boolean undeliveredNoAgent;
         boolean empty = true;
+    }
+
+    private final Map<Path, String> notifiedProblems = new HashMap<>();
+
+    /** Tells the server's console about files that did not go live, once per change, so the Hybris log shows why. */
+    synchronized void notifyServer(Report rep) {
+        if (rep.empty) return;
+        notifiedProblems.keySet().removeIf(p -> !rep.broken.containsKey(p) && !rep.held.containsKey(p));
+        for (var e : rep.broken.entrySet()) {
+            Diag first = e.getValue().isEmpty() ? null : e.getValue().get(0);
+            String msg = "Not reloaded: " + e.getKey().getFileName() + " does not compile (" + e.getValue().size() + " error(s))"
+                    + (first == null ? "" : ", first: " + first) + " - kept pending until it compiles";
+            if (!msg.equals(notifiedProblems.put(e.getKey(), msg))) agent.notice(msg);
+        }
+        for (var e : rep.held.entrySet()) {
+            String msg = "Held back: " + e.getKey().getFileName() + " - " + e.getValue();
+            if (!msg.equals(notifiedProblems.put(e.getKey(), msg))) agent.notice(msg);
+        }
     }
 
     private record Undelivered(String name, String scope, byte[] bytes, long writtenMillis) {}
@@ -99,14 +119,16 @@ final class Engine implements AutoCloseable {
     private long batchCounter;
     private final Deque<Long> recentTotals = new ArrayDeque<>();
     private int indexedRoots;
+    private final RootCompiler.Shared sharedFiles;
 
-    Engine(Config cfg, List<Root> roots, AgentLink agent, List<String> javacOptions) {
+    Engine(Config cfg, List<Root> roots, AgentLink agent, List<String> javacOptions) throws IOException {
         this.cfg = cfg;
         this.roots = new ArrayList<>(roots);
         this.roots.sort(Comparator.comparing((Root r) -> r.web));
         this.agent = agent;
         this.javacOptions = javacOptions;
         for (Root r : this.roots) sourcepath.add(r.src);
+        this.sharedFiles = new RootCompiler.Shared(sourcepath);
     }
 
     // ---- agent lifecycle ----
@@ -120,7 +142,7 @@ final class Engine implements AutoCloseable {
         }
         if (agent.generation() != seenGeneration) {
             seenGeneration = agent.generation();
-            compilers.clear();
+            resetCompilers();
             classpathCache.clear();
             flushUndelivered();
         }
@@ -334,7 +356,9 @@ final class Engine implements AutoCloseable {
                 String sha = Abi.sha1(c.getValue());
                 if (sha.equals(lastSent.get(c.getKey()))) continue;
                 try {
+                    long w0 = System.nanoTime();
                     writeClass(r, c.getKey(), c.getValue());
+                    rep.writeNanos += System.nanoTime() - w0;
                 } catch (IOException ex) {
                     Log.warn("cannot write class %s: %s", c.getKey(), ex.getMessage());
                     continue;
@@ -355,6 +379,7 @@ final class Engine implements AutoCloseable {
                     rep.swapped.add(ce.name());
                 }
             } else {
+                rep.agentNanos = br.nanos();
                 for (ClassResult cr : br.results()) {
                     switch (cr.status()) {
                         case Wire.SWAPPED -> rep.swapped.add(cr.name());
@@ -449,7 +474,7 @@ final class Engine implements AutoCloseable {
         RootCompiler c = compilers.get(r);
         if (c == null || !c.classpath.equals(cp)) {
             long t0 = System.nanoTime();
-            c = new RootCompiler(cp, sourcepath, javacOptions);
+            c = new RootCompiler(sharedFiles, cp, javacOptions);
             compilers.put(r, c);
             Log.debug("compiler for %s created (%d classpath entries) in %s", r.name, cp.size(), Log.ms(System.nanoTime() - t0));
         }
@@ -460,11 +485,14 @@ final class Engine implements AutoCloseable {
         List<Path> cached = classpathCache.get(r);
         if (cached != null) return cached;
         List<Path> cp = fromInventory(r);
+        boolean fromServer = cp != null;
         if (cp == null) {
             cp = new ArrayList<>(fallback());
         }
         if (!cp.contains(r.out)) cp.add(0, r.out);
-        classpathCache.put(r, cp);
+        // A server that is still starting has no loader for this root yet: use the scan now, ask the server again next time.
+        if (fromServer || !agent.connected()) classpathCache.put(r, cp);
+        else agent.refreshInventory();
         Log.debug("classpath for %s: %d entries (%s)", r.name, cp.size(), agent.connected() ? "from server" : "scanned");
         return cp;
     }
@@ -581,14 +609,23 @@ final class Engine implements AutoCloseable {
         if (isNew) {
             int dot = binaryName.lastIndexOf('.');
             String pkg = dot < 0 ? "" : binaryName.substring(0, dot);
-            for (RootCompiler c : compilers.values()) c.invalidatePackage(pkg);
+            sharedFiles.invalidatePackage(pkg);
         }
     }
 
     // ---- status ----
 
-    synchronized void forgetClasspaths() {
+    private void resetCompilers() {
         compilers.clear();
+        try {
+            sharedFiles.reset();
+        } catch (IOException e) {
+            Log.warn("could not reset the compiler caches: %s", e.getMessage());
+        }
+    }
+
+    synchronized void forgetClasspaths() {
+        resetCompilers();
         classpathCache.clear();
         fallbackClasspath = null;
         agent.refreshInventory();

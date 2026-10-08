@@ -79,7 +79,7 @@ Status: all of the above is implemented; only Linux has been exercised by hand s
 | Daemon: discovery of custom extensions, build settings from `advanced.properties`, warm javac, in-memory output | built, tested (also against the real 2205.6 platform jars) |
 | Scheduler: broken / held / restart-required, ABI-driven ripple, constant ripple, new classes, queued delivery for a server that connects later | built, tested end to end |
 | CLI: start, swap, attach, status, flush, pause, resume, rescan, stop, doctor | built |
-| M0 spike on a real Hybris server (O1-O6) | **next** |
+| M0 spike on a real Hybris server (O1-O6) | O1, O2, O5, O6 answered 2026-10-08 (live swap + auto-start on a real 2211-jdk21 server, 55 roots; Tomcat 10.1.57 / Spring 6.2.19; no annotation processors; javac output matches ant); O3/O4 (JBR) open |
 | Strict per-extension classpath (speed), web/backoffice roots on a real Tomcat | not yet |
 | Spring layer, IntelliJ plugin, JBR tier verification | not yet |
 

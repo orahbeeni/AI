@@ -68,7 +68,7 @@ final class AgentServer {
         this.infoFile = dir.resolve(ProcessHandleCompat.pid() + ".properties");
     }
 
-    void start() throws IOException {
+    void start(boolean autostart) throws IOException {
         writeInfoFile();
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
@@ -84,6 +84,7 @@ final class AgentServer {
             System.out.println("[HotDrop] agent listening on 127.0.0.1:" + server.getLocalPort()
                     + " (pid " + ProcessHandleCompat.pid() + ", enhanced redefinition: " + enhanced() + ")");
         }
+        if (autostart) DaemonLauncher.launchInBackground(opts, infoFile.getParent());
     }
 
     private void writeInfoFile() throws IOException {
@@ -92,7 +93,7 @@ final class AgentServer {
         p.setProperty("token", new String(token, StandardCharsets.UTF_8));
         p.setProperty("pid", String.valueOf(ProcessHandleCompat.pid()));
         p.setProperty("startMillis", String.valueOf(ManagementFactory.getRuntimeMXBean().getStartTime()));
-        p.setProperty("platformHome", String.valueOf(System.getProperty("PLATFORM_HOME", "")));
+        p.setProperty("platformHome", platformHome());
         p.setProperty("javaHome", System.getProperty("java.home", ""));
         Path tmp = Files.createTempFile(infoFile.getParent(), "agent", ".tmp");
         try {
@@ -145,6 +146,10 @@ final class AgentServer {
                 switch (f.type()) {
                     case Wire.PING -> Wire.write(out, Wire.PONG, new byte[0]);
                     case Wire.INVENTORY_REQ -> Wire.write(out, Wire.INVENTORY, Wire.encodeInventory(inventory()));
+                    case Wire.NOTICE -> {
+                        say(new Wire.In(f.payload()).str());
+                        Wire.write(out, Wire.PONG, new byte[0]);
+                    }
                     case Wire.REDEFINE -> Wire.write(out, Wire.RESULT, Wire.encodeResult(redefine(f.payload())));
                     default -> Wire.write(out, Wire.ERROR, new Wire.Out().str("unknown message " + f.type()).done());
                 }
@@ -172,7 +177,21 @@ final class AgentServer {
                 System.getProperty("java.vm.vendor", ""), System.getProperty("java.vm.version", ""),
                 System.getProperty("java.home", ""), System.getProperty("java.version", ""),
                 inst.isRedefineClassesSupported(), enhanced(),
-                ManagementFactory.getRuntimeMXBean().getStartTime(), System.getProperty("PLATFORM_HOME", ""));
+                ManagementFactory.getRuntimeMXBean().getStartTime(), platformHome());
+    }
+
+    /** PLATFORM_HOME is not always set as a system property; derive it from HYBRIS_BIN_DIR or catalina.home. */
+    private static String platformHome() {
+        String v = System.getProperty("PLATFORM_HOME");
+        if (v != null && !v.isEmpty()) return v;
+        String bin = System.getProperty("HYBRIS_BIN_DIR");
+        if (bin != null && !bin.isEmpty()) return java.nio.file.Path.of(bin, "platform").toString();
+        String home = System.getProperty("catalina.home");
+        if (home != null && !home.isEmpty()) {
+            java.nio.file.Path parent = java.nio.file.Path.of(home).getParent();
+            if (parent != null) return parent.toString();
+        }
+        return "";
     }
 
     private static boolean enhanced() {
@@ -225,6 +244,7 @@ final class AgentServer {
 
         Set<String> wanted = new HashSet<>();
         for (ClassEntry e : entries) wanted.add(e.name());
+        long scanStart = System.nanoTime();
         Map<String, List<Class<?>>> loaded = new HashMap<>();
         for (Class<?> c : inst.getAllLoadedClasses()) {
             if (wanted.contains(c.getName()) && inst.isModifiableClass(c)) {
@@ -232,6 +252,7 @@ final class AgentServer {
             }
         }
 
+        long scanNanos = System.nanoTime() - scanStart;
         Map<String, Path> locationCache = new HashMap<>();
         Map<String, Path> scopeCache = new HashMap<>();
         Map<ClassEntry, List<ClassDefinition>> perEntry = new LinkedHashMap<>();
@@ -252,6 +273,7 @@ final class AgentServer {
 
         Map<ClassEntry, ClassResult> results = new LinkedHashMap<>();
         boolean fallback = false;
+        long redefineStart = System.nanoTime();
         if (!all.isEmpty()) {
             try {
                 inst.redefineClasses(all.toArray(new ClassDefinition[0]));
@@ -275,11 +297,38 @@ final class AgentServer {
                 }
             }
         }
+        if (Boolean.getBoolean("hotdrop.debug")) {
+            System.out.println("[HotDrop] timing: scanning " + inst.getAllLoadedClasses().length + " loaded classes "
+                    + (scanNanos / 1_000_000) + " ms, redefine " + ((System.nanoTime() - redefineStart) / 1_000_000) + " ms");
+        }
         List<ClassResult> list = new ArrayList<>();
         for (ClassEntry e : perEntry.keySet()) {
             list.add(results.getOrDefault(e, new ClassResult(e.name(), Wire.NOT_LOADED, "", 0)));
         }
+        for (ClassResult r : list) {
+            switch (r.status()) {
+                case Wire.SWAPPED -> say("Reloaded class '" + r.name() + "'" + (r.copies() > 1 ? " (" + r.copies() + " class loaders)" : ""));
+                case Wire.REJECTED -> say("Could not reload class '" + r.name() + "' - restart required: " + explain(r.message()));
+                default -> say("Compiled class '" + r.name() + "' (not loaded yet, used when first needed)");
+            }
+        }
         return new BatchResult(batchId, fallback, System.nanoTime() - start, list);
+    }
+
+    /** Reload messages go to the server console, so they show up in the Hybris log next to everything else. */
+    private void say(String msg) {
+        if (!"true".equals(opts.get("quiet")) && !"false".equalsIgnoreCase(System.getProperty("hotdrop.log"))) {
+            System.out.println("[HotDrop] " + msg);
+        }
+    }
+
+    private static String explain(String jvmMessage) {
+        String m = jvmMessage == null ? "" : jvmMessage;
+        if (m.contains("add a method")) return "a method, constructor or lambda was added (" + m + ")";
+        if (m.contains("delete a method")) return "a method was removed (" + m + ")";
+        if (m.contains("schema change")) return "a field was added or removed (" + m + ")";
+        if (m.contains("hierarchy change")) return "the superclass or interfaces changed (" + m + ")";
+        return m;
     }
 
     private static String describe(Throwable t) {

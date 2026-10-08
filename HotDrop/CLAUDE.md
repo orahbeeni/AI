@@ -14,7 +14,28 @@ Built and passing on Linux (Temurin 17): protocol, agent, daemon (discovery, war
 end-to-end test `it/IntegrationTest.java`. Developed on Linux, so macOS and Windows have NOT been run by hand yet.
 Not built: Spring layer, IntelliJ plugin, strict per-extension classpath. Not yet done: the spike on a real Hybris server.
 
-## If you are on macOS (the current task): test it
+## Done on macOS (2026-10-08)
+macOS tested: build and integration test pass (polling watcher; native fails because the JDK polls slowly there).
+Verified on a real Hybris 2211-jdk21 (Microsoft JDK 21.0.12, CCv2 project, 55 source roots): attach, live swap of a
+populator, `hotdrop up`, and the full auto-start path (`-javaagent` in config/local-config/99-local.properties ->
+`ant server` -> agent starts the watcher -> live swap seen on the PDP). So O1 is answered: it works end to end.
+Added: `up`, `install`, agent auto-start + supervision (`DaemonLauncher`), PLATFORM_HOME fallback (HYBRIS_BIN_DIR /
+catalina.home). Real-project bug found and fixed: one javac file manager per root held a full jar index each and ran
+the daemon out of memory (3 GB+); now one shared file manager (`RootCompiler.Shared`), ~230 MB.
+Done later same day: `install` now prefers config/local-config/99-local.properties; Hybris-log messages ([HotDrop] Reloaded
+class ..., Not reloaded ..., via Wire.NOTICE); acceptance on the real server (body change, new class, added lambda -> restart
+required, broken then fixed, web controller); real latency: warm swaps 233-245 ms total (compile ~135, server ~100). O2: Tomcat
+10.1.57, Spring 6.2.19. O5: no annotation processors in custom code. O6: 426 seccore classes compiled by HotDrop vs ant are
+identical under `javap -p -s -c`. Not verified: JBR tier (no JBR installed here), strict per-extension classpath (not needed
+for the 300 ms target so far). Note debug start (`ystartDebug`, JDWP) may slow redefine; untested without it.
+BUG FOUND AND FIXED: HotDrop did not pass `-parameters` (Hybris: build.parameter-metadata=true), so swapped Spring MVC
+controllers lost parameter names -> "Name for argument ... not specified" on @PathVariable. Always compare class BYTES with
+the ant build (Golden check: 440/440 identical with -parameters), not just javap -p -s -c.
+Notes: debug start uses tomcat.debugjavaoptions INSTEAD of tomcat.javaoptions. Remaining
+PLAN open questions: O2-O6, strict per-extension classpath, JBR tier. Never run the real server's items.xml build issues
+past HotDrop - it does not touch items.xml.
+
+## (historical) If you are on macOS (the current task): test it
 1. `java -version` must be a JDK 17+ (not a JRE). Note the version and vendor.
 2. `java Build.java` - must print `built: ...` with no warnings.
 3. `java it/IntegrationTest.java` - default watcher on macOS is polling. All checks must PASS.

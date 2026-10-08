@@ -145,7 +145,9 @@ final class Daemon implements AutoCloseable {
         pendingDeleted.clear();
         try {
             engine.maintenance();
-            logReport(engine.runCycle(changed, deleted));
+            Engine.Report rep = engine.runCycle(changed, deleted);
+            logReport(rep);
+            engine.notifyServer(rep);
         } catch (Throwable t) {
             Log.warn("cycle failed: %s", t);
             t.printStackTrace();
@@ -155,6 +157,7 @@ final class Daemon implements AutoCloseable {
     static void logReport(Engine.Report rep) {
         if (rep.empty) return;
         String timing = "compile " + Log.ms(rep.compileNanos) + ", send " + Log.ms(rep.sendNanos)
+                + (rep.agentNanos > 0 ? " (write " + Log.ms(rep.writeNanos) + ", server " + Log.ms(rep.agentNanos) + ")" : "")
                 + ", total " + Log.ms(rep.totalNanos) + (rep.rounds > 1 ? ", " + rep.rounds + " rounds" : "");
         if (!rep.swapped.isEmpty() || !rep.notLoaded.isEmpty()) {
             String what = rep.swapped.isEmpty() ? "" : "swapped " + simple(rep.swapped);

@@ -188,6 +188,18 @@ final class AgentLink implements Closeable {
         }
     }
 
+    /** Prints a line in the server's console (the Hybris log). Best effort: no agent, no message. */
+    synchronized void notice(String text) {
+        if (socket == null) return;
+        try {
+            Wire.write(out, Wire.NOTICE, new Wire.Out().str(text).done());
+            Wire.read(in);
+        } catch (IOException e) {
+            Log.debug("notice failed: %s", e.getMessage());
+            drop();
+        }
+    }
+
     @Override
     public synchronized void close() {
         drop();

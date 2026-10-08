@@ -1,7 +1,6 @@
 package hotdrop.daemon;
 
 import com.sun.tools.attach.VirtualMachine;
-import com.sun.tools.attach.VirtualMachineDescriptor;
 import hotdrop.protocol.Wire.AgentInfo;
 
 import java.io.BufferedReader;
@@ -27,6 +26,8 @@ public final class Main {
 
               start    watch sources, compile on save, hot swap into the server
               swap     compile and swap the given files once, then exit
+              up       find the running Hybris, attach if needed and watch (the easy way)
+              install  add the agent to local.properties so HotDrop starts with the server (--remove undoes it, --yes skips the question)
               attach   load the agent into an already running server (no restart)
               status   show server connection, file states, timings
               flush [file]   compile now, skipping the debounce window
@@ -57,6 +58,7 @@ public final class Main {
         String cmd = args[0];
         Config cfg = new Config();
         List<String> positional = new ArrayList<>();
+        List<String> rawArgs = List.of(args).subList(1, args.length);
         Long pid = null;
         for (int i = 1; i < args.length; i++) {
             switch (args[i]) {
@@ -79,11 +81,14 @@ public final class Main {
                 case "--poll-ms" -> cfg.pollMs = Integer.parseInt(args[++i]);
                 case "--pid" -> pid = Long.parseLong(args[++i]);
                 case "--debug" -> Log.debug = true;
+                case "--yes", "--remove" -> { }
                 default -> positional.add(args[i]);
             }
         }
         switch (cmd) {
             case "start" -> start(cfg);
+            case "up" -> Up.run(cfg, rawArgs);
+            case "install" -> System.exit(Install.run(cfg, rawArgs.contains("--yes"), rawArgs.contains("--remove")));
             case "swap" -> System.exit(swap(cfg, positional));
             case "attach" -> attach(cfg, pid);
             case "doctor" -> doctor(cfg);
@@ -112,6 +117,7 @@ public final class Main {
         if (cfg.hybris != null) {
             Discovery.BuildSettings s = Discovery.buildSettings(cfg.hybris);
             enc = s.encoding();
+            if (s.parameters()) o.add("-parameters");
             if (s.level() != null && !s.level().isEmpty()) {
                 o.addAll(List.of("-source", s.level(), "-target", s.level()));
                 o.addAll(s.exports());
@@ -134,6 +140,10 @@ public final class Main {
     // ---- commands ----
 
     private static void start(Config cfg) throws Exception {
+        startDaemon(cfg);
+    }
+
+    static void startDaemon(Config cfg) throws Exception {
         Engine engine = engine(cfg);
         Daemon daemon = new Daemon(cfg, engine);
         daemon.start();
@@ -185,38 +195,39 @@ public final class Main {
     }
 
     private static void attach(Config cfg, Long pid) throws Exception {
+        if (pid != null) {
+            loadAgent(cfg, String.valueOf(pid));
+            System.out.println("agent loaded into pid " + pid);
+            return;
+        }
+        if (cfg.platformHome() == null) {
+            System.err.println("no matching JVM found; pass --pid or --hybris");
+            System.exit(1);
+        }
+        Up.Server server = Up.findServer(cfg.hybris);
+        if (server == null) {
+            System.err.println("no matching JVM found for platform dir " + cfg.platformHome());
+            System.exit(1);
+        }
+        loadAgent(cfg, String.valueOf(server.pid()));
+        System.out.println("agent loaded into pid " + server.pid());
+    }
+
+    /** Loads the agent jar into the JVM with the given pid. */
+    static void loadAgent(Config cfg, String pid) throws Exception {
         Path jar = Path.of(Main.class.getProtectionDomain().getCodeSource().getLocation().toURI())
                 .resolveSibling("hotdrop-agent.jar");
         if (System.getProperty("hotdrop.agent.jar") != null) jar = Path.of(System.getProperty("hotdrop.agent.jar"));
         if (!Files.isRegularFile(jar)) {
-            System.err.println("agent jar not found: " + jar);
-            System.exit(2);
+            throw new IOException("agent jar not found: " + jar);
         }
         String options = cfg.home.equals(Config.class.getDeclaredConstructor().newInstance().home) ? "" : "dir=" + cfg.agentsDir();
-        Path wanted = cfg.platformHome();
-        for (VirtualMachineDescriptor d : VirtualMachine.list()) {
-            if (pid != null && !d.id().equals(String.valueOf(pid))) continue;
-            if (d.id().equals(String.valueOf(ProcessHandle.current().pid()))) continue;
-            VirtualMachine vm;
-            try {
-                vm = VirtualMachine.attach(d);
-            } catch (Exception e) {
-                continue;
-            }
-            try {
-                if (pid == null) {
-                    String ph = vm.getSystemProperties().getProperty("PLATFORM_HOME");
-                    if (ph == null || wanted == null || !Files.isSameFile(Path.of(ph), wanted)) continue;
-                }
-                vm.loadAgent(jar.toString(), options);
-                System.out.println("agent loaded into pid " + d.id() + " (" + d.displayName() + ")");
-                return;
-            } finally {
-                vm.detach();
-            }
+        VirtualMachine vm = VirtualMachine.attach(pid);
+        try {
+            vm.loadAgent(jar.toString(), options);
+        } finally {
+            vm.detach();
         }
-        System.err.println("no matching JVM found" + (wanted == null ? "; pass --pid or --hybris" : " for PLATFORM_HOME=" + wanted));
-        System.exit(1);
     }
 
     private static void doctor(Config cfg) throws Exception {
