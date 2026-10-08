@@ -89,40 +89,53 @@ final class Daemon implements AutoCloseable {
     private void loop() {
         Deque<Root> toIndex = new ArrayDeque<>();
         if (cfg.index) toIndex.addAll(engine.roots);
-        long lastMaintenance = 0;
         engine.maintenance();
         try {
             while (running) {
-                if (reindex) {
-                    reindex = false;
-                    engine.forgetClasspaths();
-                    toIndex.clear();
-                    if (cfg.index) toIndex.addAll(engine.roots);
+                try {
+                    step(toIndex);
+                } catch (RuntimeException e) {
+                    // Never die quietly: without this thread nothing is compiled or swapped any more.
+                    Log.warn("worker error (continuing): %s", e);
+                    e.printStackTrace();
+                    Thread.sleep(500);
                 }
-                FsEvent ev = queue.poll(toIndex.isEmpty() ? 1000 : 0, TimeUnit.MILLISECONDS);
-                if (ev == null) {
-                    if (!toIndex.isEmpty()) {
-                        engine.indexRoot(toIndex.poll());
-                    } else if (System.currentTimeMillis() - lastMaintenance > 2000) {
-                        engine.maintenance();
-                        lastMaintenance = System.currentTimeMillis();
-                    }
-                    continue;
-                }
-                boolean flush = accumulate(ev);
-                while (!flush && running) {
-                    FsEvent next = queue.poll(cfg.debounceMs, TimeUnit.MILLISECONDS);
-                    if (next == null) break;
-                    flush |= accumulate(next);
-                }
-                if (!running || paused) continue;
-                cycle();
-                lastMaintenance = System.currentTimeMillis();
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
         close();
+    }
+
+    private long lastMaintenance;
+
+    /** One pass of the worker: index a root, run maintenance, or compile and swap a batch of changes. */
+    private void step(Deque<Root> toIndex) throws InterruptedException {
+        if (reindex) {
+            reindex = false;
+            engine.forgetClasspaths();
+            toIndex.clear();
+            if (cfg.index) toIndex.addAll(engine.roots);
+        }
+        FsEvent ev = queue.poll(toIndex.isEmpty() ? 1000 : 0, TimeUnit.MILLISECONDS);
+        if (ev == null) {
+            if (!toIndex.isEmpty()) {
+                engine.indexRoot(toIndex.poll());
+            } else if (System.currentTimeMillis() - lastMaintenance > 2000) {
+                engine.maintenance();
+                lastMaintenance = System.currentTimeMillis();
+            }
+            return;
+        }
+        boolean flush = accumulate(ev);
+        while (!flush && running) {
+            FsEvent next = queue.poll(cfg.debounceMs, TimeUnit.MILLISECONDS);
+            if (next == null) break;
+            flush |= accumulate(next);
+        }
+        if (!running || paused) return;
+        cycle();
+        lastMaintenance = System.currentTimeMillis();
     }
 
     private boolean accumulate(FsEvent ev) {

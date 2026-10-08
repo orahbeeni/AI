@@ -56,7 +56,7 @@ final class Up {
             Path pidFile = cfg.home.resolve("autostart.pid");
             if (Files.isRegularFile(pidFile)) {
                 long pid = Long.parseLong(Files.readString(pidFile).trim());
-                if (pid != ProcessHandle.current().pid() && ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)) return true;
+                if (pid != ProcessHandle.current().pid() && isWatcherProcess(pid)) return true;
             }
             Path f = cfg.home.resolve("daemon.properties");
             if (!Files.isRegularFile(f)) return false;
@@ -74,13 +74,29 @@ final class Up {
         }
     }
 
+    /** Alive and, where the OS tells us the command line, really a HotDrop watcher (process ids get reused). */
+    static boolean isWatcherProcess(long pid) {
+        return ProcessHandle.of(pid).filter(ProcessHandle::isAlive)
+                .map(h -> h.info().commandLine().map(c -> c.contains("hotdrop-daemon")).orElse(true))
+                .orElse(false);
+    }
+
     /** Prints the last lines of the log, then follows it like tail -f. */
     private static void followLog(Path log) throws IOException, InterruptedException {
         long pos = 0;
         if (Files.isRegularFile(log)) {
-            List<String> lines = Files.readAllLines(log);
-            for (String l : lines.subList(Math.max(0, lines.size() - 20), lines.size())) System.out.println(l);
-            pos = Files.size(log);
+            // only the end of the file: the log can be large after many server starts
+            long size = Files.size(log);
+            long from = Math.max(0, size - 16 * 1024);
+            try (java.io.RandomAccessFile f = new java.io.RandomAccessFile(log.toFile(), "r")) {
+                f.seek(from);
+                byte[] buf = new byte[(int) (size - from)];
+                f.readFully(buf);
+                List<String> lines = List.of(new String(buf, java.nio.charset.StandardCharsets.UTF_8).split("\\R"));
+                if (from > 0 && !lines.isEmpty()) lines = lines.subList(1, lines.size()); // partial first line
+                for (String l : lines.subList(Math.max(0, lines.size() - 20), lines.size())) System.out.println(l);
+            }
+            pos = size;
         }
         while (true) {
             Thread.sleep(300);
@@ -123,6 +139,9 @@ final class Up {
     static Server findServer(Path wanted) {
         for (VirtualMachineDescriptor d : VirtualMachine.list()) {
             if (d.id().equals(String.valueOf(ProcessHandle.current().pid()))) continue;
+            // The display name (main class and arguments) is known without attaching. Only Tomcat-based JVMs
+            // can be Hybris, so the IDE, Gradle daemons and other JVMs are never touched.
+            if (!looksLikeHybris(d.displayName())) continue;
             VirtualMachine vm;
             try {
                 vm = VirtualMachine.attach(d);
@@ -153,6 +172,11 @@ final class Up {
             }
         }
         return null;
+    }
+
+    static boolean looksLikeHybris(String displayName) {
+        String n = displayName == null ? "" : displayName.toLowerCase(java.util.Locale.ROOT);
+        return n.contains("catalina") || n.contains("tanukisoftware") || n.contains("hybris");
     }
 
     private static Path enclosingHybris() {

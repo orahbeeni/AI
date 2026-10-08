@@ -59,6 +59,7 @@ final class DaemonLauncher {
                 "-Dhotdrop.child=1", "-jar", daemonJar.toString(), "up", "--hybris", hybris.toString()));
         if (!home.equals(Path.of(System.getProperty("user.home"), ".hotdrop"))) cmd.addAll(List.of("--home", home.toString()));
 
+        rotate(log);
         AtomicBoolean stopping = new AtomicBoolean();
         AtomicReference<Process> current = new AtomicReference<>();
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -101,6 +102,17 @@ final class DaemonLauncher {
         }
     }
 
+    /** Keeps the log from growing forever: one previous file is kept as daemon.log.1. */
+    private static void rotate(Path log) {
+        try {
+            if (Files.isRegularFile(log) && Files.size(log) > 10L * 1024 * 1024) {
+                Files.move(log, log.resolveSibling(log.getFileName() + ".1"), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (IOException e) {
+            // keep appending to the old file
+        }
+    }
+
     private static Path hybrisDir() {
         String bin = System.getProperty("HYBRIS_BIN_DIR");
         if (bin != null && !bin.isEmpty()) return parent(Path.of(bin));
@@ -121,7 +133,11 @@ final class DaemonLauncher {
             Path pidFile = home.resolve("autostart.pid");
             if (Files.isRegularFile(pidFile)) {
                 long pid = Long.parseLong(Files.readString(pidFile).trim());
-                if (ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)) return true;
+                // process ids get reused: also check the command line where the OS reports it
+                boolean watcher = ProcessHandle.of(pid).filter(ProcessHandle::isAlive)
+                        .map(h -> h.info().commandLine().map(c -> c.contains("hotdrop-daemon")).orElse(true))
+                        .orElse(false);
+                if (watcher) return true;
             }
             Path f = home.resolve("daemon.properties");
             if (!Files.isRegularFile(f)) return false;

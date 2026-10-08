@@ -66,6 +66,7 @@ final class SourceWatcher implements Closeable {
                     dir = keys.get(key);
                 }
                 if (dir != null) {
+                    try {
                     for (WatchEvent<?> ev : key.pollEvents()) {
                         if (ev.kind() == StandardWatchEventKinds.OVERFLOW) {
                             Log.warn("file event overflow in %s; run 'hotdrop rescan'", dir);
@@ -84,6 +85,10 @@ final class SourceWatcher implements Closeable {
                         } else if (p.toString().endsWith(".java")) {
                             sink.accept(p);
                         }
+                    }
+                    } catch (RuntimeException e) {
+                        // Never die quietly: a dead watcher means saves are silently ignored.
+                        Log.warn("file watching error (continuing): %s", e);
                     }
                 }
                 if (!key.reset()) {

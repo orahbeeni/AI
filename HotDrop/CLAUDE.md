@@ -31,6 +31,11 @@ for the 300 ms target so far). Note debug start (`ystartDebug`, JDWP) may slow r
 BUG FOUND AND FIXED: HotDrop did not pass `-parameters` (Hybris: build.parameter-metadata=true), so swapped Spring MVC
 controllers lost parameter names -> "Name for argument ... not specified" on @PathVariable. Always compare class BYTES with
 the ant build (Golden check: 440/440 identical with -parameters), not just javap -p -s -c.
+Review for leaks/robustness (same day): memory stable (watcher ~280 MB heap, 19 MB metaspace after 30 min). Fixed:
+polling watcher used 22% CPU idle on macOS (55 roots) -> 3.8% (hot files + rotating sweep; first save of an untouched
+file can take up to ~1 s, later saves one tick); poller/native-watcher/worker threads no longer die silently on an
+exception; `up`/`attach` only attach to Tomcat-like JVMs (display name), not the IDE or Gradle daemons; daemon.log
+rotates at 10 MB; one-watcher check verifies the command line (pid reuse).
 Notes: debug start uses tomcat.debugjavaoptions INSTEAD of tomcat.javaoptions. Remaining
 PLAN open questions: O2-O6, strict per-extension classpath, JBR tier. Never run the real server's items.xml build issues
 past HotDrop - it does not touch items.xml.
