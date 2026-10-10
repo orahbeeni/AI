@@ -105,11 +105,24 @@ The same watcher (a cheap directory poll, no recursion) also handles:
 |---|---|
 | `*-items.xml` | `[restart required]`: run `ant build`, restart, and update the running system (only if the content really changed; a touch is ignored) |
 | `*-beans.xml` | `[restart required]`: the generated DTO / event classes are stale, run `ant build` and restart |
+| `*-backoffice-config.xml`, `*-backoffice-widgets.xml` | a `[note]`: Backoffice keeps its configuration cached, reload it from Backoffice or restart |
+| `*.impex` | with `--impex` **and** a `# hotdrop-on-save` line near the top of the file: imported through HAC (see below) |
 | `.properties` in `resources/localization` or a `WEB-INF/messages` directory | the `MessageSource` caches in the running contexts are cleared (Spring's `ReloadableResourceBundleMessageSource` and `ResourceBundleMessageSource`), so the next lookup re-reads the file |
 
 `hotdrop doctor --hybris <dir>` also reports whether `tomcat.development.mode` is on (Tomcat then recompiles edited JSPs and
-tags itself; HotDrop does not touch those). Not built: running an ImpEx on save and the backoffice widget loader, because
-neither can be checked without a real server.
+tags itself; HotDrop does not touch those). 
+**Backoffice widgets.** Widget controller classes in `backoffice/src` are compiled and swapped like any other class. There is
+no special widget loader: if Backoffice loads them from a packed `_bof.jar` instead of the `classes` directory, the swap
+works in memory but a restart reads the old jar until you run `ant build`.
+
+**ImpEx on save (opt-in).** `hotdrop start --hybris <dir> --impex` watches `resources/impex/**` and
+`resources/<ext>/import/**` (or pass `--impex-dir`). Only files that carry a comment line `# hotdrop-on-save` in their first
+20 lines are run, so a big init script is never imported by accident. The import goes through HAC's ImpEx console (login,
+CSRF token, `IMPORT_STRICT`), on its own thread so a slow import never delays a class swap. Settings: `--hac` (default
+`https://localhost:9002/hac`; self-signed certificates are accepted for localhost only), `--hac-user` (default `admin`),
+`--hac-password` or `$HOTDROP_HAC_PASSWORD` (default `nimda`, the development default). The result, or HAC's error message,
+is logged and sent to the server console. The HAC form and result element are written from knowledge of HAC and tested only
+against a stub that imitates it, so treat this as experimental until it has run against a real server.
 
 ## Platforms
 | | Linux | macOS | Windows |
@@ -131,6 +144,9 @@ java it/IntegrationTest.java          # HOTDROP_WATCH=poll to test the macOS wat
 The test starts a JVM with the agent that loads classes through a `URLClassLoader` (as Hybris does), starts the daemon,
 edits files, and checks what the running JVM does: body change, pending file, held dependent, release together, constant
 ripple, an unswappable change reported clearly, and the CLI.
+
+`java it/ResourcesIntegrationTest.java` needs no server JVM: `doctor` on a fake Hybris tree, the items.xml and Backoffice
+notices, and ImpEx on save against a stub HAC.
 
 `java it/SpringIntegrationTest.java` runs a real Spring context in the test JVM and checks the XML cases above plus MVC
 mapping refresh. It needs Spring jars: set `HOTDROP_SPRING_LIB` (a directory or a path-separated jar list incl. a servlet API),

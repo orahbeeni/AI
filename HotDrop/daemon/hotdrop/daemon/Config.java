@@ -11,6 +11,12 @@ final class Config {
     final List<Path> springDirs = new ArrayList<>();
     /** Directories whose message bundles (.properties) are watched. */
     final List<Path> messageDirs = new ArrayList<>();
+    /** Opt-in: run *.impex files that carry a '# hotdrop-on-save' line through HAC when they are saved. */
+    boolean impex;
+    String hacUrl = "https://localhost:9002/hac";
+    String hacUser = "admin";
+    String hacPassword = System.getenv().getOrDefault("HOTDROP_HAC_PASSWORD", "nimda");
+    final List<Path> impexDirs = new ArrayList<>();
     boolean spring = true;
     final List<Path> extraClasspath = new ArrayList<>();
     Path home = Path.of(System.getProperty("user.home"), ".hotdrop");

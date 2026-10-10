@@ -78,6 +78,29 @@ final class Discovery {
         return dirs;
     }
 
+    /** resources/impex and resources/<ext>/import, with their subdirectories (down to 4 levels). */
+    static List<Path> impexDirs(Path hybris) throws IOException {
+        Path custom = hybris.resolve("bin").resolve("custom");
+        List<Path> dirs = new ArrayList<>();
+        if (!Files.isDirectory(custom)) return dirs;
+        Enabled enabled = readLocalExtensions(hybris);
+        List<Path> extDirs = new ArrayList<>();
+        try (Stream<Path> s = Files.walk(custom, 4)) {
+            s.filter(p -> p.getFileName().toString().equals("extensioninfo.xml")).forEach(p -> extDirs.add(p.getParent()));
+        }
+        for (Path ext : extDirs) {
+            String name = extensionName(ext);
+            if (!enabled.allows(name, ext)) continue;
+            for (Path top : new Path[]{ext.resolve("resources/impex"), ext.resolve("resources").resolve(name).resolve("import")}) {
+                if (!Files.isDirectory(top)) continue;
+                try (Stream<Path> s = Files.walk(top, 4)) {
+                    s.filter(Files::isDirectory).forEach(dirs::add);
+                }
+            }
+        }
+        return dirs;
+    }
+
     /** The merged Hybris properties (platform defaults, advanced, then the user's local.properties). */
     static Properties properties(Path hybris) {
         Properties p = new Properties();

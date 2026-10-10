@@ -17,6 +17,10 @@ final class Resources {
         SPRING,
         /** *-items.xml and *-beans.xml: need a build (and a system update), so the user is told. */
         MODEL,
+        /** *-backoffice-config.xml / *-backoffice-widgets.xml: Backoffice keeps its configuration cached. */
+        BACKOFFICE,
+        /** *.impex: run through HAC when the user opted in and the file asks for it. */
+        IMPEX,
         /** .properties in a localization or messages directory: message source caches are cleared. */
         MESSAGES,
         NONE
@@ -26,6 +30,8 @@ final class Resources {
         String n = p.getFileName() == null ? "" : p.getFileName().toString();
         if (SpringXml.isSpringFile(p)) return Kind.SPRING;
         if (n.endsWith("-items.xml") || n.endsWith("-beans.xml")) return Kind.MODEL;
+        if (n.endsWith("-backoffice-config.xml") || n.endsWith("-backoffice-widgets.xml")) return Kind.BACKOFFICE;
+        if (n.endsWith(".impex")) return Kind.IMPEX;
         if (n.endsWith(".properties") && p.getParent() != null && p.getParent().getFileName() != null) {
             String dir = p.getParent().getFileName().toString();
             if (dir.equals("localization") || dir.equals("messages")) return Kind.MESSAGES;
@@ -43,7 +49,7 @@ final class Resources {
         for (Path d : dirs) {
             try (DirectoryStream<Path> ds = Files.newDirectoryStream(d)) {
                 for (Path f : ds) {
-                    if (kind(f) == Kind.MODEL && Files.isRegularFile(f)) {
+                    if ((kind(f) == Kind.MODEL || kind(f) == Kind.BACKOFFICE) && Files.isRegularFile(f)) {
                         Integer h = hash(f);
                         if (h != null) out.put(f.toAbsolutePath().normalize(), h);
                     }

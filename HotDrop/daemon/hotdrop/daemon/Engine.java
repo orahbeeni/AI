@@ -137,7 +137,7 @@ final class Engine implements AutoCloseable {
         this.modelHashes = new HashMap<>(Resources.modelHashes(cfg.springDirs));
     }
 
-    /** Spring XML, model XML and message bundles that changed since the last cycle. */
+    /** Spring XML, model XML, Backoffice config, message bundles and ImpEx files that changed since the last cycle. */
     synchronized void runResources(Set<Path> changed) {
         if (changed.isEmpty()) return;
         Set<Path> springFiles = new LinkedHashSet<>();
@@ -145,7 +145,8 @@ final class Engine implements AutoCloseable {
         for (Path p : changed) {
             switch (Resources.kind(p)) {
                 case SPRING -> springFiles.add(p);
-                case MODEL -> modelChanged(p);
+                case MODEL, BACKOFFICE -> modelChanged(p);
+                case IMPEX -> impexSaved(p);
                 case MESSAGES -> messages = true;
                 default -> { }
             }
@@ -162,11 +163,50 @@ final class Engine implements AutoCloseable {
         Integer was = modelHashes.put(p, now);
         if (now == null || now.equals(was)) return;
         String name = p.getFileName().toString();
+        if (Resources.kind(p) == Resources.Kind.BACKOFFICE) {
+            String what = "Backoffice keeps its configuration cached: reload it from Backoffice or restart (widget classes themselves are swapped like any other class)";
+            Log.warn("[note] %s: %s", name, what);
+            agent.notice(name + " changed - " + what);
+            return;
+        }
         String what = name.endsWith("-items.xml")
                 ? "the type system changed: run 'ant build', restart, and update the running system (HAC > Platform > Update)"
                 : "generated DTO / event classes are stale: run 'ant build' and restart";
         Log.warn("[restart required] %s: %s", name, what);
         agent.notice(name + " changed - " + what);
+    }
+
+    private final Set<Path> impexHinted = new HashSet<>();
+    private ImpexRunner impex;
+    private java.util.concurrent.ExecutorService impexThread;
+
+    /** Opt-in (--impex) and per file ('# hotdrop-on-save'); runs on its own thread so a slow import never delays a swap. */
+    private void impexSaved(Path p) {
+        if (!cfg.impex) return;
+        String name = p.getFileName().toString();
+        if (!ImpexRunner.hasMarker(p)) {
+            if (impexHinted.add(p)) Log.info("[impex] %s saved but not run: add a line '# hotdrop-on-save' at its top to run it on save", name);
+            return;
+        }
+        if (impexThread == null) {
+            impexThread = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "hotdrop-impex");
+                t.setDaemon(true);
+                return t;
+            });
+        }
+        impexThread.execute(() -> {
+            long t0 = System.nanoTime();
+            try {
+                if (impex == null) impex = new ImpexRunner(cfg.hacUrl, cfg.hacUser, cfg.hacPassword);
+                String result = impex.run(p);
+                Log.info("[impex] %s imported in %s: %s", name, Log.ms(System.nanoTime() - t0), result);
+                agent.notice("ImpEx " + name + " imported: " + result);
+            } catch (Exception e) {
+                Log.warn("[impex failed] %s: %s", name, e.getMessage());
+                agent.notice("ImpEx " + name + " failed: " + e.getMessage());
+            }
+        });
     }
 
     // ---- agent lifecycle ----
@@ -718,6 +758,7 @@ final class Engine implements AutoCloseable {
 
     @Override
     public synchronized void close() {
+        if (impexThread != null) impexThread.shutdownNow();
         agent.close();
     }
 }

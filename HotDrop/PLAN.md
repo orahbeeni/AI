@@ -83,7 +83,7 @@ Status: all of the above is implemented; only Linux has been exercised by hand s
 | Strict per-extension classpath (speed), web/backoffice roots on a real Tomcat | not yet |
 | Spring layer (M4): `*-spring.xml` add / property / util-collection changes, cache clearing, MVC mapping refresh | built, tested on Spring 5.3.19 and 6.2.19 with a stand-in context; not yet on a real server (how `Registry` yields contexts, parent of web contexts) |
 | M5 extras: items/beans XML change notices, message bundle cache clearing, `doctor` development-mode check | built; message clearing tested with a stand-in context |
-| M5 not built: impex on save, backoffice widget loader | needs a real server to verify |
+| M5: ImpEx on save (via HAC, opt-in), Backoffice config notice, `doctor` development-mode line | built; tested against a stub HAC and a fake Hybris tree, not a real server. No special Backoffice widget loader: widget classes swap like any other |
 | IntelliJ plugin, JBR tier verification, field re-injection | not yet |
 
 Measured so far: ~120-190 ms from save to live in the end-to-end test (standard JVM, small project); ~230 ms warm compile

@@ -40,6 +40,10 @@ public final class Main {
               --cp <path:path>      extra classpath used when no server is connected
               --spring-dir <dir>    a directory holding *-spring.xml files to watch (repeatable; found automatically with --hybris)
               --messages-dir <dir>  a directory holding message bundles (.properties) to watch (repeatable)
+              --impex               run *.impex files that contain a '# hotdrop-on-save' line through HAC when saved (opt-in)
+              --impex-dir <dir>     a directory holding such files (repeatable; found automatically with --hybris)
+              --hac <url>           HAC address for --impex (default https://localhost:9002/hac)
+              --hac-user <name>     HAC user (default admin); the password comes from --hac-password or $HOTDROP_HAC_PASSWORD
               --no-spring           do not watch Spring XML, items/beans XML or message bundles
             other options:
               --home <dir>          state directory (default ~/.hotdrop)
@@ -74,6 +78,11 @@ public final class Main {
                 }
                 case "--spring-dir" -> cfg.springDirs.add(Path.of(args[++i]).toAbsolutePath().normalize());
                 case "--messages-dir" -> cfg.messageDirs.add(Path.of(args[++i]).toAbsolutePath().normalize());
+                case "--impex" -> cfg.impex = true;
+                case "--impex-dir" -> cfg.impexDirs.add(Path.of(args[++i]).toAbsolutePath().normalize());
+                case "--hac" -> cfg.hacUrl = args[++i];
+                case "--hac-user" -> cfg.hacUser = args[++i];
+                case "--hac-password" -> cfg.hacPassword = args[++i];
                 case "--no-spring" -> cfg.spring = false;
                 case "--cp" -> {
                     for (String e : args[++i].split(java.io.File.pathSeparator)) {
@@ -143,6 +152,7 @@ public final class Main {
         if (cfg.hybris != null && cfg.spring) {
             cfg.springDirs.addAll(Discovery.springDirs(cfg.hybris));
             cfg.messageDirs.addAll(Discovery.messageDirs(cfg.hybris));
+            if (cfg.impex) cfg.impexDirs.addAll(Discovery.impexDirs(cfg.hybris));
         }
         return new Engine(cfg, roots, link, javacOptions(cfg));
     }

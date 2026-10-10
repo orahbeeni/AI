@@ -38,10 +38,10 @@ final class Daemon implements AutoCloseable {
         List<Path> srcs = new ArrayList<>();
         for (Root r : engine.roots) srcs.add(r.src);
         startWatchers(srcs);
-        List<Path> resourceDirs = Resources.union(cfg.springDirs, cfg.messageDirs);
+        List<Path> resourceDirs = Resources.union(Resources.union(cfg.springDirs, cfg.messageDirs), cfg.impex ? cfg.impexDirs : List.of());
         if (!resourceDirs.isEmpty()) {
             watchers.add(new ResourceWatcher(resourceDirs, p -> submit(p, false), Math.max(200, cfg.pollMs * 3L)));
-            Log.info("watching Spring XML, items/beans XML and message bundles in %d director(ies)", resourceDirs.size());
+            Log.info("watching Spring XML, model XML, message bundles%s in %d director(ies)", cfg.impex ? ", ImpEx files" : "", resourceDirs.size());
         }
         worker = new Thread(this::loop, "hotdrop-worker");
         worker.start();
