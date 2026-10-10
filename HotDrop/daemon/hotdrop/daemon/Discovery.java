@@ -50,6 +50,26 @@ final class Discovery {
         return new BuildSettings(level, enc, exports, parameters);
     }
 
+    /** Where an enabled custom extension keeps Spring XML: core/global files, web contexts and addon web contexts. */
+    static List<Path> springDirs(Path hybris) throws IOException {
+        Path custom = hybris.resolve("bin").resolve("custom");
+        List<Path> dirs = new ArrayList<>();
+        if (!Files.isDirectory(custom)) return dirs;
+        Enabled enabled = readLocalExtensions(hybris);
+        List<Path> extDirs = new ArrayList<>();
+        try (Stream<Path> s = Files.walk(custom, 4)) {
+            s.filter(p -> p.getFileName().toString().equals("extensioninfo.xml")).forEach(p -> extDirs.add(p.getParent()));
+        }
+        for (Path ext : extDirs) {
+            if (!enabled.allows(extensionName(ext), ext)) continue;
+            for (String rel : new String[]{"resources", "web/webroot/WEB-INF", "acceleratoraddon/web/webroot/WEB-INF", "backoffice/resources"}) {
+                Path d = ext.resolve(rel);
+                if (Files.isDirectory(d)) dirs.add(d);
+            }
+        }
+        return dirs;
+    }
+
     static List<Root> discover(Path hybris) throws IOException {
         Path bin = hybris.resolve("bin");
         Path custom = bin.resolve("custom");
@@ -76,6 +96,15 @@ final class Discovery {
             Path webSrc = ext.resolve("web/src");
             if (Files.isDirectory(webSrc)) {
                 roots.add(new Root(name + ":web", webSrc, ext.resolve("web/webroot/WEB-INF/classes"), ext, true));
+            }
+            // Addons keep their storefront code under acceleratoraddon/web/src, backoffice modules under backoffice/src.
+            Path addonSrc = ext.resolve("acceleratoraddon/web/src");
+            if (Files.isDirectory(addonSrc)) {
+                roots.add(new Root(name + ":addon", addonSrc, ext.resolve("acceleratoraddon/web/webroot/WEB-INF/classes"), ext, true));
+            }
+            Path boSrc = ext.resolve("backoffice/src");
+            if (Files.isDirectory(boSrc)) {
+                roots.add(new Root(name + ":backoffice", boSrc, ext.resolve("backoffice/classes"), ext, true));
             }
         }
         return roots;

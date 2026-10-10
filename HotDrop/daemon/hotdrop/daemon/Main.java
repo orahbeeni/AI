@@ -38,6 +38,8 @@ public final class Main {
               --hybris <dir>        the hybris directory (contains bin/ and config/)
               --root <src>=<out>    a plain source tree and its class output directory (repeatable)
               --cp <path:path>      extra classpath used when no server is connected
+              --spring-dir <dir>    a directory holding *-spring.xml files to watch (repeatable; found automatically with --hybris)
+              --no-spring           do not watch Spring XML
             other options:
               --home <dir>          state directory (default ~/.hotdrop)
               --debounce <ms>       quiet window after the last save (default 40)
@@ -69,6 +71,8 @@ public final class Main {
                     Path src = Path.of(kv[0]);
                     cfg.manualRoots.add(new Root(src.getFileName().toString(), src, Path.of(kv[1]), Path.of(kv[1]), false));
                 }
+                case "--spring-dir" -> cfg.springDirs.add(Path.of(args[++i]).toAbsolutePath().normalize());
+                case "--no-spring" -> cfg.spring = false;
                 case "--cp" -> {
                     for (String e : args[++i].split(java.io.File.pathSeparator)) {
                         if (!e.isEmpty()) cfg.extraClasspath.add(Path.of(e).toAbsolutePath().normalize());
@@ -134,6 +138,7 @@ public final class Main {
             System.exit(2);
         }
         AgentLink link = new AgentLink(cfg.agentsDir(), cfg.platformHome());
+        if (cfg.hybris != null && cfg.spring) cfg.springDirs.addAll(Discovery.springDirs(cfg.hybris));
         return new Engine(cfg, roots, link, javacOptions(cfg));
     }
 

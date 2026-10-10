@@ -81,7 +81,8 @@ Status: all of the above is implemented; only Linux has been exercised by hand s
 | CLI: start, swap, attach, status, flush, pause, resume, rescan, stop, doctor | built |
 | M0 spike on a real Hybris server (O1-O6) | O1, O2, O5, O6 answered 2026-10-08 (live swap + auto-start on a real 2211-jdk21 server, 55 roots; Tomcat 10.1.57 / Spring 6.2.19; no annotation processors; javac output matches ant); O3/O4 (JBR) open |
 | Strict per-extension classpath (speed), web/backoffice roots on a real Tomcat | not yet |
-| Spring layer, IntelliJ plugin, JBR tier verification | not yet |
+| Spring layer (M4): `*-spring.xml` add / property / util-collection changes, cache clearing, MVC mapping refresh | built, tested on Spring 5.3.19 and 6.2.19 with a stand-in context; not yet on a real server (how `Registry` yields contexts, parent of web contexts) |
+| IntelliJ plugin, JBR tier verification, field re-injection | not yet |
 
 Measured so far: ~120-190 ms from save to live in the end-to-end test (standard JVM, small project); ~230 ms warm compile
 on the full Hybris 2205.6 classpath of 1,089 jars.

@@ -53,6 +53,7 @@ final class AgentServer {
     private final byte[] token;
     private final ServerSocket server;
     private final Path infoFile;
+    private final SpringBridge spring = new SpringBridge(this::say);
 
     AgentServer(Instrumentation inst, Map<String, String> opts) throws IOException {
         this.inst = inst;
@@ -77,6 +78,7 @@ final class AgentServer {
                 // best effort
             }
         }, "hotdrop-agent-cleanup"));
+        if (!"false".equals(opts.get("spring"))) spring.startFinder(inst);
         Thread t = new Thread(this::acceptLoop, "hotdrop-agent");
         t.setDaemon(true);
         t.start();
@@ -150,6 +152,8 @@ final class AgentServer {
                         say(new Wire.In(f.payload()).str());
                         Wire.write(out, Wire.PONG, new byte[0]);
                     }
+                    case Wire.SPRING -> Wire.write(out, Wire.SPRING_RESULT,
+                            Wire.encodeSpringResult(spring.apply(Wire.decodeSpring(f.payload()))));
                     case Wire.REDEFINE -> Wire.write(out, Wire.RESULT, Wire.encodeResult(redefine(f.payload())));
                     default -> Wire.write(out, Wire.ERROR, new Wire.Out().str("unknown message " + f.type()).done());
                 }
@@ -300,6 +304,19 @@ final class AgentServer {
         if (Boolean.getBoolean("hotdrop.debug")) {
             System.out.println("[HotDrop] timing: scanning " + inst.getAllLoadedClasses().length + " loaded classes "
                     + (scanNanos / 1_000_000) + " ms, redefine " + ((System.nanoTime() - redefineStart) / 1_000_000) + " ms");
+        }
+        if (spring.active()) {
+            List<Class<?>> done = new ArrayList<>();
+            results.forEach((e, r) -> {
+                if (r.status() == Wire.SWAPPED) perEntry.get(e).forEach(d -> done.add(d.getDefinitionClass()));
+            });
+            if (!done.isEmpty()) {
+                try {
+                    spring.afterSwap(done);
+                } catch (Throwable t) {
+                    System.err.println("[HotDrop] Spring refresh failed: " + t);
+                }
+            }
         }
         List<ClassResult> list = new ArrayList<>();
         for (ClassEntry e : perEntry.keySet()) {

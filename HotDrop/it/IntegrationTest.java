@@ -33,11 +33,23 @@ public class IntegrationTest {
                     URLClassLoader cl = new URLClassLoader(new URL[]{Path.of(a[0]).toUri().toURL()}, App.class.getClassLoader());
                     Object svc = cl.loadClass("demo.Service").getDeclaredConstructor().newInstance();
                     Method m = svc.getClass().getMethod("greet");
+                    Method[] web = new Method[2];
+                    for (int i = 0; i < 2; i++) {
+                        URLClassLoader w = new URLClassLoader(new URL[]{Path.of(a[1]).toUri().toURL()}, cl);
+                        Object ctl = w.loadClass("web.Ctl").getDeclaredConstructor().newInstance();
+                        web[i] = ctl.getClass().getMethod("page");
+                        web[i].setAccessible(true);
+                    }
+                    Object[] ctls = new Object[2];
+                    for (int i = 0; i < 2; i++) ctls[i] = web[i].getDeclaringClass().getDeclaredConstructor().newInstance();
                     System.out.println("READY");
                     String last = null;
+                    String lastWeb = null;
                     while (true) {
                         String now = String.valueOf(m.invoke(svc));
                         if (!now.equals(last)) { System.out.println("OUT " + now); last = now; }
+                        String w = web[0].invoke(ctls[0]) + "|" + web[1].invoke(ctls[1]);
+                        if (!w.equals(lastWeb)) { System.out.println("WEB " + w); lastWeb = w; }
                         Thread.sleep(5);
                     }
                 }
@@ -56,6 +68,11 @@ public class IntegrationTest {
                 + "\";\n  public static String tag() { return \"tag\"; }\n}\n";
     }
 
+    static String ctl(String ver) {
+        return "package web;\npublic class Ctl {\n  public String page() { return \"" + ver
+                + " \" + demo.Helper.PREFIX + \" \" + demo.Helper.tag(); }\n}\n";
+    }
+
     static String extra(String body) {
         return "package demo;\npublic class Extra {\n  public static String value() { return " + body + "; }\n}\n";
     }
@@ -67,10 +84,14 @@ public class IntegrationTest {
         Path work = Files.createTempDirectory("hotdrop-it");
         src = work.resolve("src");
         Path classes = work.resolve("classes");
+        Path websrc = work.resolve("websrc");
+        Path webClasses = work.resolve("webclasses");
         Path appDir = work.resolve("app");
         Path home = work.resolve("home");
         Files.createDirectories(src.resolve("demo"));
         Files.createDirectories(classes);
+        Files.createDirectories(websrc.resolve("web"));
+        Files.createDirectories(webClasses);
         Files.createDirectories(appDir);
         Files.writeString(src.resolve("demo/Service.java"), service("v1", false, false));
         Files.writeString(src.resolve("demo/Helper.java"), helper("p1"));
@@ -79,20 +100,23 @@ public class IntegrationTest {
         JavaCompiler jc = ToolProvider.getSystemJavaCompiler();
         check("initial compile of demo sources", jc.run(null, null, null, "-g", "-d", classes.toString(),
                 src.resolve("demo/Service.java").toString(), src.resolve("demo/Helper.java").toString()) == 0);
+        Files.writeString(websrc.resolve("web/Ctl.java"), ctl("w1"));
+        check("initial compile of web sources", jc.run(null, null, null, "-g", "-cp", classes.toString(), "-d", webClasses.toString(),
+                websrc.resolve("web/Ctl.java").toString()) == 0);
         check("compile app", jc.run(null, null, null, "-d", appDir.toString(), appDir.resolve("App.java").toString()) == 0);
 
         boolean windows = System.getProperty("os.name").toLowerCase().contains("win");
         String java = Path.of(System.getProperty("java.home"), "bin", windows ? "java.exe" : "java").toString();
         String watch = System.getenv().getOrDefault("HOTDROP_WATCH", "auto");
         Process app = start(work, appOut, "app", java, "-javaagent:" + agentJar + "=dir=" + home.resolve("agents") + "",
-                "-cp", appDir.toString(), "App", classes.toString());
+                "-cp", appDir.toString(), "App", classes.toString(), webClasses.toString());
         Process daemon = null;
         try {
             check("app started and loaded demo.Service", waitFor(appOut, "READY", 10_000) >= 0);
             check("app prints first value", waitFor(appOut, "OUT hello v1 p1 tag", 5_000) >= 0);
 
             daemon = start(work, daemonOut, "daemon", java, "-jar", daemonJar.toString(), "start",
-                    "--root", src + "=" + classes, "--home", home.toString(), "--watch", watch, "--debug");
+                    "--root", src + "=" + classes, "--root", websrc + "=" + webClasses, "--home", home.toString(), "--watch", watch, "--debug");
             check("daemon connected to the agent", waitFor(daemonOut, "agent connected", 10_000) >= 0);
             check("daemon indexed the sources", waitFor(daemonOut, "indexed", 20_000) >= 0);
             Thread.sleep(300);
@@ -152,8 +176,31 @@ public class IntegrationTest {
             ms = edit("demo/Service.java", service("v5", true, false), appOut, "OUT hello v5 p2 tag e1", 5_000);
             check("   removing the lambda recovers", ms >= 0);
 
-            // 7. CLI
-            step("7. CLI talks to the daemon");
+            // 7. web root: the same class lives in two webapp loaders whose parent is the platform loader
+            step("7. web class is swapped in every webapp loader");
+            check("   web page starts at w1", waitFor(appOut, "WEB w1 p2 tag|w1 p2 tag", 5_000) >= 0);
+            long t0 = System.nanoTime();
+            Files.writeString(websrc.resolve("web/Ctl.java"), ctl("w2"));
+            int wi = waitFor(appOut, "WEB w2 p2 tag|w2 p2 tag", 5_000);
+            check("   both webapps show the change", wi >= 0);
+            if (wi >= 0) latency("web body change", (System.nanoTime() - t0) / 1_000_000);
+            check("   server console mentions both class loaders", waitFor(appOut, "Reloaded class 'web.Ctl' (2 class loaders)", 3_000) >= 0);
+
+            step("8. platform constant change ripples into the web root");
+            t0 = System.nanoTime();
+            Files.writeString(src.resolve("demo/Helper.java"), helper("p3"));
+            wi = waitFor(appOut, "WEB w2 p3 tag|w2 p3 tag", 5_000);
+            check("   web class recompiled without being edited", wi >= 0);
+            if (wi >= 0) latency("platform->web ripple", (System.nanoTime() - t0) / 1_000_000);
+
+            step("9. broken web file stays pending, fixed one goes live");
+            Files.writeString(websrc.resolve("web/Ctl.java"), "package web;\npublic class Ctl { broken }\n");
+            check("   daemon reports Ctl as broken", waitFor(daemonOut, "[broken] Ctl.java", 5_000) >= 0);
+            Files.writeString(websrc.resolve("web/Ctl.java"), ctl("w3"));
+            check("   fixed web class live", waitFor(appOut, "WEB w3 p3 tag|w3 p3 tag", 5_000) >= 0);
+
+            // 10. CLI
+            step("10. CLI talks to the daemon");
             Process st = new ProcessBuilder(java, "-jar", daemonJar.toString(), "status", "--home", home.toString())
                     .redirectErrorStream(true).start();
             String status = new String(st.getInputStream().readAllBytes());
@@ -176,10 +223,10 @@ public class IntegrationTest {
         System.exit(failures == 0 ? 0 : 1);
     }
 
-    /** Lines the application itself printed; the agent's own "[HotDrop] ..." console messages are checked separately. */
+    /** Output lines of the service under test ("OUT ..."); web lines and the agent's "[HotDrop] ..." messages are checked separately. */
     static int appLines() {
         synchronized (appOut) {
-            return (int) appOut.stream().filter(l -> !l.contains("[HotDrop]")).count();
+            return (int) appOut.stream().filter(l -> l.startsWith("OUT ")).count();
         }
     }
 

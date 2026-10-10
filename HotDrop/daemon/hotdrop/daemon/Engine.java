@@ -120,6 +120,9 @@ final class Engine implements AutoCloseable {
     private final Deque<Long> recentTotals = new ArrayDeque<>();
     private int indexedRoots;
     private final RootCompiler.Shared sharedFiles;
+    /** Null when no Spring directories are configured. */
+    final SpringSync spring;
+    private long springServerId;
 
     Engine(Config cfg, List<Root> roots, AgentLink agent, List<String> javacOptions) throws IOException {
         this.cfg = cfg;
@@ -129,6 +132,11 @@ final class Engine implements AutoCloseable {
         this.javacOptions = javacOptions;
         for (Root r : this.roots) sourcepath.add(r.src);
         this.sharedFiles = new RootCompiler.Shared(sourcepath);
+        this.spring = cfg.springDirs.isEmpty() ? null : new SpringSync(cfg.springDirs, agent);
+    }
+
+    synchronized void runSpring(Set<Path> changed) {
+        if (spring != null && !changed.isEmpty()) spring.apply(changed);
     }
 
     // ---- agent lifecycle ----
@@ -145,6 +153,11 @@ final class Engine implements AutoCloseable {
             resetCompilers();
             classpathCache.clear();
             flushUndelivered();
+            // a reconnect to the same server keeps what is still pending; a restarted server loaded the files from disk
+            AgentInfo now = agent.info();
+            long id = now == null ? 0 : now.pid() * 31 + now.startMillis();
+            if (spring != null && id != springServerId) spring.rebaseline();
+            springServerId = id;
         }
     }
 
@@ -557,7 +570,8 @@ final class Engine implements AutoCloseable {
                     public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes a) {
                         String n = dir.getFileName() == null ? "" : dir.getFileName().toString();
                         if (skip.contains(n)) return FileVisitResult.SKIP_SUBTREE;
-                        if (n.equals("classes") && Files.isRegularFile(dir.getParent().resolve("extensioninfo.xml"))) cp.add(dir);
+                        if (n.equals("classes") && (Files.isRegularFile(dir.getParent().resolve("extensioninfo.xml"))
+                                || dir.endsWith(Path.of("WEB-INF", "classes")))) cp.add(dir);
                         return FileVisitResult.CONTINUE;
                     }
 
@@ -657,6 +671,7 @@ final class Engine implements AutoCloseable {
         sb.append("server:   ").append(info == null ? "not connected"
                 : "pid " + info.pid() + ", " + info.vendor() + " " + info.javaVersion()
                 + ", enhanced redefinition " + (info.enhancedRedefine() ? "ON" : "off")).append('\n');
+        if (spring != null) sb.append("spring:   ").append(spring.files()).append(" XML file(s) watched\n");
         sb.append("roots:    ").append(roots.size()).append(" (indexed ").append(indexedRoots).append(")\n");
         sb.append("files:    ").append(units.size()).append(" known, ").append(clean).append(" clean, ")
                 .append(broken).append(" broken, ").append(held).append(" held, ").append(restart).append(" need restart\n");

@@ -75,6 +75,29 @@ Silence them with `-Dhotdrop.log=false` or the agent option `quiet=true`. `-Dhot
 | Method body, new class | yes | yes |
 | New/removed method, field or **lambda**, changed supertypes | no, reported as `[restart required]` | yes (opt-in, not yet tested on a real Hybris) |
 
+## Spring beans (`*-spring.xml`)
+HotDrop also watches the `*-spring.xml` files of your custom extensions (`resources/`, `web/webroot/WEB-INF/`, addon and
+backoffice equivalents). On save it compares the file with the version the server loaded and applies what a running Spring
+context can take:
+
+| Change in the XML | Result |
+|---|---|
+| a new top-level `<bean id=...>` | registered and created in the context that loaded the file (placeholders resolved, `@Autowired` etc. processed) |
+| `<property>` value changed on an existing bean | set on the live singleton (through the AOP proxy's target) and in its definition |
+| `<util:list>`, `<util:set>`, `<util:map>` changed | the live collection is refilled in place, so beans already holding it see the change |
+| class, scope, constructor-arg, parent, init-method, a removed bean or property, alias / import / `context:` elements | `[restart required]` with the reason |
+
+A bean that cannot be created is removed again and reported; it stays pending and is retried on the next save of that file.
+After every class swap the Spring reflection and annotation caches are cleared, and if a swapped class is an MVC handler its
+`@RequestMapping`s are re-registered (so changing a path works).
+
+Limits: a new bean is not injected into beans that already exist (a list of converters that collects beans by type will not
+see it until restart); post-processor beans added this way only take effect after a restart; contexts are found through
+Hybris' `Registry` and by listening on the parent context for child contexts finishing their refresh, so a web context that
+finished refreshing before the agent registered a listener is missed (start the agent with the server, `-javaagent`). Other
+applications can call `hotdrop.agent.SpringHook.register(applicationContext)`. Turn off with `--no-spring` (daemon) or
+`spring=false` (agent option). Works with Spring 5.3 and 6.2 (the agent uses reflection only).
+
 ## Platforms
 | | Linux | macOS | Windows |
 |---|---|---|---|
@@ -96,11 +119,17 @@ The test starts a JVM with the agent that loads classes through a `URLClassLoade
 edits files, and checks what the running JVM does: body change, pending file, held dependent, release together, constant
 ripple, an unswappable change reported clearly, and the CLI.
 
+`java it/SpringIntegrationTest.java` runs a real Spring context in the test JVM and checks the XML cases above plus MVC
+mapping refresh. It needs Spring jars: set `HOTDROP_SPRING_LIB` (a directory or a path-separated jar list incl. a servlet API),
+or keep a Hybris platform under `~/work/HybrisBackups` / `~/work/cloud`; otherwise it is skipped. Passed on 5.3.19 and 6.2.19.
+
 ## Known limits (today)
 - Not yet run against a real Hybris server (planned first milestone, see PLAN.md). Verified against the real 2205.6 platform
   jars for compiling and against a stand-in server JVM for swapping.
-- Spring-aware reloading (new fields, controller mappings, `*-spring.xml`) and the IntelliJ plugin are not built yet.
-- `hotdrop attach` can't register Spring contexts created before it attached (not relevant until the Spring layer exists).
+- The IntelliJ plugin is not built. The Spring layer is tested only against a stand-in context, not a real Hybris server:
+  how Hybris' `Registry` hands out contexts from the agent's thread, and that web contexts have the core context as parent,
+  are unverified. Re-injecting new fields into existing beans needs the JBR tier and is not built.
+- `hotdrop attach` can't register Spring contexts created before it attached (only the core and global ones are found).
 - The compile classpath comes from the server's classloaders (or a scan of `hybris/bin` without one); the per-extension
   strict classpath that would cut compile time further is not implemented yet. Measured: ~230 ms per save on the full
   1,089-jar classpath, ~125 ms expected with it.

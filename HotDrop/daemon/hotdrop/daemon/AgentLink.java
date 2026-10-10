@@ -188,6 +188,25 @@ final class AgentLink implements Closeable {
         }
     }
 
+    /** Asks the server to apply bean changes from a Spring XML file. Null when no agent is reachable. */
+    synchronized List<Wire.BeanResult> spring(Wire.SpringChange change) {
+        if (socket == null && !tryConnect()) return null;
+        try {
+            Wire.write(out, Wire.SPRING, Wire.encodeSpring(change));
+            Frame f = Wire.read(in);
+            if (f.type() == Wire.ERROR) {
+                return List.of(new Wire.BeanResult("(agent)", Wire.BEAN_FAILED,
+                        "the agent does not support Spring changes; rebuild it with the same version as the daemon"));
+            }
+            if (f.type() != Wire.SPRING_RESULT) throw new IOException("unexpected reply " + f.type());
+            return Wire.decodeSpringResult(f.payload());
+        } catch (IOException e) {
+            Log.warn("agent connection lost while applying Spring changes: %s", e.getMessage());
+            drop();
+            return null;
+        }
+    }
+
     /** Prints a line in the server's console (the Hybris log). Best effort: no agent, no message. */
     synchronized void notice(String text) {
         if (socket == null) return;

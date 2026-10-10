@@ -7,6 +7,9 @@ import java.util.List;
 final class Config {
     Path hybris;
     final List<Root> manualRoots = new ArrayList<>();
+    /** Directories (not searched recursively) whose *-spring.xml files are watched for bean changes. */
+    final List<Path> springDirs = new ArrayList<>();
+    boolean spring = true;
     final List<Path> extraClasspath = new ArrayList<>();
     Path home = Path.of(System.getProperty("user.home"), ".hotdrop");
     int debounceMs = 40;
