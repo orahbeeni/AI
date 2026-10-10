@@ -9,6 +9,8 @@ final class Config {
     final List<Root> manualRoots = new ArrayList<>();
     /** Directories (not searched recursively) whose *-spring.xml files are watched for bean changes. */
     final List<Path> springDirs = new ArrayList<>();
+    /** Directories whose message bundles (.properties) are watched. */
+    final List<Path> messageDirs = new ArrayList<>();
     boolean spring = true;
     final List<Path> extraClasspath = new ArrayList<>();
     Path home = Path.of(System.getProperty("user.home"), ".hotdrop");

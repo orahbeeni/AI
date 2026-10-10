@@ -98,6 +98,19 @@ finished refreshing before the agent registered a listener is missed (start the 
 applications can call `hotdrop.agent.SpringHook.register(applicationContext)`. Turn off with `--no-spring` (daemon) or
 `spring=false` (agent option). Works with Spring 5.3 and 6.2 (the agent uses reflection only).
 
+## Other resource files
+The same watcher (a cheap directory poll, no recursion) also handles:
+
+| File | Reaction |
+|---|---|
+| `*-items.xml` | `[restart required]`: run `ant build`, restart, and update the running system (only if the content really changed; a touch is ignored) |
+| `*-beans.xml` | `[restart required]`: the generated DTO / event classes are stale, run `ant build` and restart |
+| `.properties` in `resources/localization` or a `WEB-INF/messages` directory | the `MessageSource` caches in the running contexts are cleared (Spring's `ReloadableResourceBundleMessageSource` and `ResourceBundleMessageSource`), so the next lookup re-reads the file |
+
+`hotdrop doctor --hybris <dir>` also reports whether `tomcat.development.mode` is on (Tomcat then recompiles edited JSPs and
+tags itself; HotDrop does not touch those). Not built: running an ImpEx on save and the backoffice widget loader, because
+neither can be checked without a real server.
+
 ## Platforms
 | | Linux | macOS | Windows |
 |---|---|---|---|

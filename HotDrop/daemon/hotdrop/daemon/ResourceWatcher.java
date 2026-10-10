@@ -11,14 +11,14 @@ import java.util.Map;
 import java.util.function.Consumer;
 
 /**
- * Polls the (few) directories that hold Spring XML files, without recursion: Spring files sit directly in an
- * extension's resources and WEB-INF directories. A real project has 100+ such directories, some with hundreds of
+ * Polls the (few) directories that hold Spring XML, model (items/beans) and message files, without recursion: they sit
+ * directly in an extension's resources, localization, messages and WEB-INF directories. A real project has 100+ such directories, some with hundreds of
  * entries, so a tick must not list them all: it stats each directory (its mtime changes when a file is created,
  * deleted or renamed, which covers editors that save through a temporary file) and each known Spring file (which
  * covers in-place writes), and lists a directory only when its mtime moved.
  * Portable (no inotify/FSEvents dependency).
  */
-final class SpringXmlWatcher implements Closeable {
+final class ResourceWatcher implements Closeable {
     private record Stamp(long mtime, long size) {}
 
     private final List<Path> dirs;
@@ -29,7 +29,7 @@ final class SpringXmlWatcher implements Closeable {
     private final Thread thread;
     private volatile boolean running = true;
 
-    SpringXmlWatcher(List<Path> dirs, Consumer<Path> sink, long intervalMs) {
+    ResourceWatcher(List<Path> dirs, Consumer<Path> sink, long intervalMs) {
         this.dirs = List.copyOf(dirs);
         this.sink = sink;
         this.intervalMs = intervalMs;
@@ -74,7 +74,7 @@ final class SpringXmlWatcher implements Closeable {
         dirStamps.put(d, mtime(d));
         try (DirectoryStream<Path> ds = Files.newDirectoryStream(d)) {
             for (Path f : ds) {
-                if (!SpringXml.isSpringFile(f)) continue;
+                if (!Resources.watched(f)) continue;
                 Stamp now = stamp(f);
                 if (now == null) continue;
                 Stamp was = files.put(f, now);

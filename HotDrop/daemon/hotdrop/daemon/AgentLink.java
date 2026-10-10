@@ -207,6 +207,18 @@ final class AgentLink implements Closeable {
         }
     }
 
+    /** Tells the server a message bundle changed. Best effort: no agent, no message. */
+    synchronized void clearMessages() {
+        if (socket == null) return;
+        try {
+            Wire.write(out, Wire.CLEAR_MESSAGES, new byte[0]);
+            Wire.read(in);
+        } catch (IOException e) {
+            Log.debug("clearing message caches failed: %s", e.getMessage());
+            drop();
+        }
+    }
+
     /** Prints a line in the server's console (the Hybris log). Best effort: no agent, no message. */
     synchronized void notice(String text) {
         if (socket == null) return;

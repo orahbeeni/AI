@@ -38,9 +38,10 @@ final class Daemon implements AutoCloseable {
         List<Path> srcs = new ArrayList<>();
         for (Root r : engine.roots) srcs.add(r.src);
         startWatchers(srcs);
-        if (engine.spring != null) {
-            watchers.add(new SpringXmlWatcher(engine.spring.dirs(), p -> submit(p, false), Math.max(200, cfg.pollMs * 3L)));
-            Log.info("watching Spring XML in %d director(ies)", engine.spring.dirs().size());
+        List<Path> resourceDirs = Resources.union(cfg.springDirs, cfg.messageDirs);
+        if (!resourceDirs.isEmpty()) {
+            watchers.add(new ResourceWatcher(resourceDirs, p -> submit(p, false), Math.max(200, cfg.pollMs * 3L)));
+            Log.info("watching Spring XML, items/beans XML and message bundles in %d director(ies)", resourceDirs.size());
         }
         worker = new Thread(this::loop, "hotdrop-worker");
         worker.start();
@@ -144,7 +145,7 @@ final class Daemon implements AutoCloseable {
     }
 
     private boolean accumulate(FsEvent ev) {
-        if (ev.path() != null && SpringXml.isSpringFile(ev.path())) {
+        if (ev.path() != null && Resources.watched(ev.path())) {
             pendingSpring.add(ev.path());
         } else if (ev.path() != null) {
             if (Files.exists(ev.path())) {
@@ -176,7 +177,7 @@ final class Daemon implements AutoCloseable {
         }
         try {
             // after the Java swap, so a new bean's class is already live
-            engine.runSpring(spring);
+            engine.runResources(spring);
         } catch (Throwable t) {
             Log.warn("spring update failed: %s", t);
             t.printStackTrace();

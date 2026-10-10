@@ -35,6 +35,9 @@ public final class Wire {
     public static final byte SPRING = 11;
     public static final byte SPRING_RESULT = 12;
 
+    /** Daemon -> agent: a message bundle (.properties) changed; clear the MessageSource caches. Answered with PONG. */
+    public static final byte CLEAR_MESSAGES = 13;
+
     public static final byte BEAN_ADDED = 0;
     public static final byte BEAN_UPDATED = 1;
     public static final byte BEAN_FAILED = 2;

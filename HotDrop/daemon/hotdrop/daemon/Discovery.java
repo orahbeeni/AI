@@ -23,19 +23,7 @@ final class Discovery {
     record BuildSettings(String level, String encoding, List<String> exports, boolean parameters) {}
 
     static BuildSettings buildSettings(Path hybris) {
-        Properties p = new Properties();
-        for (Path f : new Path[]{
-                hybris.resolve("bin/platform/project.properties"),
-                hybris.resolve("bin/platform/resources/advanced.properties"),
-                hybris.resolve("config/local.properties")}) {
-            if (Files.isRegularFile(f)) {
-                try (InputStream in = Files.newInputStream(f)) {
-                    p.load(in);
-                } catch (IOException e) {
-                    Log.warn("cannot read %s: %s", f, e.getMessage());
-                }
-            }
-        }
+        Properties p = properties(hybris);
         String level = p.getProperty("build.target");
         if (level != null) level = level.trim();
         String enc = p.getProperty("build.encoding", "UTF8").trim();
@@ -68,6 +56,44 @@ final class Discovery {
             }
         }
         return dirs;
+    }
+
+    /** Where an enabled custom extension keeps message bundles. */
+    static List<Path> messageDirs(Path hybris) throws IOException {
+        Path custom = hybris.resolve("bin").resolve("custom");
+        List<Path> dirs = new ArrayList<>();
+        if (!Files.isDirectory(custom)) return dirs;
+        Enabled enabled = readLocalExtensions(hybris);
+        List<Path> extDirs = new ArrayList<>();
+        try (Stream<Path> s = Files.walk(custom, 4)) {
+            s.filter(p -> p.getFileName().toString().equals("extensioninfo.xml")).forEach(p -> extDirs.add(p.getParent()));
+        }
+        for (Path ext : extDirs) {
+            if (!enabled.allows(extensionName(ext), ext)) continue;
+            for (String rel : new String[]{"resources/localization", "web/webroot/WEB-INF/messages", "acceleratoraddon/web/webroot/WEB-INF/messages"}) {
+                Path d = ext.resolve(rel);
+                if (Files.isDirectory(d)) dirs.add(d);
+            }
+        }
+        return dirs;
+    }
+
+    /** The merged Hybris properties (platform defaults, advanced, then the user's local.properties). */
+    static Properties properties(Path hybris) {
+        Properties p = new Properties();
+        for (Path f : new Path[]{
+                hybris.resolve("bin/platform/project.properties"),
+                hybris.resolve("bin/platform/resources/advanced.properties"),
+                hybris.resolve("config/local.properties")}) {
+            if (Files.isRegularFile(f)) {
+                try (InputStream in = Files.newInputStream(f)) {
+                    p.load(in);
+                } catch (IOException e) {
+                    Log.warn("cannot read %s: %s", f, e.getMessage());
+                }
+            }
+        }
+        return p;
     }
 
     static List<Root> discover(Path hybris) throws IOException {

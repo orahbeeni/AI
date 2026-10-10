@@ -377,6 +377,42 @@ final class SpringBridge {
         }
     }
 
+    // ---- message bundles ----
+
+    /**
+     * A .properties bundle changed: clear every MessageSource's cache so the next lookup re-reads the file. Covers
+     * Spring's ReloadableResourceBundleMessageSource and ResourceBundleMessageSource (both have clearCache()).
+     * Returns how many message sources were cleared.
+     */
+    int clearMessages() {
+        List<Object> contexts;
+        synchronized (CONTEXTS) {
+            contexts = new ArrayList<>(CONTEXTS);
+        }
+        int cleared = 0;
+        for (Object ctx : contexts) {
+            try {
+                Class<?> type = Class.forName("org.springframework.context.MessageSource", true, ctx.getClass().getClassLoader());
+                Map<?, ?> sources = (Map<?, ?>) call(ctx, "getBeansOfType", type, Boolean.FALSE, Boolean.FALSE);
+                for (Object ms : sources.values()) {
+                    try {
+                        call(ms, "clearCache");
+                        cleared++;
+                    } catch (NoSuchMethodException e) {
+                        // a MessageSource that has no cache
+                    }
+                }
+                // java.util.ResourceBundle keeps its own cache for bundles loaded from the class path
+                ClassLoader cl = (ClassLoader) call(ctx, "getClassLoader");
+                if (cl != null) java.util.ResourceBundle.clearCache(cl);
+            } catch (Throwable t) {
+                // closed context
+            }
+        }
+        if (cleared > 0) say.accept("Message bundle changed: cleared " + cleared + " MessageSource cache(s)");
+        return cleared;
+    }
+
     // ---- after class swaps ----
 
     /** Spring caches reflection and annotation metadata per class; drop it for what was just redefined, and rebuild MVC mappings. */

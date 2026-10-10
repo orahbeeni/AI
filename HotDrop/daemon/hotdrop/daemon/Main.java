@@ -39,7 +39,8 @@ public final class Main {
               --root <src>=<out>    a plain source tree and its class output directory (repeatable)
               --cp <path:path>      extra classpath used when no server is connected
               --spring-dir <dir>    a directory holding *-spring.xml files to watch (repeatable; found automatically with --hybris)
-              --no-spring           do not watch Spring XML
+              --messages-dir <dir>  a directory holding message bundles (.properties) to watch (repeatable)
+              --no-spring           do not watch Spring XML, items/beans XML or message bundles
             other options:
               --home <dir>          state directory (default ~/.hotdrop)
               --debounce <ms>       quiet window after the last save (default 40)
@@ -72,6 +73,7 @@ public final class Main {
                     cfg.manualRoots.add(new Root(src.getFileName().toString(), src, Path.of(kv[1]), Path.of(kv[1]), false));
                 }
                 case "--spring-dir" -> cfg.springDirs.add(Path.of(args[++i]).toAbsolutePath().normalize());
+                case "--messages-dir" -> cfg.messageDirs.add(Path.of(args[++i]).toAbsolutePath().normalize());
                 case "--no-spring" -> cfg.spring = false;
                 case "--cp" -> {
                     for (String e : args[++i].split(java.io.File.pathSeparator)) {
@@ -138,7 +140,10 @@ public final class Main {
             System.exit(2);
         }
         AgentLink link = new AgentLink(cfg.agentsDir(), cfg.platformHome());
-        if (cfg.hybris != null && cfg.spring) cfg.springDirs.addAll(Discovery.springDirs(cfg.hybris));
+        if (cfg.hybris != null && cfg.spring) {
+            cfg.springDirs.addAll(Discovery.springDirs(cfg.hybris));
+            cfg.messageDirs.addAll(Discovery.messageDirs(cfg.hybris));
+        }
         return new Engine(cfg, roots, link, javacOptions(cfg));
     }
 
@@ -247,6 +252,12 @@ public final class Main {
             List<Root> roots = Discovery.discover(cfg.hybris);
             System.out.println("watched roots:    " + roots.size());
             for (Root r : roots) System.out.println("    " + r.name + "  " + r.src);
+            String dev = Discovery.properties(cfg.hybris).getProperty("tomcat.development.mode", "").trim();
+            System.out.println("JSP/tag changes:  " + (dev.equalsIgnoreCase("false")
+                    ? "tomcat.development.mode=false - JSP and tag edits need a restart; set it to true in local.properties"
+                    : "tomcat.development.mode" + (dev.isEmpty() ? " is not set (Hybris default: on)" : "=" + dev) + " - Tomcat recompiles edited JSPs itself"));
+            System.out.println("spring/resources: " + Discovery.springDirs(cfg.hybris).size() + " Spring/model dir(s), "
+                    + Discovery.messageDirs(cfg.hybris).size() + " message dir(s) watched");
             Path wrapper = cfg.platformHome().resolve("tomcat/conf/wrapper.conf");
             if (Files.isRegularFile(wrapper)) {
                 boolean has = Files.readString(wrapper).contains("hotdrop-agent");

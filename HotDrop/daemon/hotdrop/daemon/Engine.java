@@ -123,6 +123,7 @@ final class Engine implements AutoCloseable {
     /** Null when no Spring directories are configured. */
     final SpringSync spring;
     private long springServerId;
+    private final Map<Path, Integer> modelHashes;
 
     Engine(Config cfg, List<Root> roots, AgentLink agent, List<String> javacOptions) throws IOException {
         this.cfg = cfg;
@@ -133,10 +134,39 @@ final class Engine implements AutoCloseable {
         for (Root r : this.roots) sourcepath.add(r.src);
         this.sharedFiles = new RootCompiler.Shared(sourcepath);
         this.spring = cfg.springDirs.isEmpty() ? null : new SpringSync(cfg.springDirs, agent);
+        this.modelHashes = new HashMap<>(Resources.modelHashes(cfg.springDirs));
     }
 
-    synchronized void runSpring(Set<Path> changed) {
-        if (spring != null && !changed.isEmpty()) spring.apply(changed);
+    /** Spring XML, model XML and message bundles that changed since the last cycle. */
+    synchronized void runResources(Set<Path> changed) {
+        if (changed.isEmpty()) return;
+        Set<Path> springFiles = new LinkedHashSet<>();
+        boolean messages = false;
+        for (Path p : changed) {
+            switch (Resources.kind(p)) {
+                case SPRING -> springFiles.add(p);
+                case MODEL -> modelChanged(p);
+                case MESSAGES -> messages = true;
+                default -> { }
+            }
+        }
+        if (spring != null && !springFiles.isEmpty()) spring.apply(springFiles);
+        if (messages) {
+            agent.clearMessages();
+            Log.info("[ok] message bundle changed: MessageSource caches cleared");
+        }
+    }
+
+    private void modelChanged(Path p) {
+        Integer now = Resources.hash(p);
+        Integer was = modelHashes.put(p, now);
+        if (now == null || now.equals(was)) return;
+        String name = p.getFileName().toString();
+        String what = name.endsWith("-items.xml")
+                ? "the type system changed: run 'ant build', restart, and update the running system (HAC > Platform > Update)"
+                : "generated DTO / event classes are stale: run 'ant build' and restart";
+        Log.warn("[restart required] %s: %s", name, what);
+        agent.notice(name + " changed - " + what);
     }
 
     // ---- agent lifecycle ----

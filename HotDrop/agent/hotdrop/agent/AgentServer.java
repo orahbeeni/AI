@@ -152,6 +152,10 @@ final class AgentServer {
                         say(new Wire.In(f.payload()).str());
                         Wire.write(out, Wire.PONG, new byte[0]);
                     }
+                    case Wire.CLEAR_MESSAGES -> {
+                        spring.clearMessages();
+                        Wire.write(out, Wire.PONG, new byte[0]);
+                    }
                     case Wire.SPRING -> Wire.write(out, Wire.SPRING_RESULT,
                             Wire.encodeSpringResult(spring.apply(Wire.decodeSpring(f.payload()))));
                     case Wire.REDEFINE -> Wire.write(out, Wire.RESULT, Wire.encodeResult(redefine(f.payload())));

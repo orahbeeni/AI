@@ -25,6 +25,8 @@ public class SpringIntegrationTest {
     static Path src;
     static Path xml;
     static Path kidXml;
+    static Path messages;
+    static Path itemsXml;
     static final List<String> latencies = new ArrayList<>();
 
     static final String APP = """
@@ -41,6 +43,13 @@ public class SpringIntegrationTest {
                     URLClassLoader cl = new URLClassLoader(new URL[]{Path.of(a[0]).toUri().toURL()}, SApp.class.getClassLoader());
                     GenericApplicationContext ctx = new GenericApplicationContext();
                     ctx.setClassLoader(cl);
+                    ctx.registerBean("messageSource", org.springframework.context.support.ReloadableResourceBundleMessageSource.class, () -> {
+                        var ms = new org.springframework.context.support.ReloadableResourceBundleMessageSource();
+                        ms.setBasename("file:" + a[3] + "/msg");
+                        ms.setCacheSeconds(-1);
+                        ms.setDefaultEncoding("UTF-8");
+                        return ms;
+                    });
                     new XmlBeanDefinitionReader(ctx).loadBeanDefinitions(new FileSystemResource(a[1]));
                     ctx.refresh();
                     hotdrop.agent.SpringHook.register(ctx);
@@ -50,7 +59,7 @@ public class SpringIntegrationTest {
                     new XmlBeanDefinitionReader(kids).loadBeanDefinitions(new FileSystemResource(a[2]));
                     kids.refresh();
                     System.out.println("READY");
-                    String lastKid = null;
+                    String lastKid = null, lastMsg = null;
                     String last = null, lastMap = null;
                     while (true) {
                         Object g = ctx.getBean("greeter");
@@ -62,6 +71,8 @@ public class SpringIntegrationTest {
                             }
                         }
                         if (!s.equals(last)) { System.out.println("CFG " + s); last = s; }
+                        String msg = ctx.getMessage("hi", null, "?", java.util.Locale.ENGLISH);
+                        if (!msg.equals(lastMsg)) { System.out.println("MSG " + msg); lastMsg = msg; }
                         Object kid = kids.getBean("kid");
                         String k = String.valueOf(kid.getClass().getMethod("hello").invoke(kid));
                         if (!k.equals(lastKid)) { System.out.println("KID " + k); lastKid = k; }
@@ -151,6 +162,11 @@ public class SpringIntegrationTest {
         Files.createDirectories(appDir);
         xml = res.resolve("demo-spring.xml");
         kidXml = res.resolve("kid-web-spring.xml");
+        itemsXml = res.resolve("demo-items.xml");
+        Files.createDirectories(res.resolve("localization"));
+        messages = res.resolve("localization/msg.properties");
+        Files.writeString(messages, "hi=one\n");
+        Files.writeString(itemsXml, "<items><itemtypes><itemtype code=\"Demo\"/></itemtypes></items>\n");
         Files.writeString(src.resolve("demo/Greeter.java"), greeter(""));
         Files.writeString(src.resolve("demo/Plugin.java"), plugin("Plugin", "PLUGIN"));
         Files.writeString(src.resolve("demo/Ctl.java"), ctl("/a"));
@@ -167,7 +183,7 @@ public class SpringIntegrationTest {
         boolean windows = System.getProperty("os.name").toLowerCase().contains("win");
         String java = Path.of(System.getProperty("java.home"), "bin", windows ? "java.exe" : "java").toString();
         Process app = start(work, appOut, "app", java, "-javaagent:" + agentJar + "=dir=" + home.resolve("agents"),
-                "-cp", appDir + File.pathSeparator + cp, "SApp", classes.toString(), xml.toString(), kidXml.toString());
+                "-cp", appDir + File.pathSeparator + cp, "SApp", classes.toString(), xml.toString(), kidXml.toString(), res.resolve("localization").toString());
         Process daemon = null;
         try {
             check("app started with a Spring context", waitFor(appOut, "READY", 15_000) >= 0);
@@ -175,7 +191,7 @@ public class SpringIntegrationTest {
             check("MVC mapping /a registered", waitFor(appOut, "/a", 2_000) >= 0);
 
             daemon = start(work, daemonOut, "daemon", java, "-jar", daemonJar.toString(), "start", "--root", src + "=" + classes,
-                    "--spring-dir", res.toString(), "--home", home.toString(), "--debug");
+                    "--spring-dir", res.toString(), "--messages-dir", res.resolve("localization").toString(), "--home", home.toString(), "--debug");
             check("daemon connected to the agent", waitFor(daemonOut, "agent connected", 10_000) >= 0);
             check("daemon indexed the sources", waitFor(daemonOut, "indexed", 20_000) >= 0);
             Thread.sleep(500);
@@ -249,7 +265,22 @@ public class SpringIntegrationTest {
                     waitFor(appOut, "KID PLUGIN three", 5_000) >= 0 || waitFor(daemonOut, "[not applied] kid-web-spring.xml", 1_000) >= 0);
             check("   daemon never called it malformed", waitFor(daemonOut, "not well-formed", 0) < 0);
 
-            step("11. status mentions the Spring files");
+            step("11. a message bundle changes");
+            check("   bundle starts as one", waitFor(appOut, "MSG one", 2_000) >= 0);
+            t0 = System.nanoTime();
+            Files.writeString(messages, "hi=two\n");
+            check("   next lookup returns the new text", waitFor(appOut, "MSG two", 5_000) >= 0);
+            latency("message bundle change", (System.nanoTime() - t0) / 1_000_000);
+
+            step("12. items.xml: a real edit is reported, a touch is not");
+            Files.writeString(itemsXml, "<items><itemtypes><itemtype code=\"Demo\"/></itemtypes></items>\n");
+            Thread.sleep(800);
+            check("   identical content is silent", waitFor(daemonOut, "demo-items.xml", 0) < 0);
+            Files.writeString(itemsXml, "<items><itemtypes><itemtype code=\"Demo\"/><itemtype code=\"Other\"/></itemtypes></items>\n");
+            check("   daemon says restart required", waitFor(daemonOut, "[restart required] demo-items.xml", 5_000) >= 0);
+            check("   server console says so", waitFor(appOut, "demo-items.xml changed - the type system changed", 3_000) >= 0);
+
+            step("13. status mentions the Spring files");
             Process st = new ProcessBuilder(java, "-jar", daemonJar.toString(), "status", "--home", home.toString())
                     .redirectErrorStream(true).start();
             String status = new String(st.getInputStream().readAllBytes());

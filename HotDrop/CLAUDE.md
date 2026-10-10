@@ -12,7 +12,7 @@ Read first: `PLAN.md` (design + verification log of every assumption, with evide
 ## State
 Built and passing on Linux (Temurin 17): protocol, agent, daemon (discovery, warm javac, scheduler, polling watcher), CLI,
 end-to-end test `it/IntegrationTest.java`. Developed on Linux, so macOS and Windows have NOT been run by hand yet.
-Spring layer (M4: `*-spring.xml` beans, util collections, cache clearing, MVC mappings; `SpringBridge` in the agent is reflection-only) is built and tested on Spring 5.3.19 and 6.2.19 with `it/SpringIntegrationTest.java`, but not against a real Hybris server. Not built: IntelliJ plugin, strict per-extension classpath, JBR field re-injection. Not yet done: the spike on a real Hybris server.
+Spring layer (M4: `*-spring.xml` beans, util collections, cache clearing, MVC mappings; `SpringBridge` in the agent is reflection-only) is built and tested on Spring 5.3.19 and 6.2.19 with `it/SpringIntegrationTest.java`, but not against a real Hybris server. M5 extras (items/beans notices, message bundle cache clearing, doctor development-mode line) are built; impex-on-save and the backoffice widget loader are not. Not built: IntelliJ plugin, strict per-extension classpath, JBR field re-injection. Not yet done: the spike on a real Hybris server.
 
 ## Done on macOS (2026-10-08)
 macOS tested: build and integration test pass (polling watcher; native fails because the JDK polls slowly there).
