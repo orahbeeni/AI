@@ -27,7 +27,8 @@ import java.util.regex.Pattern;
  * <p>
  * The HAC protocol used here (login form, CSRF token, impex import form fields, result element) is written from
  * knowledge of HAC, not checked against a real server; failures are reported with what the server answered.
- * TLS certificate checks are skipped only when the host is a loopback address, because HAC's dev certificate is self-signed.
+ * TLS certificate checks are skipped only when the host is a loopback address, because HAC's dev certificate is self-signed;
+ * another machine must be https and is verified normally.
  */
 final class ImpexRunner {
     private static final Pattern CSRF_META = Pattern.compile("<meta\\s+name=\"_csrf\"\\s+content=\"([^\"]+)\"");
@@ -50,10 +51,15 @@ final class ImpexRunner {
         HttpClient.Builder b = HttpClient.newBuilder().cookieHandler(new CookieManager())
                 .followRedirects(HttpClient.Redirect.NORMAL).connectTimeout(Duration.ofSeconds(5));
         String host = base.getHost() == null ? "" : base.getHost();
-        if ("https".equals(base.getScheme())) {
-            if (!(host.equals("localhost") || host.equals("127.0.0.1") || host.equals("::1") || host.equals("[::1]"))) {
-                throw new IllegalArgumentException("--hac must be a localhost address when it is https (self-signed certificates are accepted)");
-            }
+        boolean local = host.equals("localhost") || host.equals("127.0.0.1") || host.equals("::1") || host.equals("[::1]");
+        if (!"https".equals(base.getScheme()) && !"http".equals(base.getScheme())) {
+            throw new IllegalArgumentException("--hac must be an http(s) address, got " + hacUrl);
+        }
+        // The login sends the HAC password: another machine only over https with a normally verified certificate.
+        if (!local && !"https".equals(base.getScheme())) {
+            throw new IllegalArgumentException("--hac to another machine must use https (the password would travel in clear); got " + hacUrl);
+        }
+        if (local && "https".equals(base.getScheme())) { // HAC's development certificate is self-signed
             SSLContext ctx = SSLContext.getInstance("TLS");
             ctx.init(null, new TrustManager[]{new X509TrustManager() {
                 public void checkClientTrusted(X509Certificate[] c, String a) { }
@@ -112,7 +118,8 @@ final class ImpexRunner {
         form.put("j_password", password);
         if (csrf != null) form.put("_csrf", csrf);
         HttpResponse<String> r = post("/j_spring_security_check", form, csrf);
-        if (r.uri().toString().contains("login_error") || r.statusCode() == 401 || r.statusCode() == 403) {
+        if (r.uri().toString().contains("login_error") || r.statusCode() == 401 || r.statusCode() == 403
+                || r.body().contains("j_spring_security_check")) {
             throw new IOException("HAC login failed for user '" + user + "' (set --hac-user / --hac-password)");
         }
         loggedIn = true;

@@ -22,7 +22,7 @@ final class Daemon implements AutoCloseable {
     private final BlockingQueue<FsEvent> queue = new LinkedBlockingQueue<>();
     private final Set<Path> pendingChanged = new LinkedHashSet<>();
     private final Set<Path> pendingDeleted = new LinkedHashSet<>();
-    private final Set<Path> pendingSpring = new LinkedHashSet<>();
+    private final Set<Path> pendingResources = new LinkedHashSet<>();
     private volatile boolean paused;
     private volatile boolean running = true;
     private volatile boolean reindex;
@@ -40,11 +40,17 @@ final class Daemon implements AutoCloseable {
         startWatchers(srcs);
         List<Path> resourceDirs = Resources.union(Resources.union(cfg.springDirs, cfg.messageDirs), cfg.impex ? cfg.impexDirs : List.of());
         if (!resourceDirs.isEmpty()) {
-            watchers.add(new ResourceWatcher(resourceDirs, p -> submit(p, false), Math.max(200, cfg.pollMs * 3L)));
+            watchers.add(new ResourceWatcher(resourceDirs, this::wantsResource, p -> submit(p, false), Math.max(200, cfg.pollMs * 3L)));
             Log.info("watching Spring XML, model XML, message bundles%s in %d director(ies)", cfg.impex ? ", ImpEx files" : "", resourceDirs.size());
         }
         worker = new Thread(this::loop, "hotdrop-worker");
         worker.start();
+    }
+
+    /** ImpEx files are only tracked when the user opted in: a project can have hundreds of them. */
+    private boolean wantsResource(Path p) {
+        Resources.Kind k = Resources.kind(p);
+        return k != Resources.Kind.NONE && (cfg.impex || k != Resources.Kind.IMPEX);
     }
 
     private static boolean isMac() {
@@ -146,7 +152,7 @@ final class Daemon implements AutoCloseable {
 
     private boolean accumulate(FsEvent ev) {
         if (ev.path() != null && Resources.watched(ev.path())) {
-            pendingSpring.add(ev.path());
+            pendingResources.add(ev.path());
         } else if (ev.path() != null) {
             if (Files.exists(ev.path())) {
                 pendingChanged.add(ev.path());
@@ -162,10 +168,10 @@ final class Daemon implements AutoCloseable {
     private void cycle() {
         Set<Path> changed = new LinkedHashSet<>(pendingChanged);
         Set<Path> deleted = new LinkedHashSet<>(pendingDeleted);
-        Set<Path> spring = new LinkedHashSet<>(pendingSpring);
+        Set<Path> resources = new LinkedHashSet<>(pendingResources);
         pendingChanged.clear();
         pendingDeleted.clear();
-        pendingSpring.clear();
+        pendingResources.clear();
         try {
             engine.maintenance();
             Engine.Report rep = engine.runCycle(changed, deleted);
@@ -177,7 +183,7 @@ final class Daemon implements AutoCloseable {
         }
         try {
             // after the Java swap, so a new bean's class is already live
-            engine.runResources(spring);
+            engine.runResources(resources);
         } catch (Throwable t) {
             Log.warn("spring update failed: %s", t);
             t.printStackTrace();

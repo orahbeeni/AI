@@ -177,6 +177,7 @@ final class Engine implements AutoCloseable {
     }
 
     private final Set<Path> impexHinted = new HashSet<>();
+    private final Set<Path> impexQueued = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private ImpexRunner impex;
     private java.util.concurrent.ExecutorService impexThread;
 
@@ -195,18 +196,36 @@ final class Engine implements AutoCloseable {
                 return t;
             });
         }
+        if (!impexQueued.add(p)) return; // already waiting to run: it will read the newest content
         impexThread.execute(() -> {
             long t0 = System.nanoTime();
+            impexQueued.remove(p);
             try {
+                awaitStable(p);
                 if (impex == null) impex = new ImpexRunner(cfg.hacUrl, cfg.hacUser, cfg.hacPassword);
                 String result = impex.run(p);
                 Log.info("[impex] %s imported in %s: %s", name, Log.ms(System.nanoTime() - t0), result);
                 agent.notice("ImpEx " + name + " imported: " + result);
             } catch (Exception e) {
-                Log.warn("[impex failed] %s: %s", name, e.getMessage());
-                agent.notice("ImpEx " + name + " failed: " + e.getMessage());
+                String why = e.getMessage() == null ? e.toString() : e.getMessage();
+                Log.warn("[impex failed] %s: %s", name, why);
+                agent.notice("ImpEx " + name + " failed: " + why);
             }
         });
+    }
+
+    /** An editor that writes in several chunks must not get a half-written script imported. */
+    private static void awaitStable(Path p) throws Exception {
+        long mtime = -1;
+        long size = -1;
+        for (int i = 0; i < 10; i++) {
+            long m = Files.getLastModifiedTime(p).toMillis();
+            long sz = Files.size(p);
+            if (m == mtime && sz == size) return;
+            mtime = m;
+            size = sz;
+            Thread.sleep(100);
+        }
     }
 
     // ---- agent lifecycle ----

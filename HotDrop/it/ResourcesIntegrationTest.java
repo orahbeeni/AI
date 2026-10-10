@@ -133,6 +133,26 @@ public class ResourcesIntegrationTest {
             check("a failing import is reported with the server's message", waitFor("[impex failed] auto.impex: Line 3: unknown type \"Nope\"", 8_000) >= 0);
             Files.writeString(auto, "# hotdrop-on-save\nINSERT_UPDATE Title;code[unique=true]\n;prof\n");
             check("fixing it imports again, still one login", waitFor("[impex] auto.impex imported", 8_000) >= 0 && logins == 1);
+
+            System.out.println("refusals");
+            daemon.destroy();
+            daemon.waitFor();
+            daemonOut.clear();
+            Process bad = startDaemon(java, daemonJar, hybris, ext, work, "--hac", hacUrl, "--hac-password", "wrong");
+            check("daemon (wrong password) indexed", waitFor("indexed", 20_000) >= 0);
+            Thread.sleep(600);
+            Path again = ext.resolve("resources/impex/sub/again.impex");
+            Files.writeString(again, "# hotdrop-on-save\nINSERT_UPDATE Title;code[unique=true]\n;x\n");
+            check("a wrong HAC password is reported, not retried forever", waitFor("[impex failed] again.impex: HAC login failed for user 'admin'", 8_000) >= 0);
+            bad.destroy();
+            bad.waitFor();
+            daemonOut.clear();
+            Process remote = startDaemon(java, daemonJar, hybris, ext, work, "--hac", "http://example.com/hac");
+            check("daemon (remote HAC) indexed", waitFor("indexed", 20_000) >= 0);
+            Thread.sleep(600);
+            Files.writeString(again, "# hotdrop-on-save\nINSERT_UPDATE Title;code[unique=true]\n;y\n");
+            check("a plain-http address on another machine is refused (the password would travel in clear)", waitFor("must use https", 8_000) >= 0);
+            remote.destroy();
         } finally {
             daemon.destroy();
             hac.stop(0);
@@ -140,6 +160,22 @@ public class ResourcesIntegrationTest {
         System.out.println(failures == 0 ? "\nALL CHECKS PASSED" : "\n" + failures + " CHECK(S) FAILED");
         if (failures > 0) synchronized (daemonOut) { daemonOut.forEach(System.out::println); }
         System.exit(failures == 0 ? 0 : 1);
+    }
+
+    static Process startDaemon(String java, Path jar, Path hybris, Path ext, Path work, String... extra) throws IOException {
+        List<String> cmd = new ArrayList<>(List.of(java, "-jar", jar.toString(), "start", "--hybris", hybris.toString(), "--impex",
+                "--impex-dir", ext.resolve("resources/impex").toString(), "--home", work.resolve("home2").toString(), "--debug"));
+        cmd.addAll(List.of(extra));
+        Process p = new ProcessBuilder(cmd).directory(work.toFile()).redirectErrorStream(true).start();
+        Thread t = new Thread(() -> {
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+                String line;
+                while ((line = r.readLine()) != null) daemonOut.add(line);
+            } catch (IOException ignored) { }
+        });
+        t.setDaemon(true);
+        t.start();
+        return p;
     }
 
     static Map<String, String> form(HttpExchange ex) throws IOException {

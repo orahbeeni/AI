@@ -70,8 +70,8 @@ final class Resources {
     }
 
     static List<Path> union(List<Path> a, List<Path> b) {
-        List<Path> out = new ArrayList<>(a);
-        for (Path p : b) if (!out.contains(p)) out.add(p);
-        return out;
+        java.util.Set<Path> out = new java.util.LinkedHashSet<>(a);
+        out.addAll(b);
+        return new ArrayList<>(out);
     }
 }

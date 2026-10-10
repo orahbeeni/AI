@@ -22,6 +22,7 @@ final class ResourceWatcher implements Closeable {
     private record Stamp(long mtime, long size) {}
 
     private final List<Path> dirs;
+    private final java.util.function.Predicate<Path> accept;
     private final Consumer<Path> sink;
     private final long intervalMs;
     private final Map<Path, Long> dirStamps = new HashMap<>();
@@ -29,7 +30,8 @@ final class ResourceWatcher implements Closeable {
     private final Thread thread;
     private volatile boolean running = true;
 
-    ResourceWatcher(List<Path> dirs, Consumer<Path> sink, long intervalMs) {
+    ResourceWatcher(List<Path> dirs, java.util.function.Predicate<Path> accept, Consumer<Path> sink, long intervalMs) {
+        this.accept = accept;
         this.dirs = List.copyOf(dirs);
         this.sink = sink;
         this.intervalMs = intervalMs;
@@ -74,7 +76,7 @@ final class ResourceWatcher implements Closeable {
         dirStamps.put(d, mtime(d));
         try (DirectoryStream<Path> ds = Files.newDirectoryStream(d)) {
             for (Path f : ds) {
-                if (!Resources.watched(f)) continue;
+                if (!accept.test(f)) continue;
                 Stamp now = stamp(f);
                 if (now == null) continue;
                 Stamp was = files.put(f, now);

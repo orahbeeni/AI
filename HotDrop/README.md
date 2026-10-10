@@ -119,7 +119,7 @@ works in memory but a restart reads the old jar until you run `ant build`.
 `resources/<ext>/import/**` (or pass `--impex-dir`). Only files that carry a comment line `# hotdrop-on-save` in their first
 20 lines are run, so a big init script is never imported by accident. The import goes through HAC's ImpEx console (login,
 CSRF token, `IMPORT_STRICT`), on its own thread so a slow import never delays a class swap. Settings: `--hac` (default
-`https://localhost:9002/hac`; self-signed certificates are accepted for localhost only), `--hac-user` (default `admin`),
+`https://localhost:9002/hac`; a localhost address may be http or https with a self-signed certificate; another machine must be https and is verified normally), `--hac-user` (default `admin`),
 `--hac-password` or `$HOTDROP_HAC_PASSWORD` (default `nimda`, the development default). The result, or HAC's error message,
 is logged and sent to the server console. The HAC form and result element are written from knowledge of HAC and tested only
 against a stub that imitates it, so treat this as experimental until it has run against a real server.
