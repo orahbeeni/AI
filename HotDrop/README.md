@@ -1,7 +1,7 @@
 # HotDrop
 
 Save a `.java` file, and the running SAP Commerce (Hybris) server picks up the new code without a restart.
-Pure JDK, no dependencies, same on **Linux, macOS and Windows**. See [PLAN.md](PLAN.md) for the design and the verification log.
+Pure JDK, no dependencies, same on **Linux, macOS and Windows**. **Day-to-day use: [MANUAL.md](MANUAL.md).** See [PLAN.md](PLAN.md) for the design and the verification log.
 
 ## What it does
 - Watches the `src` and `web/src` folders of your custom extensions.
