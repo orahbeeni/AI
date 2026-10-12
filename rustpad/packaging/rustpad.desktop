@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=RustPad
+GenericName=Text Editor
+Comment=Fast cross-platform source code editor
+Exec=rustpad %F
+Icon=rustpad
+Terminal=false
+Categories=Utility;TextEditor;Development;
+MimeType=text/plain;text/x-c;text/x-c++;text/x-python;text/x-shellscript;application/json;application/xml;text/markdown;
+StartupWMClass=rustpad

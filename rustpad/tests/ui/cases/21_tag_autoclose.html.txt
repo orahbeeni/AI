@@ -1,0 +1,9 @@
+# file a.html :: \n
+setting {"auto_close_tags":true}
+press 300 300
+release 300 300
+text <div class="x"
+text >
+text hi
+dump $OUT/d.txt
+# expect dump d.txt == \n<div class="x">hi</div>

@@ -1,0 +1,4 @@
+# file a.txt :: john smith\njane doe\n
+cmd {"Search":["ReplaceAll",{"pattern":"(\\w+) (\\w+)","replace":"\\2, $1","match_case":false,"whole_word":false,"mode":"Regex","dot_newline":false,"wrap":true,"backward":false,"in_selection":false}]}
+dump $OUT/d.txt
+# expect dump d.txt == smith, john\ndoe, jane\n

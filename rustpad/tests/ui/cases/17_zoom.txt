@@ -1,0 +1,7 @@
+press 300 300
+release 300 300
+key ctrl+Equals
+key ctrl+Equals
+key ctrl+Minus
+state $OUT/s.json
+# expect state s.json zoom=1.0

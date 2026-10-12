@@ -1,0 +1,11 @@
+press 300 300
+release 300 300
+text draft
+key ctrl+w
+wait 3
+state $OUT/s1.json
+key Escape
+wait 3
+state $OUT/s2.json
+# expect state s1.json pending="confirm_close"
+# expect state s2.json pending="" ;; tabs=1 ;; modified=true

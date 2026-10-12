@@ -1,0 +1,7 @@
+press 300 300
+release 300 300
+text fn main() {
+key Enter
+text x
+dump $OUT/d.txt
+# expect dump d.txt == fn main() {\n\tx

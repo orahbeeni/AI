@@ -1,0 +1,12 @@
+# file a.txt :: one\ntwo\nthree\n
+press 300 92
+release 300 92
+key ctrl+d
+dump $OUT/dup.txt
+key ctrl+shift+Down
+dump $OUT/down.txt
+key ctrl+l
+dump $OUT/cut.txt
+# expect dump dup.txt == one\none\ntwo\nthree\n
+# expect dump down.txt == one\ntwo\none\nthree\n
+# expect dump cut.txt == one\ntwo\nthree\n

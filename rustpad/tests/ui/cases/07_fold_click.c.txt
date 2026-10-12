@@ -1,0 +1,10 @@
+# file a.c :: a {\n b\n c\n}\nz\n
+press 63 92
+release 63 92
+state $OUT/s1.json
+press 200 92
+release 200 92
+key Down
+state $OUT/s2.json
+# expect state s1.json collapsed=[0]
+# expect state s2.json line=4

@@ -1,0 +1,8 @@
+# file a.txt :: abcd\nefgh\nijkl\n
+press 84 92 alt
+move 92 110 alt
+move 92 128 alt
+release 92 128 alt
+text X
+dump $OUT/d.txt
+# expect dump d.txt == aXcd\neXgh\niXkl\n

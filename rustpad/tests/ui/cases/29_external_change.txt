@@ -1,0 +1,5 @@
+# file a.txt :: original\n
+sh (sleep 1; printf changed > $OUT/a.txt) &
+sleep 4000
+state $OUT/s.json
+# expect state s.json pending="external_change"

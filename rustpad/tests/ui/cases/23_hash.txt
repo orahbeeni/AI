@@ -1,0 +1,5 @@
+# file a.txt :: abc
+cmd {"Hash":"Md5"}
+wait 3
+state $OUT/s.json
+# expect state s.json pending="hash" ;; pending_text="900150983cd24fb0d6963f7d28e17f72"

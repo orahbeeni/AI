@@ -1,0 +1,50 @@
+[package]
+name = "rustpad"
+version = "0.1.0"
+edition = "2024"
+description = "A fast cross-platform source code editor"
+license = "MIT"
+readme = "README.md"
+keywords = ["editor", "text-editor", "gui"]
+categories = ["text-editors"]
+
+[package.metadata.bundle]
+name = "RustPad"
+identifier = "dev.rustpad.editor"
+short_description = "Cross-platform source code editor"
+icon = ["packaging/rustpad.svg"]
+
+[dependencies]
+arboard = "3.6.1"
+chardetng = "1.0.0"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+dirs = "7.0.0"
+eframe = "0.36.2"
+encoding_rs = "0.8.42"
+globset = "0.4.20"
+md-5 = "0.11.0"
+png = "0.18.1"
+regex = "1.13.1"
+rfd = "0.17.2"
+ropey = { version = "1.6", default-features = false, features = ["cr_lines"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha1 = "0.11.0"
+sha2 = "0.11.0"
+unicode-segmentation = "1.13.3"
+unicode-width = "0.2.2"
+walkdir = "2.5.0"
+
+# An editor is unusable unoptimised: keep plain `cargo run` fast too.
+[profile.dev]
+opt-level = 2
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true

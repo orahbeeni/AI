@@ -1,0 +1,9 @@
+press 300 300
+release 300 300
+key ctrl+shift+r
+text x
+key Enter
+key ctrl+shift+r
+key ctrl+shift+p
+dump $OUT/d.txt
+# expect dump d.txt == x\nx\n

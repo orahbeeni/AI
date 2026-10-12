@@ -1,0 +1,5 @@
+# file products.impex :: # header\nINSERT_UPDATE Product;code[unique=true];name[lang=en]\n;P1;"Phone"\n
+state $OUT/s.json
+shot $OUT/shot.png
+wait 5
+# expect state s.json lang="ImpEx"

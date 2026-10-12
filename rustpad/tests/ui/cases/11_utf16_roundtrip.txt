@@ -1,0 +1,10 @@
+# file u16.txt :: \xff\xfeh\x00i\x00
+press 300 300
+release 300 300
+key ctrl+Home
+text x
+key ctrl+s
+wait 3
+state $OUT/s.json
+# expect state s.json enc="UTF-16 LE BOM"
+# expect bytes u16.txt == fffe780068006900

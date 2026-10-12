@@ -1,0 +1,17 @@
+press 300 300
+release 300 300
+text hello
+key Enter
+text world
+key ctrl+z
+dump $OUT/a.txt
+key ctrl+y
+dump $OUT/b.txt
+key ctrl+z
+key ctrl+z
+dump $OUT/c.txt
+state $OUT/s.json
+# expect dump a.txt == hello\n
+# expect dump b.txt == hello\nworld
+# expect dump c.txt == hello
+# expect state s.json modified=true

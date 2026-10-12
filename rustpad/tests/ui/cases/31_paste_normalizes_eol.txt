@@ -1,0 +1,8 @@
+# file a.txt :: x\r\ny\r\n
+press 300 92
+release 300 92
+key ctrl+End
+paste p\nq
+key ctrl+s
+wait 3
+# expect bytes a.txt == 780d0a790d0a700d0a71

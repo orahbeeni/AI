@@ -1,0 +1,8 @@
+# file a.txt :: keep\n
+press 300 92
+release 300 92
+cmd "ToggleReadOnly"
+text zzz
+key Backspace
+dump $OUT/d.txt
+# expect dump d.txt == keep\n

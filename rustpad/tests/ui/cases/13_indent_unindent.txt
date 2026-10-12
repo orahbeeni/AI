@@ -1,0 +1,8 @@
+# file a.txt :: a\nb\n
+cmd "SelectAll"
+key Tab
+dump $OUT/i.txt
+key shift+Tab
+dump $OUT/u.txt
+# expect dump i.txt == \ta\n\tb\n
+# expect dump u.txt == a\nb\n

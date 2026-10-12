@@ -1,0 +1,8 @@
+# file a.txt :: b\na\nb\nc\n
+cmd "SelectAll"
+cmd {"Sort":["Lexicographic",false]}
+dump $OUT/s.txt
+cmd {"DedupLines":true}
+dump $OUT/d.txt
+# expect dump s.txt == a\nb\nb\nc\n
+# expect dump d.txt == a\nb\nc\n

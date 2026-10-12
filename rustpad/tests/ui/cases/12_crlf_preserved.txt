@@ -1,0 +1,10 @@
+# file a.txt :: a\r\nb\r\n
+press 300 300
+release 300 300
+key ctrl+End
+text c
+key ctrl+s
+wait 3
+state $OUT/s.json
+# expect bytes a.txt == 610d0a620d0a63
+# expect state s.json eol="Windows (CR LF)"

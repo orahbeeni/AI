@@ -1,0 +1,8 @@
+# session
+setting {"tab_width":2,"theme":"Dark"}
+cmd "Exit"
+wait 10
+# --- second run
+wait 3
+state $OUT/s.json
+# expect exists home/.config/rustpad/config.json

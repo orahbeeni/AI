@@ -1,0 +1,8 @@
+# file a.txt :: a\nb\n
+cmd {"ConvertEol":"CrLf"}
+cmd {"SetEncoding":"UTF-8-BOM"}
+key ctrl+s
+wait 3
+state $OUT/s.json
+# expect bytes a.txt == efbbbf610d0a620d0a
+# expect state s.json enc="UTF-8-BOM" ;; eol="Windows (CR LF)"

@@ -1,0 +1,9 @@
+# file a.txt :: aaa\nbbb\nccc\n
+press 77 92
+release 77 92
+press 77 110 ctrl
+release 77 110 ctrl
+text X
+dump $OUT/d.txt
+state $OUT/s.json
+# expect dump d.txt == Xaaa\nXbbb\nccc\n

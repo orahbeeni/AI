@@ -1,0 +1,14 @@
+# file a.txt :: a\nb\nc\nd\n
+press 300 110
+release 300 110
+key ctrl+F2
+press 300 146
+release 300 146
+key ctrl+F2
+key ctrl+Home
+key F2
+state $OUT/s1.json
+key F2
+state $OUT/s2.json
+# expect state s1.json bookmarks=[1,3] ;; line=2
+# expect state s2.json line=4

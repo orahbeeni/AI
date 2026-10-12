@@ -1,0 +1,7 @@
+# file a.txt :: foo bar foo\nFOO\n
+cmd {"Search":["ReplaceAll",{"pattern":"foo","replace":"x","match_case":false,"whole_word":false,"mode":"Normal","dot_newline":false,"wrap":true,"backward":false,"in_selection":false}]}
+dump $OUT/d.txt
+key ctrl+z
+dump $OUT/u.txt
+# expect dump d.txt == x bar x\nx\n
+# expect dump u.txt == foo bar foo\nFOO\n

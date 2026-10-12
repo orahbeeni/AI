@@ -1,0 +1,12 @@
+# session
+press 300 300
+release 300 300
+text unsaved draft
+cmd "Exit"
+wait 10
+# --- second run
+wait 5
+dump $OUT/d.txt
+state $OUT/s.json
+# expect dump d.txt == unsaved draft
+# expect state s.json modified=true

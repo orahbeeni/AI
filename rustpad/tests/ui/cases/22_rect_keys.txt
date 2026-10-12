@@ -1,0 +1,10 @@
+# file a.txt :: abcd\nefgh\nijkl\n
+press 77 92
+release 77 92
+key alt+shift+Right
+key alt+shift+Right
+key alt+shift+Down
+key alt+shift+Down
+text X
+dump $OUT/d.txt
+# expect dump d.txt == Xcd\nXgh\nXkl\n

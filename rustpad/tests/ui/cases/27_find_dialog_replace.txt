@@ -1,0 +1,10 @@
+# file a.txt :: cat dog cat\n
+key ctrl+h
+wait 3
+text cat
+key Tab
+text bird
+wait 2
+cmd {"Search":["ReplaceAll",{"pattern":"cat","replace":"bird","match_case":false,"whole_word":false,"mode":"Normal","dot_newline":false,"wrap":true,"backward":false,"in_selection":false}]}
+dump $OUT/d.txt
+# expect dump d.txt == bird dog bird\n

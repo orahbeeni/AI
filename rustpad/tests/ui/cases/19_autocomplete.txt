@@ -1,0 +1,11 @@
+# file a.txt :: alpha alphabet alps\n
+press 400 92
+release 400 92
+key ctrl+End
+text alp
+key ctrl+Space
+state $OUT/s1.json
+key Enter
+dump $OUT/d.txt
+# expect state s1.json ac=["alpha","alphabet","alps"]
+# expect dump d.txt == alpha alphabet alps\nalpha

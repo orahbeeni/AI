@@ -1,0 +1,8 @@
+# file a.txt :: 1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n
+key ctrl+g
+wait 3
+text 10
+key Enter
+wait 3
+state $OUT/s.json
+# expect state s.json line=10

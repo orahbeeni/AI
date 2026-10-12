@@ -1,0 +1,9 @@
+# file a.txt :: abc\n
+cmd "SelectAll"
+cmd "Copy"
+wait 6
+key ctrl+End
+cmd "Paste"
+wait 3
+dump $OUT/d.txt
+# expect dump d.txt == abc\nabc\n

@@ -1,0 +1,16 @@
+# file a.txt :: one\n
+# file b.txt :: two\n
+# file c.txt :: three\n
+state $OUT/s0.json
+key ctrl+Tab
+state $OUT/s1.json
+key ctrl+shift+Tab
+key ctrl+shift+Tab
+state $OUT/s2.json
+cmd "CloseOthers"
+wait 3
+state $OUT/s3.json
+# expect state s0.json tabs=3 ;; active=2
+# expect state s1.json active=0
+# expect state s2.json active=1
+# expect state s3.json tabs=1 ;; names=["b.txt"]

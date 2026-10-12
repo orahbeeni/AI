@@ -1,0 +1,3 @@
+# file q.fxs :: SELECT {p:pk} FROM {Product AS p} WHERE {p:code} = ?code\n
+state $OUT/s.json
+# expect state s.json lang="FlexibleSearch"

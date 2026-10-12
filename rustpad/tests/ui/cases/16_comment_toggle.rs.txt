@@ -1,0 +1,8 @@
+# file a.rs :: fn a() {}\nfn b() {}\n
+cmd "SelectAll"
+key ctrl+q
+dump $OUT/c.txt
+key ctrl+q
+dump $OUT/u.txt
+# expect dump c.txt == // fn a() {}\n// fn b() {}\n
+# expect dump u.txt == fn a() {}\nfn b() {}\n
