@@ -1,0 +1,13 @@
+[package]
+name = "gitgoing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gitgoing-core = { path = "../core" }
+eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "x11", "wayland", "persistence"] }
+rfd = "0.15"
+
+[dev-dependencies]
+tempfile = "3"
