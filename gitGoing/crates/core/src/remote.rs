@@ -11,6 +11,24 @@ fn run(repo_path: &Path, args: &[&str]) -> Result<(), String> {
     crate::gitcmd::run(Some(repo_path), args).map(|_| ())
 }
 
+/// A fingerprint of every reference (branches, remote-tracking branches, tags)
+/// and what it points at. Comparing it before and after a fetch, pull or push
+/// tells whether the operation actually moved anything.
+pub fn refs_fingerprint(repo_path: &Path) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let repo = Repository::discover(repo_path).ok()?;
+    let mut refs: Vec<(String, Option<Oid>)> = repo
+        .references()
+        .ok()?
+        .flatten()
+        .filter_map(|r| Some((r.name()?.to_owned(), r.target())))
+        .collect();
+    refs.sort();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    refs.hash(&mut h);
+    Some(h.finish())
+}
+
 pub fn fetch(repo_path: &Path) -> Result<(), String> {
     run(repo_path, &["fetch", "--all", "--prune"])
 }
@@ -204,7 +222,12 @@ mod tests {
         commit(&a, "two");
         push(&a_path).unwrap(); // plain push now that upstream exists
 
+        let before = refs_fingerprint(&b_path).unwrap();
         fetch(&b_path).unwrap();
+        let fetched = refs_fingerprint(&b_path).unwrap();
+        assert_ne!(before, fetched, "fetching a new commit moves origin/<branch>");
+        fetch(&b_path).unwrap();
+        assert_eq!(fetched, refs_fingerprint(&b_path).unwrap(), "a second fetch changes nothing");
         pull(&b_path).unwrap();
         assert_eq!(b.head().unwrap().peel_to_commit().unwrap().summary(), Some("two"));
 

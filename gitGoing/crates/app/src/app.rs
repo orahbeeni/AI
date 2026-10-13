@@ -11,6 +11,7 @@ use crate::icons::{self, Icon};
 use crate::intro::Intro;
 use crate::sidebar::{SidebarAction, Sidebar};
 use crate::timefmt;
+use crate::toasts::Toasts;
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use gitgoing_core::branches;
 use gitgoing_core::commit_ops::{self, Applied, ResetMode};
@@ -328,6 +329,10 @@ pub struct RepoTab {
     notice: Option<(String, bool)>,
     /// What the running operation is called, for the toolbar.
     op_label: &'static str,
+    /// Set by the running operation when it moved any reference (branch, remote-tracking branch, tag).
+    refs_moved: Arc<AtomicBool>,
+    /// Transient notifications in the bottom-left corner.
+    toasts: Toasts,
     /// Text of the open "new branch" dialog.
     new_branch: Option<String>,
     /// Commit the new-branch dialog creates the branch at (HEAD if `None`).
@@ -383,6 +388,8 @@ impl RepoTab {
             op_rx: None,
             notice: None,
             op_label: "",
+            refs_moved: Arc::new(AtomicBool::new(true)),
+            toasts: Toasts::default(),
             new_branch: None,
             branch_at: None,
             new_tag: None,
@@ -540,10 +547,14 @@ impl RepoTab {
         self.notice = None;
         self.push_rejected = false;
         self.op_label = label;
+        let moved = self.refs_moved.clone();
         // Snapshot refs around the operation so it can be undone if it moved any.
         self.op_rx = Some(detail::spawn(ctx, move || {
             let before = undo::snapshot(&path).ok();
+            let fingerprint = remote::refs_fingerprint(&path);
             f(&path).map_err(detail::ErrorText::text)?;
+            // If either side could not be read, assume something moved.
+            moved.store(fingerprint.is_none() || fingerprint != remote::refs_fingerprint(&path), Ordering::Relaxed);
             let after = undo::snapshot(&path).ok();
             Ok::<_, String>(before.zip(after).filter(|(b, a)| b != a).map(|(before, after)| {
                 UndoEntry { label, soft: false, before, after }
@@ -650,6 +661,36 @@ impl RepoTab {
         }
     }
 
+    /// Say that the operation that just finished worked: a toast for the network
+    /// operations, a status-bar line for everything else.
+    fn report_done(&mut self, ctx: &egui::Context) {
+        let moved = self.refs_moved.load(Ordering::Relaxed);
+        let info = self.repo.as_ref().and_then(|l| l.info.as_ref());
+        let branch = info.and_then(|i| i.head_branch.clone());
+        let upstream = info.and_then(|i| i.upstream.as_ref().map(|u| u.name.clone()));
+        let (title, detail) = match (self.op_label, moved) {
+            ("Fetch", true) => ("Fetched Successfully", None),
+            ("Fetch", false) => ("Already Up-to-Date", Some("Nothing new to fetch.".to_owned())),
+            ("Pull", true) => ("Pulled Successfully", None),
+            ("Pull", false) => (
+                "Already Up-to-Date",
+                Some(match (branch, upstream) {
+                    (Some(b), Some(u)) => format!("No merge necessary. Branch {u} was not moved, so {b} is unchanged."),
+                    _ => "No merge necessary.".to_owned(),
+                }),
+            ),
+            ("Push", true) => ("Pushed Successfully", branch.zip(upstream).map(|(b, u)| format!("{b} to {u}"))),
+            ("Push", false) => ("Already Up-to-Date", Some("Everything is already on the remote.".to_owned())),
+            ("Force push", _) => ("Force Pushed Successfully", branch.zip(upstream).map(|(b, u)| format!("{b} to {u}"))),
+            ("Push tag", _) => ("Tag Pushed Successfully", None),
+            _ => {
+                self.notice = Some((format!("{} done", self.op_label), false));
+                return;
+            }
+        };
+        self.toasts.push(ctx, title, detail);
+    }
+
     fn poll_op(&mut self, ctx: &egui::Context) {
         let Some(rx) = &self.op_rx else { return };
         if let Ok(r) = rx.try_recv() {
@@ -667,7 +708,7 @@ impl RepoTab {
                             }
                         }
                     }
-                    self.notice = Some((format!("{} done", self.op_label), false));
+                    self.report_done(ctx);
                 }
                 Err(e) => {
                     // A failed undo/redo leaves the entry where it was.
@@ -684,7 +725,7 @@ impl RepoTab {
                         let retry = self.retry.take().expect("checked above");
                         self.stash_offer = Some(StashOffer { message: e.clone(), retry });
                     } else if e == ALREADY_UP_TO_DATE {
-                        self.notice = Some((e, false));
+                        self.toasts.push(ctx, "Already Up-to-Date", Some("No merge necessary.".to_owned()));
                         self.reload(ctx);
                         return;
                     } else {
@@ -783,6 +824,8 @@ impl RepoTab {
             self.run_restore(ctx, false);
         }
         self.status_bar(ctx);
+        // The toasts sit just above the status bar; this is its top edge.
+        let toast_bottom = ctx.available_rect().bottom();
         if std::mem::take(&mut self.force_requested) {
             self.open_force_push();
         }
@@ -1045,6 +1088,7 @@ impl RepoTab {
                 None => {}
             }
         }
+        self.toasts.show(ctx, toast_bottom);
         to_open
     }
 }

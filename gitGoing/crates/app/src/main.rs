@@ -17,6 +17,7 @@ mod sidebar;
 mod startup;
 mod syntax;
 mod timefmt;
+mod toasts;
 
 fn main() -> eframe::Result {
     // Helper roles: git and ssh start this same executable to ask for
