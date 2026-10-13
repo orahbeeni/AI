@@ -2,7 +2,7 @@
 
 use crate::graph::{GraphLayout, GraphRow};
 use git2::{Oid, Repository, Sort};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 pub struct CommitRow {
@@ -26,6 +26,31 @@ pub enum RefKind {
 pub struct RefLabel {
     pub name: String,
     pub kind: RefKind,
+}
+
+impl RefLabel {
+    /// The full reference name, e.g. `refs/heads/main`.
+    pub fn full_name(&self) -> String {
+        full_ref_name(self.kind, &self.name)
+    }
+}
+
+/// The full reference name for a short name of the given kind.
+pub fn full_ref_name(kind: RefKind, name: &str) -> String {
+    let prefix = match kind {
+        RefKind::Head | RefKind::Local => "refs/heads/",
+        RefKind::Remote => "refs/remotes/",
+        RefKind::Tag => "refs/tags/",
+    };
+    format!("{prefix}{name}")
+}
+
+/// What to load.
+#[derive(Clone, Debug, Default)]
+pub struct LoadOptions {
+    /// Full names of branches and tags to leave out of the graph. Commits only
+    /// reachable from them are not listed. The checked-out branch is always shown.
+    pub hidden: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -58,13 +83,17 @@ const BATCH: usize = 2000;
 /// Walk the full history of `path`, calling `emit` with batches of rows.
 /// Returns early (without error) when `emit` returns `false`, so a caller
 /// can cancel by dropping its receiver.
-pub fn load(path: &Path, mut emit: impl FnMut(LoadEvent) -> bool) {
-    if let Err(e) = load_inner(path, &mut emit) {
+pub fn load(path: &Path, opts: &LoadOptions, mut emit: impl FnMut(LoadEvent) -> bool) {
+    if let Err(e) = load_inner(path, opts, &mut emit) {
         emit(LoadEvent::Error(e.message().to_owned()));
     }
 }
 
-fn load_inner(path: &Path, emit: &mut impl FnMut(LoadEvent) -> bool) -> Result<(), git2::Error> {
+fn load_inner(
+    path: &Path,
+    opts: &LoadOptions,
+    emit: &mut impl FnMut(LoadEvent) -> bool,
+) -> Result<(), git2::Error> {
     crate::gitlog::read(path, "git log --all --topo-order   # plus git for-each-ref for branches, tags and remotes");
     let mut repo = Repository::discover(path)?;
     let info = collect_info(&mut repo)?;
@@ -74,10 +103,26 @@ fn load_inner(path: &Path, emit: &mut impl FnMut(LoadEvent) -> bool) -> Result<(
 
     let mut walk = repo.revwalk()?;
     walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
-    for glob in ["refs/heads/*", "refs/remotes/*", "refs/tags/*"] {
-        walk.push_glob(glob)?;
+    if opts.hidden.is_empty() {
+        for glob in ["refs/heads/*", "refs/remotes/*", "refs/tags/*"] {
+            walk.push_glob(glob)?;
+        }
+    } else {
+        // Only the visible branches and tags start the walk.
+        for r in repo.references()? {
+            let r = r?;
+            let Some(name) = r.name() else { continue };
+            let listed = name.starts_with("refs/heads/") || name.starts_with("refs/tags/")
+                || (name.starts_with("refs/remotes/") && !name.ends_with("/HEAD"));
+            if !listed || opts.hidden.contains(name) {
+                continue;
+            }
+            if let Ok(c) = r.peel_to_commit() {
+                walk.push(c.id())?;
+            }
+        }
     }
-    let _ = walk.push_head(); // fails harmlessly on an unborn branch
+    let _ = walk.push_head(); // the checked-out commit is always shown; fails harmlessly when unborn
 
     let mut layout = GraphLayout::new();
     let mut batch = Vec::with_capacity(BATCH);
@@ -174,7 +219,7 @@ mod tests {
 
         let mut rows = Vec::new();
         let mut info = None;
-        load(dir.path(), |ev| {
+        load(dir.path(), &LoadOptions::default(), |ev| {
             match ev {
                 LoadEvent::Info(i) => info = Some(i),
                 LoadEvent::Rows(r) => rows.extend(r),
@@ -187,6 +232,41 @@ mod tests {
         assert_eq!(&*rows[0].summary, "second");
         let info = info.unwrap();
         assert!(info.refs.values().flatten().any(|l| l.kind == RefKind::Head));
+    }
+
+    #[test]
+    fn hidden_branches_and_tags_are_left_out_of_the_graph() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("T", "t@example.com").unwrap();
+        let tree = repo.find_tree(repo.treebuilder(None).unwrap().write().unwrap()).unwrap();
+        let a = repo.commit(Some("HEAD"), &sig, &sig, "A", &tree, &[]).unwrap();
+        let main = repo.head().unwrap().name().unwrap().to_owned();
+        let a_commit = repo.find_commit(a).unwrap();
+        let b = repo.commit(Some("refs/heads/feature"), &sig, &sig, "B (feature only)", &tree, &[&a_commit]).unwrap();
+        let t = repo.commit(None, &sig, &sig, "T (tagged only)", &tree, &[&a_commit]).unwrap();
+        repo.reference("refs/tags/v1", t, false, "tag").unwrap();
+        let c = repo.commit(Some(&main), &sig, &sig, "C", &tree, &[&a_commit]).unwrap();
+
+        let summaries = |hidden: &[&str]| {
+            let opts = LoadOptions { hidden: hidden.iter().map(|s| s.to_string()).collect() };
+            let mut rows = Vec::new();
+            load(dir.path(), &opts, |ev| {
+                if let LoadEvent::Rows(r) = ev {
+                    rows.extend(r.into_iter().map(|r| r.summary.to_string()));
+                }
+                true
+            });
+            rows.sort();
+            rows
+        };
+        assert_eq!(summaries(&[]), ["A", "B (feature only)", "C", "T (tagged only)"]);
+        assert_eq!(summaries(&["refs/heads/feature"]), ["A", "C", "T (tagged only)"]);
+        assert_eq!(summaries(&["refs/tags/v1", "refs/heads/feature"]), ["A", "C"]);
+        // The checked-out branch can't be hidden.
+        assert_eq!(summaries(&[main.as_str(), "refs/heads/feature", "refs/tags/v1"]), ["A", "C"]);
+        let _ = (b, c);
+        assert_eq!(full_ref_name(RefKind::Remote, "origin/x"), "refs/remotes/origin/x");
     }
 
     /// Rough speed check on a generated history: `cargo test -p gitgoing-core --release -- --ignored --nocapture`.
@@ -239,7 +319,7 @@ mod tests {
         let start = std::time::Instant::now();
         let mut rows = 0usize;
         let mut first_batch = None;
-        load(dir.path(), |ev| {
+        load(dir.path(), &LoadOptions::default(), |ev| {
             if let LoadEvent::Rows(r) = ev {
                 first_batch.get_or_insert(start.elapsed());
                 rows += r.len();

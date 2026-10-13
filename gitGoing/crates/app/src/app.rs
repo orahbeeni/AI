@@ -19,6 +19,7 @@ use gitgoing_core::remotes;
 use gitgoing_core::stash;
 use gitgoing_core::graph::{SegKind, PALETTE_SIZE};
 use gitgoing_core::history::{self, CommitRow, LoadEvent, RefKind, RepoInfo};
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
@@ -40,6 +41,8 @@ struct Loaded {
     multi: std::collections::BTreeSet<usize>,
     /// Where a Shift-click range starts.
     anchor: Option<usize>,
+    /// Hidden branches/tags this history was loaded without (their chips are not drawn).
+    hidden: BTreeSet<String>,
     detail: Option<Detail>,
     changes: Option<Changes>,
     /// The WIP row is selected and the right panel shows working changes.
@@ -311,6 +314,10 @@ pub struct RepoTab {
     force_requested: bool,
     /// A squash/rebase plan being computed in the background.
     plan_rx: Option<Receiver<Result<PlanResult, String>>>,
+    /// Branches and tags (full reference names) hidden from the graph.
+    hidden: BTreeSet<String>,
+    /// The previous sidebar, whose filter and layout the next one inherits.
+    carry_sidebar: Option<Sidebar>,
     conflict: Option<ConflictEditor>,
     confirm: Option<Confirm>,
     undo: Vec<UndoEntry>,
@@ -319,9 +326,11 @@ pub struct RepoTab {
 }
 
 impl RepoTab {
-    fn new(id: u64, path: PathBuf) -> Self {
+    fn new(id: u64, path: PathBuf, hidden: BTreeSet<String>) -> Self {
         let mut app = RepoTab {
             id,
+            hidden,
+            carry_sidebar: None,
             path: path.clone(),
             repo: None,
             error: None,
@@ -380,6 +389,7 @@ impl RepoTab {
             selected: None,
             multi: Default::default(),
             anchor: None,
+            hidden: self.hidden.clone(),
             detail: None,
             changes,
             show_changes,
@@ -391,10 +401,11 @@ impl RepoTab {
             visible: 0..0,
         });
         self.error = None;
+        let opts = history::LoadOptions { hidden: self.hidden.clone() };
         std::thread::spawn(move || {
             let fail = tx.clone();
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                history::load(&path, |ev| tx.send(ev).is_ok());
+                history::load(&path, &opts, |ev| tx.send(ev).is_ok());
             }));
             if let Err(p) = r {
                 let _ = fail.send(LoadEvent::Error(format!("internal error: {}", detail::panic_message(&*p))));
@@ -413,7 +424,11 @@ impl RepoTab {
                     if l.changes.is_none() {
                         l.changes = Some(Changes::new(ctx, i.path.clone()));
                     }
-                    l.sidebar = Some(Sidebar::from_info(&i));
+                    let mut sidebar = Sidebar::from_info(&i);
+                    if let Some(old) = self.carry_sidebar.take() {
+                        sidebar.adopt_ui(old);
+                    }
+                    l.sidebar = Some(sidebar);
                     l.info = Some(i);
                 }
                 Ok(LoadEvent::Rows(mut r)) => {
@@ -552,17 +567,23 @@ impl RepoTab {
         }));
     }
 
+    /// Change which branches and tags the graph shows (reloads the history).
+    fn set_hidden(&mut self, hidden: BTreeSet<String>, ctx: &egui::Context) {
+        if hidden != self.hidden {
+            self.hidden = hidden;
+            self.reload(ctx);
+        }
+    }
+
     /// Re-read history, sidebar and status after the repo changed.
     fn reload(&mut self, ctx: &egui::Context) {
         let Some(path) = self.repo_path() else { return };
         // Keep what the user was looking at: the selected commit and the search.
         let (selected, search, mut ch, show) = match self.repo.take() {
-            Some(l) => (
-                l.selected.and_then(|i| l.rows.get(i)).map(|r| r.id),
-                l.search.text,
-                l.changes,
-                l.show_changes,
-            ),
+            Some(l) => {
+                self.carry_sidebar = l.sidebar;
+                (l.selected.and_then(|i| l.rows.get(i)).map(|r| r.id), l.search.text, l.changes, l.show_changes)
+            }
             None => (None, String::new(), None, false),
         };
         if let Some(c) = &mut ch {
@@ -701,7 +722,8 @@ impl RepoTab {
                 .exact_width(widths.sidebar)
                 .show(ctx, |ui| {
                     if let Some(s) = &mut l.sidebar {
-                        branch_act = s.show(ui);
+                        let head = l.info.as_ref().and_then(|i| i.head_branch.as_deref());
+                        branch_act = s.show(ui, &self.hidden, head);
                     }
                 });
             let rect = r.response.rect;
@@ -762,6 +784,34 @@ impl RepoTab {
                     }
                 }),
                 Some(SidebarAction::RebaseOnto(n)) => self.run_op(ctx, "Rebase", move |p| rebase_outcome(rebase::rebase_onto(p, &n))),
+                Some(SidebarAction::SetHidden(names, hide)) => {
+                    let head_full = self
+                        .repo
+                        .as_ref()
+                        .and_then(|l| l.info.as_ref())
+                        .and_then(|i| i.head_branch.as_ref())
+                        .map(|h| format!("refs/heads/{h}"));
+                    let mut set = self.hidden.clone();
+                    for n in names.into_iter().filter(|n| Some(n) != head_full.as_ref()) {
+                        if hide {
+                            set.insert(n);
+                        } else {
+                            set.remove(&n);
+                        }
+                    }
+                    self.set_hidden(set, ctx);
+                }
+                Some(SidebarAction::Solo(only)) => {
+                    let everything: BTreeSet<String> = self
+                        .repo
+                        .as_ref()
+                        .and_then(|l| l.info.as_ref())
+                        .map(|i| i.refs.values().flatten().map(history::RefLabel::full_name).collect())
+                        .unwrap_or_default();
+                    let set = everything.into_iter().filter(|n| *n != only).collect();
+                    self.set_hidden(set, ctx);
+                }
+                Some(SidebarAction::ShowAll) => self.set_hidden(BTreeSet::new(), ctx),
                 Some(SidebarAction::AddRemote) => {
                     self.remote_dlg = Some(RemoteDlg { kind: RemoteDlgKind::Add, name: "origin".into(), text: String::new() })
                 }
@@ -903,6 +953,27 @@ impl RepoTab {
     }
 }
 
+/// `path<TAB>ref<TAB>ref...` per line.
+fn serialise_hidden(store: &HashMap<PathBuf, BTreeSet<String>>) -> String {
+    store
+        .iter()
+        .filter(|(_, refs)| !refs.is_empty())
+        .map(|(p, refs)| format!("{}\t{}", p.display(), refs.iter().cloned().collect::<Vec<_>>().join("\t")))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn parse_hidden(text: &str) -> HashMap<PathBuf, BTreeSet<String>> {
+    text.lines()
+        .filter_map(|line| {
+            let mut parts = line.split('\t');
+            let path = PathBuf::from(parts.next()?);
+            let refs: BTreeSet<String> = parts.filter(|r| !r.is_empty()).map(str::to_owned).collect();
+            (!refs.is_empty()).then_some((path, refs))
+        })
+        .collect()
+}
+
 /// An absolute path without `.`/`..` or a trailing slash (unchanged if the path
 /// does not exist).
 fn normalise(path: &std::path::Path) -> PathBuf {
@@ -959,6 +1030,8 @@ pub struct App {
     recent: Vec<PathBuf>,
     widths: PanelWidths,
     clone_dlg: Option<clonedlg::CloneDialog>,
+    /// Hidden branches/tags per repository, remembered between runs.
+    hidden_store: HashMap<PathBuf, BTreeSet<String>>,
     assets: Assets,
     /// Splash screen state: shown at start until `Some(start)` + a second or so.
     splash_on: bool,
@@ -993,6 +1066,7 @@ impl App {
             was_focused: true,
             recent: paths_from(get("recent")),
             clone_dlg: None,
+            hidden_store: parse_hidden(&get("hidden_refs").unwrap_or_default()),
             assets,
             splash_on: splash,
             splash_start: None,
@@ -1047,7 +1121,8 @@ impl App {
             return;
         }
         self.next_id += 1;
-        self.tabs.push(RepoTab::new(self.next_id, path));
+        let hidden = self.hidden_store.get(&path).cloned().unwrap_or_default();
+        self.tabs.push(RepoTab::new(self.next_id, path, hidden));
         self.active = self.tabs.len() - 1;
     }
 
@@ -1277,6 +1352,15 @@ impl eframe::App for App {
         storage.set_string("ref_col", self.widths.ref_col.to_string());
         storage.set_string("graph_col", self.widths.graph_col.map_or_else(String::new, |w| w.to_string()));
         storage.set_string("recent", join(self.recent.clone()));
+        for t in &self.tabs {
+            let key = normalise(&t.repo_path().unwrap_or_else(|| t.path.clone()));
+            if t.hidden.is_empty() {
+                self.hidden_store.remove(&key);
+            } else {
+                self.hidden_store.insert(key, t.hidden.clone());
+            }
+        }
+        storage.set_string("hidden_refs", serialise_hidden(&self.hidden_store));
         self.settings.save(|k, v| storage.set_string(k, v));
     }
 }
@@ -1295,6 +1379,21 @@ mod tests {
             time: 0,
             graph: Default::default(),
         }
+    }
+
+    #[test]
+    fn hidden_refs_survive_serialisation() {
+        let mut store = HashMap::new();
+        store.insert(PathBuf::from("/a/b"), ["refs/heads/x".to_owned(), "refs/tags/v1".to_owned()].into_iter().collect());
+        store.insert(PathBuf::from("/c d"), ["refs/remotes/origin/y".to_owned()].into_iter().collect());
+        store.insert(PathBuf::from("/empty"), BTreeSet::new());
+        let text = serialise_hidden(&store);
+        let back = parse_hidden(&text);
+        assert_eq!(back.len(), 2, "empty sets are not stored");
+        assert_eq!(back[&PathBuf::from("/a/b")].len(), 2);
+        assert!(back[&PathBuf::from("/c d")].contains("refs/remotes/origin/y"));
+        assert!(parse_hidden("").is_empty());
+        assert!(parse_hidden("garbage-line-without-refs").is_empty());
     }
 
     #[test]

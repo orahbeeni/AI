@@ -6,7 +6,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, Response, Sense, Stroke, Vec2};
 use gitgoing_core::history::{RefKind, RepoInfo};
 use gitgoing_core::stash::StashEntry;
 use gitgoing_core::Oid;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub enum SidebarAction {
     Checkout(String),
@@ -24,6 +24,12 @@ pub enum SidebarAction {
     SetUpstream(String),
     PushTag(String),
     DeleteRemoteTag(String),
+    /// Hide (or show) these branches/tags (full reference names) in the graph.
+    SetHidden(Vec<String>, bool),
+    /// Show only this branch or tag (full reference name).
+    Solo(String),
+    /// Show every branch and tag again.
+    ShowAll,
     /// Scroll the graph to this commit.
     Goto(Oid),
     ShowStash(Oid),
@@ -92,19 +98,44 @@ impl Sidebar {
         s
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui) -> Option<SidebarAction> {
+    /// Keep the filter text and section layout of `old` when the lists are rebuilt
+    /// after a reload, so toggling a branch doesn't reset the sidebar.
+    pub fn adopt_ui(&mut self, old: Sidebar) {
+        self.filter = old.filter;
+        self.sections = old.sections;
+    }
+
+    /// `hidden` holds the full names of branches and tags hidden from the graph;
+    /// `head` is the short name of the checked-out branch, which can't be hidden.
+    pub fn show(&mut self, ui: &mut egui::Ui, hidden: &BTreeSet<String>, head: Option<&str>) -> Option<SidebarAction> {
         let mut act = None;
         // Never wrap names; cut off the right-hand side instead.
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
         // Visible scrollbars (the default ones only appear on hover).
         ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
         ui.add_space(4.0);
+        // "Viewing X/Y": how many branches and tags are shown in the graph.
+        let all_refs = self.local.iter().map(|(n, _, _)| format!("refs/heads/{n}"))
+            .chain(self.remotes.iter().flat_map(|(r, bs)| bs.iter().map(move |(b, _)| format!("refs/remotes/{r}/{b}"))))
+            .chain(self.tags.iter().map(|(n, _)| format!("refs/tags/{n}")));
+        let (total, hidden_n) = all_refs.fold((0usize, 0usize), |(t, h), f| (t + 1, h + hidden.contains(&f) as usize));
+        ui.horizontal(|ui| {
+            ui.label(format!("Viewing {}/{}", total - hidden_n, total));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add_enabled(hidden_n > 0, egui::Button::new("Show all").small()).clicked() {
+                    act = Some(SidebarAction::ShowAll);
+                }
+            });
+        });
+        ui.add_space(2.0);
         ui.add(
             egui::TextEdit::singleline(&mut self.filter)
                 .hint_text("Filter")
                 .desired_width(f32::INFINITY),
         );
         ui.add_space(4.0);
+        let head_full = head.map(|h| format!("refs/heads/{h}"));
+        let _ = &head_full;
         let locate = std::mem::take(&mut self.locate);
         let mut locate_clicked = false;
         let q = self.filter.to_lowercase();
@@ -116,10 +147,19 @@ impl Sidebar {
             locate_clicked = section(ui, "LOCAL", local.len(), self.local.len(), HeaderButton::Locate, &mut self.sections[0], |ui| {
                 let items: Vec<(&str, usize)> = local.iter().enumerate().map(|(i, e)| (e.0.as_str(), i)).collect();
                 let nodes = filetree::build(&items, false, false);
-                tree(ui, "local", &nodes, 0, "", force_open, &mut |ui, i, name, depth| {
+                let mut toggles = Vec::new();
+                // The checked-out branch always counts as shown, so a folder holding it can still be toggled.
+                let is_hidden = |i: usize| !local[i].1 && hidden.contains(&format!("refs/heads/{}", local[i].0));
+                tree(ui, "local", &nodes, 0, "", force_open, &is_hidden, &mut toggles, &mut |ui, i, name, depth| {
                     let (full, current, oid) = local[i];
-                    let r = row(ui, depth, Icon::Branch, name, *current)
-                        .on_hover_text("Click to show in the graph; double-click to check out");
+                    let full_ref = format!("refs/heads/{full}");
+                    let hid = hidden.contains(&full_ref);
+                    let (r, eye) = row_eye(ui, depth, Icon::Branch, name, *current, (!*current).then_some(hid));
+                    if eye {
+                        act = Some(SidebarAction::SetHidden(vec![full_ref], !hid));
+                        return;
+                    }
+                    let r = r.on_hover_text("Click to show in the graph; double-click to check out");
                     if *current && locate {
                         r.scroll_to_me(Some(egui::Align::Center));
                     }
@@ -150,8 +190,13 @@ impl Sidebar {
                             act = Some(SidebarAction::Delete(full.clone()));
                             ui.close_menu();
                         }
+                        ui.separator();
+                        visibility_menu(ui, &mut act, &format!("refs/heads/{full}"), hid, *current);
                     });
                 });
+                for (ids, hide) in toggles {
+                    act = Some(SidebarAction::SetHidden(ids.iter().map(|&i| format!("refs/heads/{}", local[i].0)).collect(), hide));
+                }
             });
 
             let total: usize = self.remotes.values().map(Vec::len).sum();
@@ -168,7 +213,13 @@ impl Sidebar {
                     // The remote itself is the top-level folder.
                     let id = egui::Id::new((&salt, "/"));
                     let mut open = force_open || ui.data_mut(|d| *d.get_persisted_mut_or(id, true));
-                    let rr = row(ui, 0, Icon::Folder, remote, false);
+                    let all_refs: Vec<String> = bs.iter().map(|(b, _)| format!("refs/remotes/{remote}/{b}")).collect();
+                    let all_hidden = !all_refs.is_empty() && all_refs.iter().all(|f| hidden.contains(f));
+                    let (rr, eye) = row_eye(ui, 0, Icon::Folder, remote, false, (!all_refs.is_empty()).then_some(all_hidden));
+                    if eye {
+                        act = Some(SidebarAction::SetHidden(all_refs, !all_hidden));
+                        continue;
+                    }
                     let rr = match self.remote_urls.get(remote) {
                         Some(url) => rr.on_hover_text(url),
                         None => rr,
@@ -198,11 +249,19 @@ impl Sidebar {
                     if !open {
                         continue;
                     }
-                    tree(ui, &salt, &nodes, 1, "", force_open, &mut |ui, i, name, depth| {
+                    let mut toggles = Vec::new();
+                    let is_hidden = |i: usize| hidden.contains(&format!("refs/remotes/{remote}/{}", bs[i].0));
+                    tree(ui, &salt, &nodes, 1, "", force_open, &is_hidden, &mut toggles, &mut |ui, i, name, depth| {
                         let (b, oid) = bs[i];
                         let full = format!("{remote}/{b}");
-                        let r = row(ui, depth, Icon::Branch, name, false)
-                            .on_hover_text("Click to show in the graph; double-click to check out as a local branch");
+                        let full_ref = format!("refs/remotes/{full}");
+                        let hid = hidden.contains(&full_ref);
+                        let (r, eye) = row_eye(ui, depth, Icon::Branch, name, false, Some(hid));
+                        if eye {
+                            act = Some(SidebarAction::SetHidden(vec![full_ref], !hid));
+                            return;
+                        }
+                        let r = r.on_hover_text("Click to show in the graph; double-click to check out as a local branch");
                         if r.clicked() {
                             act = Some(SidebarAction::Goto(*oid));
                         }
@@ -227,8 +286,16 @@ impl Sidebar {
                                 act = Some(SidebarAction::DeleteRemoteBranch(full.clone()));
                                 ui.close_menu();
                             }
+                            ui.separator();
+                            visibility_menu(ui, &mut act, &format!("refs/remotes/{full}"), hid, false);
                         });
                     });
+                    for (ids, hide) in toggles {
+                        act = Some(SidebarAction::SetHidden(
+                            ids.iter().map(|&i| format!("refs/remotes/{remote}/{}", bs[i].0)).collect(),
+                            hide,
+                        ));
+                    }
                 }
             }) {
                 act = Some(SidebarAction::AddRemote);
@@ -238,9 +305,17 @@ impl Sidebar {
             section(ui, "TAGS", tags.len(), self.tags.len(), HeaderButton::None, &mut self.sections[2], |ui| {
                 let items: Vec<(&str, usize)> = tags.iter().enumerate().map(|(i, e)| (e.0.as_str(), i)).collect();
                 let nodes = filetree::build(&items, false, false);
-                tree(ui, "tags", &nodes, 0, "", force_open, &mut |ui, i, name, depth| {
+                let mut toggles = Vec::new();
+                let is_hidden = |i: usize| hidden.contains(&format!("refs/tags/{}", tags[i].0));
+                tree(ui, "tags", &nodes, 0, "", force_open, &is_hidden, &mut toggles, &mut |ui, i, name, depth| {
                     let (full, oid) = tags[i];
-                    let r = row(ui, depth, Icon::Tag, name, false);
+                    let full_ref = format!("refs/tags/{full}");
+                    let hid = hidden.contains(&full_ref);
+                    let (r, eye) = row_eye(ui, depth, Icon::Tag, name, false, Some(hid));
+                    if eye {
+                        act = Some(SidebarAction::SetHidden(vec![full_ref], !hid));
+                        return;
+                    }
                     if r.clicked() {
                         act = Some(SidebarAction::Goto(*oid));
                     }
@@ -258,8 +333,13 @@ impl Sidebar {
                             act = Some(SidebarAction::DeleteRemoteTag(full.clone()));
                             ui.close_menu();
                         }
+                        ui.separator();
+                        visibility_menu(ui, &mut act, &format!("refs/tags/{full}"), hid, false);
                     });
                 });
+                for (ids, hide) in toggles {
+                    act = Some(SidebarAction::SetHidden(ids.iter().map(|&i| format!("refs/tags/{}", tags[i].0)).collect(), hide));
+                }
             });
 
             let stashes: Vec<_> = self.stashes.iter().filter(|s| hit(&s.message)).collect();
@@ -401,6 +481,20 @@ const INDENT: f32 = 16.0;
 /// One full-width row of a sidebar tree. The current branch gets a green
 /// highlight and a green check box.
 fn row(ui: &mut egui::Ui, depth: usize, icon: Icon, text: &str, current: bool) -> Response {
+    row_eye(ui, depth, icon, text, current, None).0
+}
+
+/// Like [`row`], with an eye button at the right edge when `eye` is `Some`
+/// (`Some(true)` means hidden from the graph). Returns the row's response and
+/// whether the eye was clicked.
+fn row_eye(
+    ui: &mut egui::Ui,
+    depth: usize,
+    icon: Icon,
+    text: &str,
+    current: bool,
+    eye: Option<bool>,
+) -> (Response, bool) {
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_H), Sense::click());
     let p = ui.painter_at(rect);
     let visuals = ui.visuals();
@@ -418,20 +512,75 @@ fn row(ui: &mut egui::Ui, depth: usize, icon: Icon, text: &str, current: bool) -
         p.line_segment([m + Vec2::new(-3.5, 0.0), m + Vec2::new(-1.0, 3.0)], w);
         p.line_segment([m + Vec2::new(-1.0, 3.0), m + Vec2::new(3.5, -3.0)], w);
     }
+    let hidden = eye == Some(true);
     let x = rect.left() + 34.0 + depth as f32 * INDENT;
-    let color = if current { visuals.strong_text_color() } else { visuals.text_color() };
+    let mut color = if current { visuals.strong_text_color() } else { visuals.text_color() };
+    let mut icon_color = visuals.weak_text_color();
+    if hidden {
+        color = color.gamma_multiply(0.45);
+        icon_color = icon_color.gamma_multiply(0.5);
+    }
     let mut text_x = x;
     if !matches!(icon, Icon::None) {
-        icons::draw(&p, Pos2::new(x + 7.0, cy), icon, 1.0, visuals.weak_text_color());
+        icons::draw(&p, Pos2::new(x + 7.0, cy), icon, 1.0, icon_color);
         text_x = x + 22.0;
     }
     let font = egui::TextStyle::Body.resolve(ui.style());
-    // Names are cut off at the right edge, never wrapped.
-    p.text(Pos2::new(text_x, cy), egui::Align2::LEFT_CENTER, text, font, color);
-    resp
+
+    let mut eye_clicked = false;
+    let mut text_clip = rect;
+    if let Some(is_hidden) = eye {
+        let eye_rect = Rect::from_center_size(Pos2::new(rect.right() - 16.0, cy), Vec2::splat(20.0));
+        text_clip.max.x = eye_rect.left() - 2.0;
+        // Shown while hovering, and always for hidden rows so they are easy to spot.
+        if resp.hovered() || is_hidden {
+            let over_eye = resp.hover_pos().is_some_and(|p| eye_rect.contains(p));
+            let col = if over_eye { visuals.strong_text_color() } else { visuals.weak_text_color() };
+            icons::draw(&p, eye_rect.center(), if is_hidden { Icon::EyeOff } else { Icon::Eye }, 1.0, col);
+            eye_clicked = resp.clicked() && resp.interact_pointer_pos().is_some_and(|p| eye_rect.contains(p));
+        }
+    }
+    // Names are cut off at the right edge (before the eye), never wrapped.
+    ui.painter_at(text_clip).text(Pos2::new(text_x, cy), egui::Align2::LEFT_CENTER, text, font, color);
+    (resp, eye_clicked)
+}
+
+/// The visibility entries of a branch/tag context menu.
+fn visibility_menu(ui: &mut egui::Ui, act: &mut Option<SidebarAction>, full_ref: &str, hidden: bool, current: bool) {
+    if ui
+        .add_enabled(!current, egui::Button::new(if hidden { "Show in graph" } else { "Hide from graph" }))
+        .clicked()
+    {
+        *act = Some(SidebarAction::SetHidden(vec![full_ref.to_owned()], !hidden));
+        ui.close_menu();
+    }
+    if ui.button("Show only this in the graph").clicked() {
+        *act = Some(SidebarAction::Solo(full_ref.to_owned()));
+        ui.close_menu();
+    }
+    if ui.button("Show all").clicked() {
+        *act = Some(SidebarAction::ShowAll);
+        ui.close_menu();
+    }
 }
 
 /// Render `nodes` as folders (collapsible rows) and leaves.
+/// The ids of every leaf under `nodes`.
+fn leaf_ids(nodes: &[Node]) -> Vec<usize> {
+    let mut out = Vec::new();
+    for n in nodes {
+        match n {
+            Node::File(_, id) => out.push(*id),
+            Node::Dir(_, children) => out.extend(leaf_ids(children)),
+        }
+    }
+    out
+}
+
+/// Render `nodes` as folders (collapsible rows) and leaves. Each folder has an
+/// eye that hides or shows everything inside it; clicks are collected in `toggles`
+/// as (leaf ids, hide?).
+#[allow(clippy::too_many_arguments)]
 fn tree(
     ui: &mut egui::Ui,
     salt: &str,
@@ -439,6 +588,8 @@ fn tree(
     depth: usize,
     prefix: &str,
     force_open: bool,
+    is_hidden: &dyn Fn(usize) -> bool,
+    toggles: &mut Vec<(Vec<usize>, bool)>,
     leaf: &mut dyn FnMut(&mut egui::Ui, usize, &str, usize),
 ) {
     for n in nodes {
@@ -448,12 +599,17 @@ fn tree(
                 let full = format!("{prefix}{name}/");
                 let id = egui::Id::new((salt, &full));
                 let mut open = force_open || ui.data_mut(|d| *d.get_persisted_mut_or(id, true));
-                if row(ui, depth, Icon::Folder, name, false).clicked() {
+                let ids = leaf_ids(children);
+                let all_hidden = !ids.is_empty() && ids.iter().all(|&i| is_hidden(i));
+                let (r, eye) = row_eye(ui, depth, Icon::Folder, name, false, (!ids.is_empty()).then_some(all_hidden));
+                if eye {
+                    toggles.push((ids, !all_hidden));
+                } else if r.clicked() {
                     open = !open;
                     ui.data_mut(|d| d.insert_persisted(id, open));
                 }
                 if open {
-                    tree(ui, salt, children, depth + 1, &full, force_open, leaf);
+                    tree(ui, salt, children, depth + 1, &full, force_open, is_hidden, toggles, leaf);
                 }
             }
         }

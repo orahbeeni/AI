@@ -336,6 +336,10 @@ pub(super) fn history_view(
                 let mut x = rect.left() + 4.0;
                 if let Some(labels) = l.info.as_ref().and_then(|i| i.refs.get(&row.id)) {
                     for label in labels {
+                        // Hidden branches and tags can still label a commit that other refs reach.
+                        if !l.hidden.is_empty() && l.hidden.contains(&label.full_name()) {
+                            continue;
+                        }
                         let (bg, fg) = match label.kind {
                             RefKind::Head => (Color32::from_rgb(0x2e, 0x7d, 0x32), Color32::WHITE),
                             RefKind::Local => (Color32::from_rgb(0x1f, 0x6f, 0xa8), Color32::WHITE),

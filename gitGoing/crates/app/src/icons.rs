@@ -29,6 +29,8 @@ pub enum Icon {
     Pencil,
     Trash,
     Gear,
+    Eye,
+    EyeOff,
 }
 
 /// Points along an arc of radius `r` around `c`, from angle `a0` to `a1` (radians, y down).
@@ -156,6 +158,20 @@ pub fn draw(p: &egui::Painter, c: Pos2, icon: Icon, scale: f32, color: Color32) 
             poly(vec![v(-4.5, -1.5), v(-3.8, 6.5), v(3.8, 6.5), v(4.5, -1.5)]);
             line(v(-1.2, 0.0), v(-1.2, 4.5));
             line(v(1.2, 0.0), v(1.2, 4.5));
+        }
+        Icon::Eye | Icon::EyeOff => {
+            // An almond-shaped eye with a pupil; crossed out when hidden.
+            let pts: Vec<Pos2> = (0..=20)
+                .map(|k| {
+                    let t = k as f32 / 20.0 * std::f32::consts::TAU;
+                    v(6.5 * t.cos(), 3.6 * t.sin() * (0.55 + 0.45 * t.cos().abs()))
+                })
+                .collect();
+            p.add(Shape::closed_line(pts, st));
+            p.circle_filled(c, 1.9 * s, color);
+            if icon == Icon::EyeOff {
+                p.line_segment([v(-6.5, 5.5), v(6.5, -5.5)], Stroke::new(1.6_f32 * s.clamp(1.0, 1.35), color));
+            }
         }
         Icon::Gear => {
             p.circle_stroke(c, 2.6 * s, st);
