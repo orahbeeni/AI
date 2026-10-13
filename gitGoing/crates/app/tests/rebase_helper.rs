@@ -41,3 +41,29 @@ fn interactive_rebase_uses_our_binary_as_sequence_editor() {
     let log = String::from_utf8(out.stdout).unwrap();
     assert_eq!(log.lines().collect::<Vec<_>>(), ["third, reworded", "commit 1"]);
 }
+
+#[test]
+fn squash_uses_our_binary_as_sequence_editor() {
+    if Command::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    gitcmd::set_helper_exe(env!("CARGO_BIN_EXE_gitgoing").into());
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("squash repo");
+    std::fs::create_dir(&dir).unwrap();
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["config", "user.name", "T"]);
+    git(&dir, &["config", "user.email", "t@example.com"]);
+    let mut ids = Vec::new();
+    for n in 1..=4 {
+        std::fs::write(dir.join(format!("f{n}")), format!("{n}\n")).unwrap();
+        status::stage(&dir, &[format!("f{n}")]).unwrap();
+        ids.push(status::commit(&dir, &format!("commit {n}")).unwrap());
+    }
+    let plan = rebase::plan_squash(&dir, &[ids[1], ids[2]]).unwrap();
+    assert_eq!(plan.message, "commit 2\n\ncommit 3");
+    assert_eq!(rebase::squash(&dir, &[ids[1], ids[2]], "two and three").unwrap(), rebase::Outcome::Done);
+    let out = Command::new("git").arg("-C").arg(&dir).args(["log", "--format=%s"]).output().unwrap();
+    let log = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(log.lines().collect::<Vec<_>>(), ["commit 4", "two and three", "commit 1"]);
+}

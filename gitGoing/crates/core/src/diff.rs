@@ -114,6 +114,7 @@ fn kind_of(d: Delta) -> ChangeKind {
 }
 
 pub fn commit_detail(repo_path: &Path, id: Oid) -> Result<CommitDetail, git2::Error> {
+    crate::gitlog::read(repo_path, format!("git show --stat --find-renames {}", id));
     let repo = Repository::discover(repo_path)?;
     let commit = repo.find_commit(id)?;
     let diff = commit_diff(&repo, &commit, &[], false)?;
@@ -174,6 +175,7 @@ pub fn file_diff(
     old_path: Option<&str>,
     ignore_ws: bool,
 ) -> Result<FileDiff, git2::Error> {
+    crate::gitlog::read(repo_path, format!("git show {}{} -- {}", id, if ignore_ws { " -w" } else { "" }, crate::gitlog::quote(path)));
     let repo = Repository::discover(repo_path)?;
     let commit = repo.find_commit(id)?;
     let mut specs = vec![path];
@@ -230,6 +232,9 @@ pub(crate) fn diff_to_file_diff(diff: &Diff) -> Result<FileDiff, git2::Error> {
     Ok(FileDiff::Text { lines, truncated, max_chars })
 }
 
+/// Largest file shown in File View; bigger ones are refused rather than loaded.
+pub const MAX_FILE_VIEW_BYTES: u64 = 8 * 1024 * 1024;
+
 /// Where to read a file's full contents from.
 #[derive(Clone, Copy, Debug)]
 pub enum FileSource {
@@ -241,28 +246,50 @@ pub enum FileSource {
     Workdir,
 }
 
+fn too_large(bytes: u64) -> git2::Error {
+    git2::Error::from_str(&format!(
+        "this file is {} MB, too large to show here (limit {} MB)",
+        bytes / (1024 * 1024),
+        MAX_FILE_VIEW_BYTES / (1024 * 1024)
+    ))
+}
+
 /// A whole file as numbered context lines ("File View").
 pub fn file_text(repo_path: &Path, source: FileSource, path: &str) -> Result<FileDiff, git2::Error> {
+    crate::gitlog::read(repo_path, match source { FileSource::Commit(id) => format!("git show {}:{}", id, path), FileSource::Index => format!("git show :{}", path), FileSource::Workdir => format!("cat {}", crate::gitlog::quote(path)) });
     let repo = Repository::discover(repo_path)?;
     let bytes: Vec<u8> = match source {
         FileSource::Workdir => {
             let wd = repo
                 .workdir()
                 .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
-            std::fs::read(wd.join(path)).map_err(|e| git2::Error::from_str(&e.to_string()))?
+            let full = wd.join(path);
+            let len = std::fs::metadata(&full).map_err(|e| git2::Error::from_str(&e.to_string()))?.len();
+            if len > MAX_FILE_VIEW_BYTES {
+                return Err(too_large(len));
+            }
+            std::fs::read(full).map_err(|e| git2::Error::from_str(&e.to_string()))?
         }
         FileSource::Index => {
             let index = repo.index()?;
             let entry = index
                 .get_path(Path::new(path), 0)
                 .ok_or_else(|| git2::Error::from_str("file is not in the index"))?;
-            repo.find_blob(entry.id)?.content().to_vec()
+            let blob = repo.find_blob(entry.id)?;
+            if blob.size() as u64 > MAX_FILE_VIEW_BYTES {
+                return Err(too_large(blob.size() as u64));
+            }
+            blob.content().to_vec()
         }
         FileSource::Commit(id) => {
             let commit = repo.find_commit(id)?;
             let blob_in = |c: &Commit| -> Result<Vec<u8>, git2::Error> {
                 let entry = c.tree()?.get_path(Path::new(path))?;
-                Ok(repo.find_blob(entry.id())?.content().to_vec())
+                let blob = repo.find_blob(entry.id())?;
+                if blob.size() as u64 > MAX_FILE_VIEW_BYTES {
+                    return Err(too_large(blob.size() as u64));
+                }
+                Ok(blob.content().to_vec())
             };
             match blob_in(&commit) {
                 Ok(b) => b,

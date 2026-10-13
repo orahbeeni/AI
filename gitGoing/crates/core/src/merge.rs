@@ -37,6 +37,7 @@ pub fn ensure_clean_state(repo: &Repository) -> Result<(), git2::Error> {
 
 /// Merge the branch named `name` (local, or `remote/branch`) into HEAD.
 pub fn merge(repo_path: &Path, name: &str) -> Result<MergeOutcome, git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git merge {}", crate::gitlog::quote(name)));
     let repo = Repository::discover(repo_path)?;
     let reference = repo.resolve_reference_from_short_name(name)?;
     merge_reference(&repo, &reference)
@@ -107,6 +108,7 @@ pub(crate) fn merge_reference(repo: &Repository, reference: &Reference) -> Resul
 /// Abandon an in-progress merge, restoring HEAD's tree. Safe because merges
 /// only start on a clean tracked working tree.
 pub fn abort(repo_path: &Path) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, "git merge --abort   # or cherry-pick/revert --abort");
     let repo = Repository::discover(repo_path)?;
     if repo.state() == RepositoryState::Clean {
         return Err(err("no merge, cherry-pick, revert or rebase in progress"));
@@ -121,6 +123,7 @@ pub fn abort(repo_path: &Path) -> Result<(), git2::Error> {
 
 /// Resolve a conflicted file by taking one side wholesale.
 pub fn resolve(repo_path: &Path, path: &str, side: Side) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git checkout --{} -- {} && git add -- {}", if side == Side::Ours { "ours" } else { "theirs" }, crate::gitlog::quote(path), crate::gitlog::quote(path)));
     let repo = Repository::discover(repo_path)?;
     let workdir = repo.workdir().ok_or_else(|| err("repository has no working directory"))?.to_path_buf();
     let mut index = repo.index()?;
@@ -142,6 +145,18 @@ pub fn resolve(repo_path: &Path, path: &str, side: Side) -> Result<(), git2::Err
     match chosen {
         Some(entry) => {
             std::fs::write(&file, repo.find_blob(entry.id)?.content()).map_err(|e| err(e.to_string()))?;
+            #[cfg(unix)]
+            {
+                // Keep a script executable if that side had it so.
+                use std::os::unix::fs::PermissionsExt;
+                if entry.mode & 0o111 != 0 {
+                    if let Ok(meta) = std::fs::metadata(&file) {
+                        let mut perm = meta.permissions();
+                        perm.set_mode(perm.mode() | 0o111);
+                        let _ = std::fs::set_permissions(&file, perm);
+                    }
+                }
+            }
             index.add_path(Path::new(path))?;
         }
         None => {

@@ -27,6 +27,7 @@ pub fn list(repo: &Repository) -> Vec<RemoteInfo> {
 }
 
 pub fn add(repo_path: &Path, name: &str, url: &str) -> Result<(), String> {
+    crate::gitlog::equiv(repo_path, format!("git remote add {} {}", crate::gitlog::quote(name.trim()), crate::gitlog::quote(url.trim())));
     let (name, url) = (name.trim(), url.trim());
     if url.is_empty() {
         return Err("enter a URL".into());
@@ -38,10 +39,12 @@ pub fn add(repo_path: &Path, name: &str, url: &str) -> Result<(), String> {
 }
 
 pub fn remove(repo_path: &Path, name: &str) -> Result<(), String> {
+    crate::gitlog::equiv(repo_path, format!("git remote remove {}", crate::gitlog::quote(name)));
     Repository::discover(repo_path).map_err(e)?.remote_delete(name).map_err(e)
 }
 
 pub fn rename(repo_path: &Path, old: &str, new: &str) -> Result<(), String> {
+    crate::gitlog::equiv(repo_path, format!("git remote rename {} {}", crate::gitlog::quote(old), crate::gitlog::quote(new.trim())));
     let new = new.trim();
     if !git2::Remote::is_valid_name(new) {
         return Err(format!("'{new}' is not a valid remote name"));
@@ -50,6 +53,7 @@ pub fn rename(repo_path: &Path, old: &str, new: &str) -> Result<(), String> {
 }
 
 pub fn set_url(repo_path: &Path, name: &str, url: &str) -> Result<(), String> {
+    crate::gitlog::equiv(repo_path, format!("git remote set-url {} {}", crate::gitlog::quote(name), crate::gitlog::quote(url.trim())));
     let url = url.trim();
     if url.is_empty() {
         return Err("enter a URL".into());
@@ -68,11 +72,14 @@ pub fn default_remote(repo_path: &Path) -> Result<String, String> {
 }
 
 pub fn fetch_remote(repo_path: &Path, remote: &str) -> Result<(), String> {
+    gitcmd::plain_name(remote)?;
     gitcmd::run(Some(repo_path), &["fetch", "--prune", remote]).map(|_| ())
 }
 
 /// Delete `branch` on `remote` (as `git push <remote> --delete <branch>`).
 pub fn delete_remote_branch(repo_path: &Path, remote: &str, branch: &str) -> Result<(), String> {
+    gitcmd::plain_name(remote)?;
+    gitcmd::plain_name(branch)?;
     gitcmd::run(Some(repo_path), &["push", remote, "--delete", branch]).map(|_| ())
 }
 
@@ -88,6 +95,7 @@ pub fn delete_remote_tag(repo_path: &Path, tag: &str) -> Result<(), String> {
 
 /// Make `local` track `upstream` (`remote/branch`), or stop tracking with `None`.
 pub fn set_upstream(repo_path: &Path, local: &str, upstream: Option<&str>) -> Result<(), String> {
+    crate::gitlog::equiv(repo_path, match upstream { Some(u) => format!("git branch --set-upstream-to={} {}", crate::gitlog::quote(u), crate::gitlog::quote(local)), None => format!("git branch --unset-upstream {}", crate::gitlog::quote(local)) });
     let repo = Repository::discover(repo_path).map_err(e)?;
     let mut b: Branch = repo.find_branch(local, BranchType::Local).map_err(e)?;
     b.set_upstream(upstream).map_err(e)

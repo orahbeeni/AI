@@ -59,6 +59,7 @@ fn finish(repo: &Repository, author_of: &Commit, message: &str) -> Result<Applie
 }
 
 pub fn cherry_pick(repo_path: &Path, id: Oid) -> Result<Applied, git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git cherry-pick {}", id));
     let repo = Repository::discover(repo_path)?;
     ensure_clean_tree(&repo)?;
     let commit = repo.find_commit(id)?;
@@ -74,6 +75,7 @@ pub fn cherry_pick(repo_path: &Path, id: Oid) -> Result<Applied, git2::Error> {
 }
 
 pub fn revert(repo_path: &Path, id: Oid) -> Result<Applied, git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git revert --no-edit {}", id));
     let repo = Repository::discover(repo_path)?;
     ensure_clean_tree(&repo)?;
     let commit = repo.find_commit(id)?;
@@ -109,6 +111,7 @@ pub fn revert(repo_path: &Path, id: Oid) -> Result<Applied, git2::Error> {
 }
 
 pub fn reset(repo_path: &Path, id: Oid, mode: ResetMode) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git reset --{} {}", format!("{mode:?}").to_lowercase(), id));
     let repo = Repository::discover(repo_path)?;
     crate::merge::ensure_clean_state(&repo)?;
     let obj = repo.find_object(id, Some(ObjectType::Commit))?;
@@ -126,6 +129,7 @@ pub fn reset(repo_path: &Path, id: Oid, mode: ResetMode) -> Result<(), git2::Err
 
 /// Detach HEAD at a commit (safe checkout: refuses to overwrite local changes).
 pub fn checkout_detached(repo_path: &Path, id: Oid) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git checkout --detach {}", id));
     let repo = Repository::discover(repo_path)?;
     crate::merge::ensure_clean_state(&repo)?;
     let commit = repo.find_commit(id)?;
@@ -135,6 +139,7 @@ pub fn checkout_detached(repo_path: &Path, id: Oid) -> Result<(), git2::Error> {
 
 /// Create a tag at a commit: annotated if `message` is non-empty, else lightweight.
 pub fn create_tag(repo_path: &Path, name: &str, id: Oid, message: &str) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git tag {}{} {}", if message.trim().is_empty() { "" } else { "-a -m <message> " }, crate::gitlog::quote(name.trim()), id));
     let name = name.trim();
     if !git2::Reference::is_valid_name(&format!("refs/tags/{name}")) {
         return Err(err(&format!("'{name}' is not a valid tag name")));
@@ -150,6 +155,7 @@ pub fn create_tag(repo_path: &Path, name: &str, id: Oid, message: &str) -> Resul
 }
 
 pub fn delete_tag(repo_path: &Path, name: &str) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git tag -d {}", crate::gitlog::quote(name)));
     Repository::discover(repo_path)?.tag_delete(name)
 }
 

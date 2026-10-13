@@ -6,6 +6,7 @@ pub mod commit_ops;
 pub mod config;
 pub mod conflict;
 pub mod gitcmd;
+pub mod gitlog;
 pub mod diff;
 pub mod graph;
 pub mod history;

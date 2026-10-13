@@ -2,7 +2,7 @@
 
 use crate::detail::{spawn, Fetch};
 use crate::diffview::{self, DiffOpts, HunkBtn};
-use crate::filetree;
+use crate::filetree::{self, ViewMode};
 use crate::icons;
 use eframe::egui::{self, Color32};
 use gitgoing_core::diff::{ChangeKind, FileDiff};
@@ -36,7 +36,7 @@ pub struct Changes {
     /// A conflicted file the user asked to resolve in the editor window.
     resolve_request: Option<String>,
     /// Show files as a directory tree instead of a flat path list.
-    tree: bool,
+    mode: ViewMode,
 }
 
 enum OpDone {
@@ -68,7 +68,7 @@ impl Changes {
             opts: DiffOpts::default(),
             confirm: None,
             resolve_request: None,
-            tree: false,
+            mode: ViewMode::default(),
         };
         c.refresh(ctx);
         c
@@ -103,7 +103,6 @@ impl Changes {
     }
 
     fn load_diff(&mut self, ctx: &egui::Context) {
-        self.opts.selected.clear();
         let Some((path, staged)) = self.selected.clone() else {
             self.diff = None;
             self.diff_rx = None;
@@ -145,6 +144,7 @@ impl Changes {
                         list.iter().any(|e| e.path == sel.0)
                     };
                     if !self.selected.as_ref().is_some_and(exists) {
+                        self.opts.selected.clear();
                         self.selected = s
                             .unstaged
                             .first()
@@ -314,6 +314,12 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, c: &mut Changes) -> bool {
                     ui.spinner();
                 }
             });
+            if c.amend && matches!(&c.status, Some(Ok(s)) if s.head_pushed) {
+                ui.colored_label(
+                    Color32::from_rgb(0xe5, 0xc0, 0x7b),
+                    "This commit is already pushed. After amending it you will need to force push.",
+                );
+            }
             if let Some(e) = &c.error {
                 ui.colored_label(Color32::LIGHT_RED, e);
             }
@@ -331,10 +337,9 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, c: &mut Changes) -> bool {
             }
         });
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut c.tree, false, "Path");
-            ui.selectable_value(&mut c.tree, true, "Tree");
+            filetree::mode_toggle(ui, &mut c.mode);
         });
-        let tree = c.tree;
+        let mode = c.mode;
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| match &c.status {
             None => {
                 ui.spinner();
@@ -386,15 +391,19 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, c: &mut Changes) -> bool {
                     ui.add_space(6.0);
                 }
                 let sel = if c.diff_open { &c.selected } else { &None };
-                file_list(ui, "Unstaged Files", &s.unstaged, false, sel, busy, tree, &mut act);
+                file_list(ui, FileList { title: "Unstaged Files", entries: &s.unstaged, staged: false }, sel, busy, mode, &mut act);
                 ui.add_space(6.0);
-                file_list(ui, "Staged Files", &s.staged, true, sel, busy, tree, &mut act);
+                file_list(ui, FileList { title: "Staged Files", entries: &s.staged, staged: true }, sel, busy, mode, &mut act);
             }
         });
     });
 
     match act {
         Some(Act::Select(p, staged)) => {
+            // Line picks belong to one file's diff.
+            if c.selected.as_ref() != Some(&(p.clone(), staged)) {
+                c.opts.selected.clear();
+            }
             c.selected = Some((p, staged));
             c.diff_open = true;
             c.diff = None;
@@ -474,6 +483,7 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, c: &mut Changes) -> bool {
             });
     }
     if let Some(go) = decision {
+        c.opts.selected.clear();
         let d = c.confirm.take();
         if go {
             match d {
@@ -528,6 +538,7 @@ pub fn diff_pane(ui: &mut egui::Ui, c: &mut Changes) -> bool {
         c.confirm = Some(Discard::Hunk(path.clone(), h));
     }
     if let Some(ids) = out.lines {
+        c.opts.selected.clear(); // hunks are renumbered once lines are staged
         let p = path.clone();
         c.run_op(&ctx, move |r| {
             if staged { status::unstage_lines(r, &p, &ids) } else { status::stage_lines(r, &p, &ids) }
@@ -535,6 +546,7 @@ pub fn diff_pane(ui: &mut egui::Ui, c: &mut Changes) -> bool {
         });
     }
     if let Some(h) = out.hunk {
+        c.opts.selected.clear();
         c.run_op(&ctx, move |r| {
             if staged { status::unstage_hunk(r, &path, h) } else { status::stage_hunk(r, &path, h) }
                 .map(|_| OpDone::Staged)
@@ -543,16 +555,22 @@ pub fn diff_pane(ui: &mut egui::Ui, c: &mut Changes) -> bool {
     out.close
 }
 
+/// One of the two file lists (unstaged or staged).
+struct FileList<'a> {
+    title: &'a str,
+    entries: &'a [StatusEntry],
+    staged: bool,
+}
+
 fn file_list(
     ui: &mut egui::Ui,
-    title: &str,
-    entries: &[StatusEntry],
-    staged: bool,
+    list: FileList,
     selected: &Option<(String, bool)>,
     busy: bool,
-    tree: bool,
+    mode: ViewMode,
     act: &mut Option<Act>,
 ) {
+    let FileList { title, entries, staged } = list;
     ui.horizontal(|ui| {
         ui.strong(format!("{title} ({})", entries.len()));
         if !staged {
@@ -609,7 +627,7 @@ fn file_list(
                 *act = Some(Act::Discard(e.path.clone(), e.kind));
             }
             let sel = selected.as_ref().is_some_and(|(p, s)| *p == e.path && *s == staged);
-            let label = ui.selectable_label(sel, name);
+            let label = ui.selectable_label(sel, name).on_hover_text(&e.path);
             if label.clicked() {
                 *act = Some(Act::Select(e.path.clone(), staged));
             }
@@ -618,12 +636,20 @@ fn file_list(
             }
         });
     };
-    if tree {
-        let items: Vec<(&str, usize)> = entries.iter().enumerate().map(|(i, e)| (e.path.as_str(), i)).collect();
-        filetree::show(ui, title, &items, &mut |ui, i, name| row(ui, &entries[i], name));
-    } else {
-        for e in entries {
-            row(ui, e, &e.path);
+    match mode {
+        ViewMode::Tree => {
+            let items: Vec<(&str, usize)> = entries.iter().enumerate().map(|(i, e)| (e.path.as_str(), i)).collect();
+            filetree::show(ui, title, &items, &mut |ui, i, name| row(ui, &entries[i], name));
+        }
+        ViewMode::Path => {
+            for e in entries {
+                row(ui, e, &e.path);
+            }
+        }
+        ViewMode::File => {
+            for e in entries {
+                row(ui, e, filetree::file_name(&e.path));
+            }
         }
     }
 }

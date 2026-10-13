@@ -2,6 +2,31 @@
 
 use eframe::egui;
 
+/// How a list of changed files is displayed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ViewMode {
+    /// Just the file name; the full path appears as a tooltip.
+    #[default]
+    File,
+    /// Full path on every row.
+    Path,
+    /// Collapsible folders.
+    Tree,
+}
+
+/// The Path / Tree / File selector.
+pub fn mode_toggle(ui: &mut egui::Ui, mode: &mut ViewMode) {
+    ui.selectable_value(mode, ViewMode::File, "File")
+        .on_hover_text("Show only file names; hover a file to see its path");
+    ui.selectable_value(mode, ViewMode::Path, "Path").on_hover_text("Show the full path of each file");
+    ui.selectable_value(mode, ViewMode::Tree, "Tree").on_hover_text("Group files into folders");
+}
+
+/// The last component of a path (`src/a/b.rs` -> `b.rs`).
+pub fn file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
 pub enum Node<'a> {
     Dir(String, Vec<Node<'a>>),
     File(&'a str, usize),
@@ -98,6 +123,18 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn file_view_is_the_default() {
+        assert_eq!(ViewMode::default(), ViewMode::File);
+    }
+
+    #[test]
+    fn file_name_is_the_last_component() {
+        assert_eq!(file_name("src/a/b.rs"), "b.rs");
+        assert_eq!(file_name("README"), "README");
+        assert_eq!(file_name("dir/"), "");
     }
 
     #[test]

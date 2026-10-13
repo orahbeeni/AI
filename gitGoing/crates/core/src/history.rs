@@ -65,6 +65,7 @@ pub fn load(path: &Path, mut emit: impl FnMut(LoadEvent) -> bool) {
 }
 
 fn load_inner(path: &Path, emit: &mut impl FnMut(LoadEvent) -> bool) -> Result<(), git2::Error> {
+    crate::gitlog::read(path, "git log --all --topo-order   # plus git for-each-ref for branches, tags and remotes");
     let mut repo = Repository::discover(path)?;
     let info = collect_info(&mut repo)?;
     if !emit(LoadEvent::Info(info)) {
@@ -186,5 +187,72 @@ mod tests {
         assert_eq!(&*rows[0].summary, "second");
         let info = info.unwrap();
         assert!(info.refs.values().flatten().any(|l| l.kind == RefKind::Head));
+    }
+
+    /// Rough speed check on a generated history: `cargo test -p gitgoing-core --release -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn loads_a_large_history_quickly() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        const COMMITS: usize = 50_000;
+        let dir = tempfile::tempdir().unwrap();
+        Command::new("git").arg("-C").arg(dir.path()).args(["init", "-q", "-b", "main"]).status().unwrap();
+        // A branchy history: every 50 commits fork a side branch and merge it back.
+        let mut stream = String::new();
+        let mut mark = 0usize;
+        let mut last_main = 0usize;
+        let mut ts = 1_600_000_000usize;
+        let mut commit = |stream: &mut String, branch: &str, parents: &[usize], mark: &mut usize| -> usize {
+            *mark += 1;
+            ts += 60;
+            stream.push_str(&format!(
+                "commit refs/heads/{branch}\nmark :{mark}\ncommitter T <t@e.com> {ts} +0000\ndata 2\nc\n"
+            ));
+            if let Some((first, rest)) = parents.split_first() {
+                stream.push_str(&format!("from :{first}\n"));
+                for r in rest {
+                    stream.push_str(&format!("merge :{r}\n"));
+                }
+            }
+            stream.push('\n');
+            *mark
+        };
+        for i in 0..COMMITS {
+            let parents: Vec<usize> = if last_main == 0 { vec![] } else { vec![last_main] };
+            last_main = commit(&mut stream, "main", &parents, &mut mark);
+            if i % 50 == 49 {
+                let side = commit(&mut stream, "side", &[last_main], &mut mark);
+                last_main = commit(&mut stream, "main", &[last_main, side], &mut mark);
+            }
+        }
+        let mut child = Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(["fast-import", "--quiet"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(stream.as_bytes()).unwrap();
+        assert!(child.wait().unwrap().success());
+
+        let start = std::time::Instant::now();
+        let mut rows = 0usize;
+        let mut first_batch = None;
+        load(dir.path(), |ev| {
+            if let LoadEvent::Rows(r) = ev {
+                first_batch.get_or_insert(start.elapsed());
+                rows += r.len();
+            }
+            true
+        });
+        let total = start.elapsed();
+        eprintln!(
+            "loaded {rows} commits in {total:?} (first rows after {:?}); {:.1} bytes/row in memory (shallow estimate)",
+            first_batch.unwrap(),
+            std::mem::size_of::<CommitRow>() as f64
+        );
+        assert!(rows >= COMMITS);
+        assert!(total.as_secs() < 30, "loading should stay fast");
     }
 }

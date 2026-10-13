@@ -1,7 +1,7 @@
 //! Bottom panel: commit metadata, changed files, and the selected file's diff.
 
 use crate::diffview::{self, DiffOpts};
-use crate::filetree;
+use crate::filetree::{self, ViewMode};
 use crate::icons;
 use crate::timefmt;
 use eframe::egui::{self, Color32, RichText, Sense};
@@ -23,7 +23,7 @@ pub struct Detail {
     opts: DiffOpts,
     diff_rx: Fetch<FileDiff>,
     diff: Option<Result<FileDiff, String>>,
-    tree: bool,
+    mode: ViewMode,
 }
 
 /// Error types that can be shown to the user as a message.
@@ -50,10 +50,22 @@ pub(crate) fn spawn<T: Send + 'static, E: ErrorText>(
     let (tx, rx) = mpsc::channel();
     let ctx = ctx.clone();
     std::thread::spawn(move || {
-        let _ = tx.send(f().map_err(ErrorText::text));
+        // A panic must not leave the UI waiting forever for a result that never comes.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f().map_err(ErrorText::text)))
+            .unwrap_or_else(|p| Err(format!("internal error: {}", panic_message(&*p))));
+        let _ = tx.send(result);
         ctx.request_repaint();
     });
     rx
+}
+
+/// The text of a caught panic payload.
+pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".to_owned())
 }
 
 impl Detail {
@@ -69,7 +81,7 @@ impl Detail {
             opts: DiffOpts::default(),
             diff_rx: None,
             diff: None,
-            tree: false,
+            mode: ViewMode::default(),
         }
     }
 
@@ -146,20 +158,21 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, d: &mut Detail) -> bool {
             ui.separator();
             ui.horizontal(|ui| {
                 ui.label(format!("{} changed file(s)", c.files.len()));
-                ui.selectable_value(&mut d.tree, false, "Path");
-                ui.selectable_value(&mut d.tree, true, "Tree");
+                filetree::mode_toggle(ui, &mut d.mode);
             });
             let selected = if d.diff_open { d.file } else { None };
-            let d_tree = d.tree;
+            let mode = d.mode;
             let mut row = |ui: &mut egui::Ui, i: usize, name: &str| {
                 let f = &c.files[i];
-                let name = match (&f.old_path, d_tree) {
-                    (Some(o), false) => format!("{o} → {}", f.path),
-                    _ => name.to_owned(),
+                let full = match &f.old_path {
+                    Some(o) => format!("{o} → {}", f.path),
+                    None => f.path.clone(),
                 };
+                // Path view shows the whole (rename) text; the others show `name`.
+                let name = if mode == ViewMode::Path { full.clone() } else { name.to_owned() };
                 ui.horizontal(|ui| {
                     icons::change_badge(ui, f.kind);
-                    if ui.selectable_label(selected == Some(i), name).clicked() {
+                    if ui.selectable_label(selected == Some(i), name).on_hover_text(full).clicked() {
                         pick = Some(i);
                     }
                     if f.binary {
@@ -170,12 +183,20 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, d: &mut Detail) -> bool {
                     }
                 });
             };
-            if d_tree {
-                let items: Vec<(&str, usize)> = c.files.iter().enumerate().map(|(i, f)| (f.path.as_str(), i)).collect();
-                filetree::show(ui, "commit_files", &items, &mut |ui, i, name| row(ui, i, name));
-            } else {
-                for (i, f) in c.files.iter().enumerate() {
-                    row(ui, i, &f.path);
+            match mode {
+                ViewMode::Tree => {
+                    let items: Vec<(&str, usize)> = c.files.iter().enumerate().map(|(i, f)| (f.path.as_str(), i)).collect();
+                    filetree::show(ui, "commit_files", &items, &mut |ui, i, name| row(ui, i, name));
+                }
+                ViewMode::Path => {
+                    for (i, f) in c.files.iter().enumerate() {
+                        row(ui, i, &f.path);
+                    }
+                }
+                ViewMode::File => {
+                    for (i, f) in c.files.iter().enumerate() {
+                        row(ui, i, filetree::file_name(&f.path));
+                    }
                 }
             }
         }
@@ -301,7 +322,18 @@ pub(crate) fn kind_color(k: ChangeKind) -> Color32 {
 
 #[cfg(test)]
 mod tests {
-    use super::split_hash;
+    use super::{panic_message, spawn, split_hash};
+
+    #[test]
+    fn a_panicking_task_still_reports_back() {
+        let ctx = eframe::egui::Context::default();
+        let rx = spawn(&ctx, || -> Result<(), String> { panic!("boom") });
+        let r = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("a result arrives");
+        assert_eq!(r.unwrap_err(), "internal error: boom");
+        let rx = spawn(&ctx, || Ok::<_, String>(7));
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap().unwrap(), 7);
+        assert_eq!(panic_message(&*Box::new(String::from("owned"))), "owned");
+    }
 
     #[test]
     fn finds_hashes_in_text() {

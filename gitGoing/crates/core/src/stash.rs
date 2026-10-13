@@ -22,6 +22,7 @@ pub fn list(repo: &mut Repository) -> Vec<StashEntry> {
 
 /// Stash tracked and untracked changes, leaving a clean working tree.
 pub fn save(repo_path: &Path) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, "git stash push --include-untracked");
     let mut repo = Repository::discover(repo_path)?;
     let sig = repo.signature()?;
     repo.stash_save2(&sig, None, Some(StashFlags::INCLUDE_UNTRACKED))?;
@@ -30,14 +31,17 @@ pub fn save(repo_path: &Path) -> Result<(), git2::Error> {
 
 /// Apply and remove a stash. On conflict the stash is kept.
 pub fn pop(repo_path: &Path, index: usize) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git stash pop stash@{{{}}}", index));
     Repository::discover(repo_path)?.stash_pop(index, None)
 }
 
 pub fn apply(repo_path: &Path, index: usize) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git stash apply stash@{{{}}}", index));
     Repository::discover(repo_path)?.stash_apply(index, None)
 }
 
 pub fn drop(repo_path: &Path, index: usize) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git stash drop stash@{{{}}}", index));
     Repository::discover(repo_path)?.stash_drop(index)
 }
 

@@ -4,7 +4,7 @@
 //! credential helpers, SSH config and agent all work exactly as they do on the
 //! command line (and so we don't have to link OpenSSL/libssh2).
 
-use git2::{BranchType, Repository};
+use git2::{BranchType, Oid, Repository};
 use std::path::Path;
 
 fn run(repo_path: &Path, args: &[&str]) -> Result<(), String> {
@@ -73,12 +73,67 @@ pub fn pull(repo_path: &Path) -> Result<(), String> {
         .find_branch(&name, BranchType::Local)
         .and_then(|b| b.upstream())
         .map_err(|_| format!("'{name}' has no upstream branch; push it first"))?;
+    crate::gitlog::equiv(repo_path, format!("git merge {}", upstream.get().shorthand().unwrap_or("@{u}")));
     match crate::merge::merge_reference(&repo, upstream.get()).map_err(e)? {
         crate::merge::MergeOutcome::Conflicts(n) => Err(format!(
             "Pull stopped: {n} conflicted file(s). Resolve them in Changes, then commit (or abort the merge)."
         )),
         _ => Ok(()),
     }
+}
+
+/// Push the current branch, replacing what is on the remote even if it has
+/// diverged (after amend, squash or rebase). `--force-with-lease` refuses if
+/// the remote branch has moved since it was last fetched, so a teammate's
+/// newer commits are never silently overwritten.
+pub fn force_push(repo_path: &Path) -> Result<(), String> {
+    let repo = Repository::discover(repo_path).map_err(|e| e.message().to_owned())?;
+    let head = repo.head().map_err(|e| e.message().to_owned())?;
+    if !head.is_branch() {
+        return Err("HEAD is detached; check out a branch to push".into());
+    }
+    let branch = head.shorthand().unwrap_or_default().to_owned();
+    let has_upstream = repo
+        .find_branch(&branch, BranchType::Local)
+        .map(|b| b.upstream().is_ok())
+        .unwrap_or(false);
+    if !has_upstream {
+        return Err(format!("'{branch}' has no upstream branch yet; do a normal push first"));
+    }
+    run(repo_path, &["push", "--force-with-lease"])
+}
+
+/// Tip of the current branch's upstream, if it has one.
+fn upstream_tip(repo: &Repository) -> Option<Oid> {
+    let head = repo.head().ok()?;
+    if !head.is_branch() {
+        return None;
+    }
+    let b = repo.find_branch(head.shorthand()?, BranchType::Local).ok()?;
+    b.upstream().ok()?.get().target()
+}
+
+/// Is `id` already on the upstream branch (so rewriting it means a force push)?
+pub fn is_pushed(repo: &Repository, id: Oid) -> bool {
+    upstream_tip(repo).is_some_and(|up| up == id || repo.graph_descendant_of(up, id).unwrap_or(false))
+}
+
+/// How many commits from `from` (inclusive) up to HEAD are already on the
+/// upstream branch. Rewriting history from `from` replaces all of them.
+pub fn pushed_count(repo_path: &Path, from: Oid) -> usize {
+    let Ok(repo) = Repository::discover(repo_path) else { return 0 };
+    if upstream_tip(&repo).is_none() {
+        return 0;
+    }
+    let Ok(mut walk) = repo.revwalk() else { return 0 };
+    let Ok(head) = repo.head().and_then(|h| h.peel_to_commit()) else { return 0 };
+    if walk.push(head.id()).is_err() {
+        return 0;
+    }
+    if let Ok(parent) = repo.find_commit(from).and_then(|c| c.parent_id(0)) {
+        let _ = walk.hide(parent);
+    }
+    walk.flatten().filter(|id| is_pushed(&repo, *id)).count()
 }
 
 /// Push the current branch, publishing it to a remote first if it has no
@@ -124,6 +179,10 @@ mod tests {
         repo.commit(Some("HEAD"), &sig, &sig, name, &tree, &parents).unwrap();
     }
 
+    fn gitcmd_run(path: &Path, args: &[&str]) {
+        crate::gitcmd::run(Some(path), args).unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+    }
+
     #[test]
     fn push_fetch_pull_roundtrip() {
         if crate::gitcmd::run(None, &["--version"]).is_err() {
@@ -148,6 +207,39 @@ mod tests {
         fetch(&b_path).unwrap();
         pull(&b_path).unwrap();
         assert_eq!(b.head().unwrap().peel_to_commit().unwrap().summary(), Some("two"));
+
+        // Rewriting pushed history: a plain push is refused, a force push works,
+        // and the lease stops it overwriting commits we haven't fetched.
+        let b = Repository::open(&b_path).unwrap();
+        let tip = b.head().unwrap().peel_to_commit().unwrap();
+        assert!(is_pushed(&b, tip.id()), "b's tip is on the remote after pulling");
+        assert_eq!(pushed_count(&b_path, tip.id()), 1);
+        {
+            // Rewrite b's last commit (amend) so it diverges from origin.
+            let amended = tip.amend(Some("HEAD"), None, None, None, Some("rewritten"), None).unwrap();
+            assert_ne!(amended, tip.id());
+        }
+        let b = Repository::open(&b_path).unwrap();
+        assert!(!is_pushed(&b, b.head().unwrap().target().unwrap()));
+        let plain = push(&b_path);
+        assert!(plain.is_err(), "non-fast-forward is rejected: {plain:?}");
+        force_push(&b_path).unwrap();
+        let remote = Repository::open_bare(&bare).unwrap();
+        let branch = b.head().unwrap().shorthand().unwrap().to_owned();
+        assert_eq!(
+            remote.find_branch(&branch, BranchType::Local).unwrap().get().peel_to_commit().unwrap().summary(),
+            Some("rewritten")
+        );
+        // Someone else pushes; we have not fetched, so the lease refuses.
+        commit(&a, "teammate");
+        let a_branch = a.head().unwrap().shorthand().unwrap().to_owned();
+        gitcmd_run(&a_path, &["pull", "--rebase"]);
+        gitcmd_run(&a_path, &["push"]);
+        let b = Repository::open(&b_path).unwrap();
+        b.head().unwrap().peel_to_commit().unwrap().amend(Some("HEAD"), None, None, None, Some("again"), None).unwrap();
+        let stale = force_push(&b_path);
+        assert!(stale.is_err(), "lease must refuse when the remote moved: {stale:?}");
+        let _ = a_branch;
 
         // Fast-forward only refuses diverged history; rebase puts local commits on top.
         commit(&a, "ff-test");

@@ -192,7 +192,7 @@ pub fn show(
                 ui.weak("No textual changes.");
             } else {
                 let btn = if opts.file_view || opts.ignore_ws { None } else { h.hunk_btn };
-                let b = body(ui, opts, lines, *truncated, *max_chars, h.title, btn, selectable);
+                let b = body(ui, opts, lines, BodyCfg { title: h.title, truncated: *truncated, max_chars: *max_chars, hunk_btn: btn, selectable });
                 out.hunk = b.0;
                 out.discard_hunk = b.1;
             }
@@ -274,16 +274,23 @@ fn changed_range(a: &str, b: &str) -> Option<(usize, usize)> {
     (end > start && !(start == 0 && end == a.len())).then_some((start, end))
 }
 
+/// What the diff body needs to know beyond the lines themselves.
+struct BodyCfg<'a> {
+    title: &'a str,
+    truncated: bool,
+    max_chars: usize,
+    hunk_btn: Option<HunkBtn>,
+    /// Lines can be ticked for line staging.
+    selectable: bool,
+}
+
 fn body(
     ui: &mut egui::Ui,
     opts: &mut DiffOpts,
     lines: &[DiffLine],
-    truncated: bool,
-    max_chars: usize,
-    title: &str,
-    hunk_btn: Option<HunkBtn>,
-    selectable: bool,
+    cfg: BodyCfg,
 ) -> (Option<usize>, Option<usize>) {
+    let BodyCfg { title, truncated, max_chars, hunk_btn, selectable } = cfg;
     let font = FontId::monospace(13.5);
     let cw = ui.fonts(|f| f.glyph_width(&font, 'M'));
     let row_h = ui.fonts(|f| f.row_height(&font)) + 5.0;
@@ -436,7 +443,7 @@ fn body(
             if selectable && row_resp.clicked() {
                 let left_side = row_resp
                     .interact_pointer_pos()
-                    .map_or(true, |p| !opts.split || p.x < rect.left() + half_w);
+                    .is_none_or(|p| !opts.split || p.x < rect.left() + half_w);
                 let target = if opts.split { if left_side { cells[0] } else { cells[1] } } else { cells[0] };
                 if let Some(k) = target {
                     toggle(&mut opts.selected, k);

@@ -91,6 +91,7 @@ pub fn restore(
     soft: bool,
     require_index_match: bool,
 ) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, "git reset / git checkout   # undo or redo of a recorded action");
     let repo = Repository::discover(repo_path)?;
     let current = snapshot_of(&repo)?;
     if current != *expected {

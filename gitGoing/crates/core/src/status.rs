@@ -22,6 +22,8 @@ pub struct WorkStatus {
     pub operation: Option<&'static str>,
     /// Message of the HEAD commit (used to pre-fill an amend).
     pub head_message: Option<String>,
+    /// The HEAD commit is already on the upstream branch (amending it needs a force push).
+    pub head_pushed: bool,
 }
 
 impl WorkStatus {
@@ -37,15 +39,19 @@ impl WorkStatus {
 }
 
 pub fn status(repo_path: &Path) -> Result<WorkStatus, git2::Error> {
+    crate::gitlog::read(repo_path, "git status --porcelain=v2 --untracked-files=all");
     let repo = Repository::discover(repo_path)?;
     let mut opts = StatusOptions::new();
     opts.include_untracked(true).recurse_untracked_dirs(true).include_ignored(false);
-    let mut out = WorkStatus::default();
-    out.head_message = repo
-        .head()
-        .ok()
-        .and_then(|h| h.peel_to_commit().ok())
-        .and_then(|c| c.message().map(|m| m.trim_end().to_owned()));
+    let mut out = WorkStatus {
+        head_pushed: repo.head().ok().and_then(|h| h.target()).is_some_and(|id| crate::remote::is_pushed(&repo, id)),
+        head_message: repo
+            .head()
+            .ok()
+            .and_then(|h| h.peel_to_commit().ok())
+            .and_then(|c| c.message().map(|m| m.trim_end().to_owned())),
+        ..Default::default()
+    };
     let operation = match repo.state() {
         git2::RepositoryState::Merge => Some("Merge"),
         git2::RepositoryState::CherryPick | git2::RepositoryState::CherryPickSequence => Some("Cherry-pick"),
@@ -90,29 +96,39 @@ pub fn status(repo_path: &Path) -> Result<WorkStatus, git2::Error> {
 }
 
 pub fn stage(repo_path: &Path, paths: &[String]) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git add -- {}", crate::gitlog::paths(paths)));
     let repo = Repository::discover(repo_path)?;
     let workdir = repo
         .workdir()
         .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?
         .to_path_buf();
     let mut index = repo.index()?;
+    // One path failing (a nested repository, say) must not stop the rest from
+    // being staged: keep going, save what worked, then report the first problem.
+    let mut first_error = None;
     for p in paths {
-        if workdir.join(p).symlink_metadata().is_ok() {
-            index.add_path(Path::new(p))?;
+        let result = if workdir.join(p).symlink_metadata().is_ok() {
+            index.add_path(Path::new(p))
         } else {
-            index.remove_path(Path::new(p))?;
+            index.remove_path(Path::new(p))
+        };
+        if let Err(e) = result {
+            first_error.get_or_insert(e);
         }
     }
-    index.write()
+    index.write()?;
+    first_error.map_or(Ok(()), Err)
 }
 
 pub fn unstage(repo_path: &Path, paths: &[String]) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git restore --staged -- {}", crate::gitlog::paths(paths)));
     let repo = Repository::discover(repo_path)?;
     let head = repo.head().ok().and_then(|h| h.peel(ObjectType::Commit).ok());
     repo.reset_default(head.as_ref(), paths.iter().map(Path::new))
 }
 
 pub fn commit(repo_path: &Path, message: &str) -> Result<Oid, git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git commit -m {}", crate::gitlog::quote(message.lines().next().unwrap_or(""))));
     let message = message.trim();
     if message.is_empty() {
         return Err(git2::Error::from_str("commit message is empty"));
@@ -165,6 +181,7 @@ pub fn commit(repo_path: &Path, message: &str) -> Result<Oid, git2::Error> {
 
 /// Stage a single hunk (by index, as numbered in [`workdir_diff`]) of a modified file.
 pub fn stage_hunk(repo_path: &Path, path: &str, hunk: usize) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git apply --cached   # stage hunk {} of {}", hunk + 1, path));
     let repo = Repository::discover(repo_path)?;
     let mut opts = DiffOptions::new();
     opts.pathspec(path).disable_pathspec_match(true);
@@ -174,6 +191,7 @@ pub fn stage_hunk(repo_path: &Path, path: &str, hunk: usize) -> Result<(), git2:
 
 /// Unstage a single hunk (by index, as numbered in the staged diff) of a modified file.
 pub fn unstage_hunk(repo_path: &Path, path: &str, hunk: usize) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git apply --cached -R   # unstage hunk {} of {}", hunk + 1, path));
     let repo = Repository::discover(repo_path)?;
     let head = repo
         .head()
@@ -204,11 +222,13 @@ pub type LineId = (u32, u32);
 
 /// Stage only the selected changed lines of a modified file.
 pub fn stage_lines(repo_path: &Path, path: &str, selected: &[LineId]) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git apply --cached --recount   # stage {} selected line(s) of {}", selected.len(), path));
     edit_index_lines(repo_path, path, selected, true)
 }
 
 /// Unstage only the selected changed lines of a modified file.
 pub fn unstage_lines(repo_path: &Path, path: &str, selected: &[LineId]) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git apply --cached -R --recount   # unstage {} selected line(s) of {}", selected.len(), path));
     edit_index_lines(repo_path, path, selected, false)
 }
 
@@ -267,16 +287,10 @@ fn edit_index_lines(
             let picked = selected.contains(&(h as u32, k as u32));
             match line.origin() {
                 ' ' => out.extend_from_slice(line.content()),
-                o if o == present => {
-                    if !picked {
-                        out.extend_from_slice(line.content());
-                    }
-                }
-                o if o == absent => {
-                    if picked {
-                        out.extend_from_slice(line.content());
-                    }
-                }
+                // A line present in the base stays unless it was picked for removal;
+                // one absent from the base appears only if it was picked.
+                o if o == present && !picked => out.extend_from_slice(line.content()),
+                o if o == absent && picked => out.extend_from_slice(line.content()),
                 _ => {}
             }
         }
@@ -304,6 +318,7 @@ fn safe_relative(path: &str) -> Result<(), git2::Error> {
 /// Throw away unstaged changes to one file: restores it from the index, or
 /// deletes it if it is untracked. This cannot be undone.
 pub fn discard_file(repo_path: &Path, path: &str) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git checkout -- {}   # (an untracked file is deleted instead)", crate::gitlog::quote(path)));
     safe_relative(path)?;
     let repo = Repository::discover(repo_path)?;
     let workdir = repo
@@ -319,21 +334,26 @@ pub fn discard_file(repo_path: &Path, path: &str) -> Result<(), git2::Error> {
         let full = workdir.join(path);
         let meta = std::fs::symlink_metadata(&full).map_err(|e| git2::Error::from_str(&e.to_string()))?;
         if meta.is_dir() {
-            std::fs::remove_dir_all(&full)
-        } else {
-            std::fs::remove_file(&full)
+            // Untracked folders show up when they are nested repositories (or
+            // submodules). Deleting one would destroy its history, so never do it.
+            return Err(git2::Error::from_str(&format!(
+                "'{path}' is a folder (possibly a nested repository); delete it yourself if you really want it gone"
+            )));
         }
-        .map_err(|e| git2::Error::from_str(&e.to_string()))
+        std::fs::remove_file(&full).map_err(|e| git2::Error::from_str(&e.to_string()))
     }
 }
 
 /// Discard every unstaged change (and, if `include_untracked`, delete new files).
 pub fn discard_all(repo_path: &Path, include_untracked: bool) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, if include_untracked { "git checkout -- . && git clean -fd" } else { "git checkout -- ." });
     let st = status(repo_path)?;
     for e in &st.unstaged {
         match e.kind {
             ChangeKind::Untracked if !include_untracked => {}
             ChangeKind::Conflicted => {}
+            // Folders (nested repositories) are left alone rather than aborting the rest.
+            _ if e.path.ends_with('/') => {}
             _ => discard_file(repo_path, &e.path)?,
         }
     }
@@ -342,6 +362,7 @@ pub fn discard_all(repo_path: &Path, include_untracked: bool) -> Result<(), git2
 
 /// Discard one hunk (numbered as in the unstaged diff) from the working tree.
 pub fn discard_hunk(repo_path: &Path, path: &str, hunk: usize) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git apply -R   # discard hunk {} of {}", hunk + 1, path));
     safe_relative(path)?;
     let repo = Repository::discover(repo_path)?;
     let mut opts = DiffOptions::new();
@@ -361,6 +382,7 @@ pub fn discard_hunk(repo_path: &Path, path: &str, hunk: usize) -> Result<(), git
 /// Replace the HEAD commit with one that has the current index as its tree.
 /// The author, parents and (unless `message` is given) message are kept.
 pub fn amend(repo_path: &Path, message: &str) -> Result<Oid, git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git commit --amend -m {}", crate::gitlog::quote(message.lines().next().unwrap_or(""))));
     let message = message.trim();
     if message.is_empty() {
         return Err(git2::Error::from_str("commit message is empty"));
@@ -392,6 +414,7 @@ pub fn workdir_diff(
     staged: bool,
     ignore_ws: bool,
 ) -> Result<FileDiff, git2::Error> {
+    crate::gitlog::read(repo_path, format!("git diff{}{} -- {}", if staged { " --cached" } else { "" }, if ignore_ws { " -w" } else { "" }, crate::gitlog::quote(path)));
     let repo = Repository::discover(repo_path)?;
     let mut opts = DiffOptions::new();
     opts.pathspec(path).disable_pathspec_match(true).ignore_whitespace(ignore_ws);
@@ -556,6 +579,15 @@ mod tests {
         assert!(!p.join("new.txt").exists());
 
         assert!(discard_file(p, "../outside").is_err());
+
+        // A nested repository is an untracked *folder*: it must survive discard-all.
+        let nested = p.join("vendor");
+        Repository::init(&nested).unwrap();
+        std::fs::write(nested.join("keep.txt"), "precious").unwrap();
+        assert!(discard_file(p, "vendor/").is_err());
+        discard_all(p, true).unwrap();
+        assert_eq!(std::fs::read_to_string(nested.join("keep.txt")).unwrap(), "precious");
+        assert!(nested.join(".git").exists());
     }
 
     #[test]
@@ -573,6 +605,15 @@ mod tests {
         assert_eq!(s.unstaged, vec![StatusEntry { path: "a.txt".into(), kind: ChangeKind::Untracked }]);
         assert!(commit(p, "x").is_err(), "nothing staged yet");
 
+        // A nested repository can't be staged as a file; the other paths still are.
+        let nested = p.join("nested");
+        Repository::init(&nested).unwrap();
+        std::fs::write(nested.join("x"), "x").unwrap();
+        assert!(stage(p, &["nested/".into(), "a.txt".into()]).is_err());
+        let s = status(p).unwrap();
+        assert!(s.staged.iter().any(|e| e.path == "a.txt"), "a.txt was staged despite the failing path");
+        std::fs::remove_dir_all(&nested).unwrap();
+        unstage(p, &["a.txt".into()]).unwrap();
         stage(p, &["a.txt".into()]).unwrap();
         let s = status(p).unwrap();
         assert_eq!(s.staged[0].kind, ChangeKind::Added);

@@ -17,12 +17,25 @@ fn checkout_local(repo: &Repository, name: &str) -> Result<(), git2::Error> {
 }
 
 pub fn checkout(repo_path: &Path, name: &str) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git checkout {}", crate::gitlog::quote(name)));
     checkout_local(&Repository::discover(repo_path)?, name)
+}
+
+/// Check out the branch we just created; if that fails (for example local
+/// changes would be overwritten) remove it again, so a failed attempt leaves
+/// nothing behind.
+fn checkout_new(repo: &Repository, name: &str) -> Result<(), git2::Error> {
+    checkout_local(repo, name).inspect_err(|_| {
+        if let Ok(mut b) = repo.find_branch(name, BranchType::Local) {
+            let _ = b.delete();
+        }
+    })
 }
 
 /// Check out `remote/branch` as a local branch, creating it (tracking the
 /// remote) if it doesn't exist yet.
 pub fn checkout_remote(repo_path: &Path, full_name: &str) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git checkout --track {}", crate::gitlog::quote(full_name)));
     let repo = Repository::discover(repo_path)?;
     let local = full_name
         .split_once('/')
@@ -33,12 +46,14 @@ pub fn checkout_remote(repo_path: &Path, full_name: &str) -> Result<(), git2::Er
         let commit = remote.get().peel_to_commit()?;
         let mut b = repo.branch(local, &commit, false)?;
         b.set_upstream(Some(full_name))?;
+        return checkout_new(&repo, local);
     }
     checkout_local(&repo, local)
 }
 
 /// Create a branch at HEAD and check it out.
 pub fn create_and_checkout(repo_path: &Path, name: &str) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git checkout -b {}", crate::gitlog::quote(name.trim())));
     let name = name.trim();
     if !Branch::name_is_valid(name)? {
         return Err(err(format!("'{name}' is not a valid branch name")));
@@ -50,11 +65,12 @@ pub fn create_and_checkout(repo_path: &Path, name: &str) -> Result<(), git2::Err
         .and_then(|h| h.peel_to_commit())
         .map_err(|_| err("cannot create a branch before the first commit"))?;
     repo.branch(name, &head, false)?;
-    checkout_local(&repo, name)
+    checkout_new(&repo, name)
 }
 
 /// Create a branch at an arbitrary commit, optionally checking it out.
 pub fn create_at(repo_path: &Path, name: &str, id: git2::Oid, checkout: bool) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git branch {} {}{}", crate::gitlog::quote(name.trim()), id, if checkout { " && git checkout " } else { "" }));
     let name = name.trim();
     if !Branch::name_is_valid(name)? {
         return Err(err(format!("'{name}' is not a valid branch name")));
@@ -63,12 +79,13 @@ pub fn create_at(repo_path: &Path, name: &str, id: git2::Oid, checkout: bool) ->
     crate::merge::ensure_clean_state(&repo)?;
     repo.branch(name, &repo.find_commit(id)?, false)?;
     if checkout {
-        checkout_local(&repo, name)?;
+        checkout_new(&repo, name)?;
     }
     Ok(())
 }
 
 pub fn delete(repo_path: &Path, name: &str) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(repo_path, format!("git branch -D {}", crate::gitlog::quote(name)));
     let repo = Repository::discover(repo_path)?;
     let mut b = repo.find_branch(name, BranchType::Local)?;
     if b.is_head() {
@@ -102,5 +119,32 @@ mod tests {
         checkout(p, &first).unwrap();
         delete(p, "feature").unwrap();
         assert!(repo.find_branch("feature", BranchType::Local).is_err());
+    }
+
+    #[test]
+    fn failed_checkout_leaves_no_new_branch_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        let repo = Repository::init(p).unwrap();
+        let sig = git2::Signature::now("T", "t@example.com").unwrap();
+        let commit = |content: &str, parents: &[&git2::Commit], update: Option<&str>| {
+            std::fs::write(p.join("a"), content).unwrap();
+            let mut idx = repo.index().unwrap();
+            idx.add_path(Path::new("a")).unwrap();
+            idx.write().unwrap();
+            let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
+            repo.commit(update, &sig, &sig, content, &tree, parents).unwrap()
+        };
+        let first = commit("1", &[], Some("HEAD"));
+        let first = repo.find_commit(first).unwrap();
+        // A commit that changes `a`, not on any branch yet.
+        let second = commit("2", &[&first], None);
+        std::fs::write(p.join("a"), "1").unwrap();
+        // Uncommitted edit to the same file: checking out `second` would clobber it.
+        std::fs::write(p.join("a"), "my local edit").unwrap();
+
+        assert!(create_at(p, "new-branch", second, true).is_err());
+        assert!(repo.find_branch("new-branch", BranchType::Local).is_err(), "failed attempt cleaned up");
+        assert_eq!(std::fs::read_to_string(p.join("a")).unwrap(), "my local edit", "work untouched");
     }
 }

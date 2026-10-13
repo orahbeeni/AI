@@ -9,6 +9,12 @@
 use git2::Repository;
 use similar::{Algorithm, DiffOp};
 use std::path::Path;
+use std::time::{Duration, Instant};
+
+/// Longest we spend diffing one pair of versions of a file.
+const DIFF_BUDGET: Duration = Duration::from_secs(2);
+/// Largest version of a file the conflict editor will load.
+const MAX_EDITABLE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Region {
@@ -27,7 +33,10 @@ pub enum Side {
 /// For each base line, the index of the line it matches in `other` (if any).
 fn matches(base: &[String], other: &[String]) -> Vec<Option<usize>> {
     let mut m = vec![None; base.len()];
-    for op in similar::capture_diff_slices(Algorithm::Myers, base, other) {
+    // Bounded: a pathological pair of files falls back to a coarser diff
+    // (bigger conflict blocks) instead of hanging the app.
+    let deadline = Instant::now() + DIFF_BUDGET;
+    for op in similar::capture_diff_slices_deadline(Algorithm::Myers, base, other, Some(deadline)) {
         if let DiffOp::Equal { old_index, new_index, len } = op {
             for k in 0..len {
                 m[old_index + k] = Some(new_index + k);
@@ -304,6 +313,7 @@ fn labels(repo: &Repository) -> (String, String) {
 }
 
 pub fn load(repo_path: &Path, path: &str) -> Result<ConflictFile, String> {
+    crate::gitlog::read(repo_path, format!("git show :1:{p} :2:{p} :3:{p}   # base, ours, theirs", p = crate::gitlog::quote(path)));
     let e = |e: git2::Error| e.message().to_owned();
     let repo = Repository::discover(repo_path).map_err(e)?;
     let index = repo.index().map_err(e)?;
@@ -333,6 +343,12 @@ pub fn load(repo_path: &Path, path: &str) -> Result<ConflictFile, String> {
         file.kind = Kind::Binary;
         return Ok(file);
     }
+    if [&ours, &theirs, &base].iter().any(|b| b.len() > MAX_EDITABLE_BYTES) {
+        return Err(format!(
+            "'{path}' is larger than {} MB; resolve it in your editor, or take ours or theirs",
+            MAX_EDITABLE_BYTES / (1024 * 1024)
+        ));
+    }
     let (o, o_crlf, o_nl) = split_lines(&String::from_utf8_lossy(&ours));
     let (t, _, _) = split_lines(&String::from_utf8_lossy(&theirs));
     let (b, _, _) = split_lines(&String::from_utf8_lossy(&base));
@@ -344,6 +360,7 @@ pub fn load(repo_path: &Path, path: &str) -> Result<ConflictFile, String> {
 
 /// Write the resolved content into the working tree and mark the file resolved.
 pub fn write_resolution(repo_path: &Path, path: &str, content: &str) -> Result<(), String> {
+    crate::gitlog::equiv(repo_path, format!("git add -- {}   # after writing the resolved file", crate::gitlog::quote(path)));
     let e = |e: git2::Error| e.message().to_owned();
     let repo = Repository::discover(repo_path).map_err(e)?;
     let workdir = repo.workdir().ok_or("repository has no working directory")?.to_path_buf();

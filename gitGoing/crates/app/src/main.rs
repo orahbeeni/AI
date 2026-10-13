@@ -3,6 +3,7 @@ mod askpass;
 mod changes;
 mod clonedlg;
 mod conflictwin;
+mod consolewin;
 mod detail;
 mod diffview;
 mod filetree;
@@ -41,6 +42,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "gitgoing",
         options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(cc, initial, resolve.clone())))),
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, initial, resolve.clone(), args.iter().any(|a| a == "--console"))))),
     )
 }

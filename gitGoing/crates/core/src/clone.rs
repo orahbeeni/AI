@@ -25,6 +25,7 @@ pub fn clone(url: &str, dest: &Path) -> Result<(), String> {
 
 /// Create a repository in `path` (creating the folder if needed).
 pub fn init(path: &Path) -> Result<(), git2::Error> {
+    crate::gitlog::equiv(path, format!("git init {}", crate::gitlog::quote(&path.to_string_lossy())));
     std::fs::create_dir_all(path).map_err(|e| git2::Error::from_str(&e.to_string()))?;
     git2::Repository::init(path).map(|_| ())
 }
