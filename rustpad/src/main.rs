@@ -25,37 +25,14 @@ mod util;
 
 use eframe::egui;
 
-/// A small procedurally drawn window icon (a notepad page with text lines).
+/// The window / task-bar icon: the RustPad mascot, embedded as a PNG.
 fn icon() -> egui::IconData {
-    let n = 64usize;
-    let mut rgba = vec![0u8; n * n * 4];
-    for y in 0..n {
-        for x in 0..n {
-            let i = (y * n + x) * 4;
-            let inside = x >= 8 && x < 56 && y >= 4 && y < 60;
-            if !inside {
-                continue;
-            }
-            let corner = (x < 11 || x >= 53) && (y < 7 || y >= 57);
-            if corner {
-                continue;
-            }
-            let header = y < 16;
-            let line = y >= 22 && (y - 22) % 9 < 3 && y < 56 && x >= 14 && x < 50 - (((y - 22) / 9) as usize % 3) * 8;
-            let (r, g, b) = if header {
-                (0xd9, 0x6a, 0x1a)
-            } else if line {
-                (0x55, 0x5f, 0x70)
-            } else {
-                (0xf7, 0xf7, 0xf2)
-            };
-            rgba[i] = r;
-            rgba[i + 1] = g;
-            rgba[i + 2] = b;
-            rgba[i + 3] = 255;
-        }
-    }
-    egui::IconData { rgba, width: n as u32, height: n as u32 }
+    let decoder = png::Decoder::new(std::io::Cursor::new(include_bytes!("../assets/app_icon.png").as_slice()));
+    let mut reader = decoder.read_info().expect("embedded icon is a valid PNG");
+    let mut buf = vec![0; reader.output_buffer_size().expect("icon size")];
+    let info = reader.next_frame(&mut buf).expect("embedded icon decodes");
+    buf.truncate(info.buffer_size());
+    egui::IconData { rgba: buf, width: info.width, height: info.height }
 }
 
 fn main() -> eframe::Result {
@@ -76,6 +53,7 @@ fn main() -> eframe::Result {
         .with_inner_size(size)
         .with_min_inner_size([480.0, 320.0])
         .with_title("RustPad")
+        .with_app_id("rustpad")
         .with_icon(icon())
         .with_drag_and_drop(true);
     if let Some(p) = settings.window_pos {

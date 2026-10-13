@@ -102,7 +102,7 @@ fn commit_diff<'r>(
     Ok(diff)
 }
 
-fn kind_of(d: Delta) -> ChangeKind {
+pub(crate) fn kind_of(d: Delta) -> ChangeKind {
     match d {
         Delta::Added => ChangeKind::Added,
         Delta::Modified | Delta::Typechange => ChangeKind::Modified,

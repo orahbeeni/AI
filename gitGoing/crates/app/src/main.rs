@@ -3,6 +3,7 @@ mod assets;
 mod askpass;
 mod changes;
 mod clonedlg;
+mod comparewin;
 mod conflictwin;
 mod consolewin;
 mod detail;
@@ -47,6 +48,8 @@ fn main() -> eframe::Result {
     let geom = startup::load_geom();
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title("gitgoing")
+        // Wayland app_id / X11 class: lets the shell match the window to gitgoing.desktop
+        .with_app_id("gitgoing")
         .with_icon(assets::window_icon());
     if intro {
         viewport = viewport

@@ -3,6 +3,7 @@
 pub mod branches;
 pub mod clone;
 pub mod commit_ops;
+pub mod compare;
 pub mod config;
 pub mod conflict;
 pub mod gitcmd;

@@ -14,6 +14,8 @@ pub enum SidebarAction {
     Delete(String),
     Merge(String),
     RebaseOnto(String),
+    /// Compare the checked-out branch with this one (full reference name, short name).
+    Compare(String, String),
     DeleteTag(String),
     AddRemote,
     EditRemote(String),
@@ -278,6 +280,10 @@ impl Sidebar {
                             }
                             if ui.button("Rebase current branch onto this").clicked() {
                                 act = Some(SidebarAction::RebaseOnto(full.clone()));
+                                ui.close_menu();
+                            }
+                            if ui.button("Compare with current branch…").clicked() {
+                                act = Some(SidebarAction::Compare(full_ref.clone(), full.clone()));
                                 ui.close_menu();
                             }
                             ui.separator();
@@ -648,6 +654,10 @@ fn local_branch_row(
         }
         if ui.add_enabled(!current, egui::Button::new("Rebase current branch onto this")).clicked() {
             *act = Some(SidebarAction::RebaseOnto(full.to_owned()));
+            ui.close_menu();
+        }
+        if ui.add_enabled(!current, egui::Button::new("Compare with current branch…")).clicked() {
+            *act = Some(SidebarAction::Compare(format!("refs/heads/{full}"), full.to_owned()));
             ui.close_menu();
         }
         if ui.button("Set upstream…").clicked() {

@@ -1,6 +1,7 @@
 use crate::assets::{self, Assets};
 use crate::changes::{self, Changes};
 use crate::clonedlg;
+use crate::comparewin::CompareWin;
 use crate::conflictwin::{self, ConflictEditor};
 use crate::consolewin::Console;
 use crate::settings::{Settings, SettingsWindow};
@@ -369,6 +370,7 @@ pub struct RepoTab {
     /// The previous sidebar, whose filter and layout the next one inherits.
     carry_sidebar: Option<Sidebar>,
     conflict: Option<ConflictEditor>,
+    compare: Option<CompareWin>,
     confirm: Option<Confirm>,
     undo: Vec<UndoEntry>,
     redo: Vec<UndoEntry>,
@@ -410,6 +412,7 @@ impl RepoTab {
             edit: None,
             file_bg: Vec::new(),
             conflict: None,
+            compare: None,
             confirm: None,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -912,6 +915,14 @@ impl RepoTab {
                         MergeOutcome::FastForward | MergeOutcome::Merged => Ok(()),
                     }
                 }),
+                Some(SidebarAction::Compare(other_ref, other)) => {
+                    let head = self.repo.as_ref().and_then(|l| l.info.as_ref()).and_then(|i| i.head_branch.clone());
+                    let (base_ref, base) = match head {
+                        Some(h) => (format!("refs/heads/{h}"), h),
+                        None => ("HEAD".to_owned(), "HEAD".to_owned()),
+                    };
+                    self.compare = Some(CompareWin::new(self.path.clone(), base_ref, base, other_ref, other));
+                }
                 Some(SidebarAction::RebaseOnto(n)) => self.run_op(ctx, "Rebase", move |p| rebase_outcome(rebase::rebase_onto(p, &n))),
                 Some(SidebarAction::SetHidden(names, hide)) => {
                     let head_full = self
@@ -1059,6 +1070,13 @@ impl RepoTab {
                     }
                     self.notice = Some(("File resolved and staged".to_owned(), false));
                 }
+            }
+        }
+
+        // So is the branch compare window.
+        if let Some(w) = &mut self.compare {
+            if !w.show(ctx) {
+                self.compare = None;
             }
         }
 
