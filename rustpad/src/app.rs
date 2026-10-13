@@ -996,13 +996,10 @@ impl App {
                 self.play_macro(ctx, &steps, 1);
             }
             Cmd::OpenUtils => {
-                if cfg!(any(target_os = "macos", target_os = "windows")) {
-                    if self.open_path(Path::new(UTILS_HTML)) {
-                        let i = self.active;
-                        self.tabs[i].html_view = true;
-                    }
-                } else {
-                    open_with_default(UTILS_HTML);
+                let utils = utils_html_path();
+                if self.open_path(&utils) {
+                    let i = self.active;
+                    self.tabs[i].html_view = true;
                 }
             }
             Cmd::MacroRunMultiple => self.dialogs.macro_run_open = true,
@@ -1637,7 +1634,14 @@ pub fn reveal_in_file_manager(path: &Path) {
 }
 
 /// Page opened (rendered, in the default browser) by the toolbar "Utils" button.
-const UTILS_HTML: &str = "/Users/omar/Documents/private/dev/AI/utils/utils.html";
+const UTILS_HTML: &str = include_str!("../assets/utils.html");
+
+/// Writes the embedded Utils page to the temp dir and returns its path.
+fn utils_html_path() -> std::path::PathBuf {
+    let path = std::env::temp_dir().join("rustpad-utils.html");
+    let _ = std::fs::write(&path, UTILS_HTML);
+    path
+}
 
 pub fn open_with_default(target: &str) {
     #[cfg(target_os = "windows")]
@@ -1650,7 +1654,13 @@ pub fn open_with_default(target: &str) {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let _ = std::process::Command::new("xdg-open").arg(target).spawn();
+        // Silence the browser's own stderr (Chromium zygote noise) so it doesn't spill into our terminal.
+        let _ = std::process::Command::new("xdg-open")
+            .arg(target)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
     }
 }
 

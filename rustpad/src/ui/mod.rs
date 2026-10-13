@@ -116,6 +116,13 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let started = std::time::Instant::now();
         self.webview_rect = None;
+        #[cfg(target_os = "linux")]
+        if self.webview.is_some() {
+            while gtk::events_pending() {
+                gtk::main_iteration_do(false);
+            }
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+        }
         self.ui_inner(ui);
         self.sync_webview(frame, ui.ctx().pixels_per_point());
         if let Some(th) = std::env::var("RP_TRACE").ok().and_then(|v| v.parse::<f64>().ok().or(Some(25.0))) {
@@ -149,10 +156,21 @@ impl App {
         let url = self.tabs[self.active.min(self.tabs.len() - 1)].path.as_ref().map(|p| format!("file://{}", p.display())).unwrap_or_default();
         if self.webview.is_none() || self.webview_url != url {
             self.webview = None;
+            #[cfg(target_os = "linux")]
+            if gtk::init().is_err() {
+                self.set_status("Cannot create web view: GTK init failed".to_string());
+                let i = self.active.min(self.tabs.len() - 1);
+                self.tabs[i].html_view = false;
+                return;
+            }
             match wry::WebViewBuilder::new().with_url(&url).build_as_child(frame) {
                 Ok(w) => self.webview = Some(w),
                 Err(e) => {
                     self.set_status(format!("Cannot create web view: {e}"));
+                    #[cfg(target_os = "linux")]
+                    if let Some(p) = &self.tabs[self.active.min(self.tabs.len() - 1)].path {
+                        crate::app::open_with_default(&p.to_string_lossy());
+                    }
                     let i = self.active.min(self.tabs.len() - 1);
                     self.tabs[i].html_view = false;
                     return;

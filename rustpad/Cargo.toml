@@ -36,6 +36,10 @@ unicode-width = "0.2.2"
 walkdir = "2.5.0"
 wry = "0.57.0"
 
+# wry's WebKitGTK backend needs GTK initialised and pumped alongside the winit loop.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
 # An editor is unusable unoptimised: keep plain `cargo run` fast too.
 [profile.dev]
 opt-level = 2

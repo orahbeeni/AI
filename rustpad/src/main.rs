@@ -59,6 +59,16 @@ fn icon() -> egui::IconData {
 }
 
 fn main() -> eframe::Result {
+    // The embedded web view (wry) can only attach as a child window under X11, so on Linux run through
+    // XWayland when a Wayland session also offers an X display.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("DISPLAY").is_some() && std::env::var_os("RUSTPAD_WAYLAND").is_none() {
+        // SAFETY: nothing else has started yet, so no other thread can be reading the environment.
+        unsafe {
+            std::env::remove_var("WAYLAND_DISPLAY");
+            std::env::set_var("GDK_BACKEND", "x11");
+        }
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let settings = settings::Settings::load();
     let size = settings.window_size.unwrap_or([1100.0, 720.0]);

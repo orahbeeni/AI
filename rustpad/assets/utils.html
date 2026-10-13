@@ -1,0 +1,962 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dev Utils</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --text:#1c2230; --muted:#667085; --border:#d9dde5; --accent:#2f6fed; --accent-text:#fff; --err:#d92d3a; --ok:#12a150; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151c; --card:#1b1f29; --text:#e8ebf2; --muted:#98a2b3; --border:#2d3342; --accent:#5b8cff; --accent-text:#0b1020; --err:#ff6b75; --ok:#3ccf7e; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px 16px; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,sans-serif; }
+  main { max-width:860px; margin:0 auto; display:grid; gap:18px; }
+  h1 { font-size:22px; margin:0; }
+  h2 { font-size:16px; margin:0 0 14px; }
+  nav { display:flex; gap:4px; border-bottom:1px solid var(--border); }
+  nav button { background:none; color:var(--muted); border:0; border-bottom:2px solid transparent; border-radius:0; padding:10px 16px; margin-bottom:-1px; font-weight:600; }
+  nav button[aria-selected=true] { color:var(--accent); border-bottom-color:var(--accent); }
+  .panel[hidden] { display:none; }
+  .panel { display:grid; gap:20px; }
+  section { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:20px; }
+  .row { display:flex; flex-wrap:wrap; gap:12px 20px; align-items:center; margin-bottom:14px; }
+  .row:last-child { margin-bottom:0; }
+  label { display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
+  input[type=number], input[type=text], select { background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:5px 8px; font:inherit; }
+  input[type=number] { width:72px; }
+  input[type=range] { flex:1; min-width:140px; }
+  textarea { width:100%; min-height:160px; resize:vertical; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:10px 12px; font:13px/1.45 ui-monospace,Menlo,Consolas,monospace; tab-size:2; }
+  button { background:var(--accent); color:var(--accent-text); border:0; border-radius:8px; padding:8px 16px; font:inherit; font-weight:600; cursor:pointer; }
+  button.secondary { background:transparent; color:var(--text); border:1px solid var(--border); }
+  .out { display:flex; gap:8px; align-items:stretch; margin-bottom:8px; }
+  .val { flex:1; min-width:0; font:15px/1.4 ui-monospace,Menlo,Consolas,monospace; background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:9px 12px; word-break:break-all; user-select:all; }
+  .meter { height:6px; border-radius:3px; background:var(--border); overflow:hidden; margin:4px 0 6px; }
+  .meter > div { height:100%; width:0; transition:width .2s, background .2s; }
+  .hint { color:var(--muted); font-size:13px; }
+  .status { font-size:13px; min-height:20px; }
+  .status.err { color:var(--err); } .status.ok { color:var(--ok); }
+  .list { display:grid; gap:6px; margin-top:12px; }
+  .drop { border:2px dashed var(--border); border-radius:10px; padding:22px; text-align:center; color:var(--muted); }
+  .drop.over { border-color:var(--accent); color:var(--accent); }
+  .preview { max-width:100%; max-height:300px; border:1px solid var(--border); border-radius:8px; margin-top:12px; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:640px) { .cols { grid-template-columns:1fr; } }
+  nav { flex-wrap:wrap; }
+  nav button { padding:10px 12px; }
+  table.kv { width:100%; border-collapse:collapse; font-size:14px; }
+  .kv td, .kv th { text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); vertical-align:top; word-break:break-all; }
+  .kv td:first-child, .kv th:first-child { color:var(--muted); white-space:nowrap; width:1%; }
+  .kv td.mono, .mono { font-family:ui-monospace,Menlo,Consolas,monospace; }
+  .kv button { padding:2px 10px; font-size:12px; }
+  .hl { white-space:pre-wrap; word-break:break-word; font:13px/1.5 ui-monospace,Menlo,Consolas,monospace; background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:10px 12px; min-height:80px; max-height:320px; overflow:auto; }
+  mark { background:color-mix(in srgb, var(--accent) 35%, transparent); color:inherit; border-radius:3px; }
+  .diff { font:13px/1.5 ui-monospace,Menlo,Consolas,monospace; border:1px solid var(--border); border-radius:8px; overflow:auto; max-height:520px; margin-top:12px; }
+  .diff > div { display:flex; gap:8px; padding:0 8px; white-space:pre-wrap; word-break:break-all; }
+  .diff .ln { color:var(--muted); width:3em; flex:none; text-align:right; user-select:none; }
+  .diff .sg { width:1em; flex:none; user-select:none; }
+  .diff .add { background:color-mix(in srgb, var(--ok) 20%, transparent); }
+  .diff .del { background:color-mix(in srgb, var(--err) 20%, transparent); }
+  .diff .gap { color:var(--muted); justify-content:center; background:var(--bg); }
+  .swatch { width:100%; height:90px; border-radius:10px; border:1px solid var(--border); }
+  .shades { display:flex; gap:4px; margin-top:12px; }
+  .shades div { flex:1; height:34px; border-radius:6px; border:1px solid var(--border); cursor:pointer; }
+  input[type=text].wide { flex:1; min-width:200px; font-family:ui-monospace,Menlo,Consolas,monospace; }
+  input[type=color] { width:44px; height:34px; padding:0; border:1px solid var(--border); border-radius:6px; background:none; cursor:pointer; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Dev Utils</h1>
+  <nav role="tablist">
+    <button role="tab" data-tab="gen" aria-selected="true">Generators</button>
+    <button role="tab" data-tab="b64" aria-selected="false">Base64</button>
+    <button role="tab" data-tab="fmt" aria-selected="false">Formatter</button>
+    <button role="tab" data-tab="enc" aria-selected="false">URL / HTML</button>
+    <button role="tab" data-tab="time" aria-selected="false">Timestamp</button>
+    <button role="tab" data-tab="diff" aria-selected="false">Diff</button>
+    <button role="tab" data-tab="rx" aria-selected="false">Regex</button>
+    <button role="tab" data-tab="color" aria-selected="false">Colour</button>
+    <button role="tab" data-tab="fake" aria-selected="false">Fake data</button>
+  </nav>
+
+  <!-- ================= TAB 1: GENERATORS ================= -->
+  <div class="panel" id="tab-gen" role="tabpanel">
+    <section>
+      <h2>Password</h2>
+      <div class="row">
+        <label>Length <input type="range" id="len" min="4" max="128" value="20"> <input type="number" id="lenNum" min="4" max="128" value="20"></label>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="lower" checked> a–z</label>
+        <label><input type="checkbox" id="upper" checked> A–Z</label>
+        <label><input type="checkbox" id="digits" checked> 0–9</label>
+        <label><input type="checkbox" id="symbols" checked> Symbols</label>
+        <label><input type="checkbox" id="ambig"> Exclude look-alikes (O0Il1)</label>
+      </div>
+      <div class="out">
+        <div class="val" id="pw"></div>
+        <button class="secondary" id="copyPw">Copy</button>
+        <button id="genPw">Generate</button>
+      </div>
+      <div class="meter"><div id="bar"></div></div>
+      <div class="hint" id="entropy"></div>
+    </section>
+
+    <section>
+      <h2>GUID / UUID</h2>
+      <div class="row">
+        <label>Version
+          <select id="ver"><option value="4">v4 (random)</option><option value="7">v7 (time-ordered)</option></select>
+        </label>
+        <label>Count <input type="number" id="count" min="1" max="100" value="1"></label>
+        <label><input type="checkbox" id="upGuid"> Uppercase</label>
+        <label><input type="checkbox" id="braces"> Braces</label>
+        <label><input type="checkbox" id="nodash"> No dashes</label>
+      </div>
+      <div class="row">
+        <button id="genGuid">Generate</button>
+        <button class="secondary" id="copyAll">Copy all</button>
+      </div>
+      <div class="list" id="guids"></div>
+    </section>
+    <div class="hint">Generated locally with <code>crypto.getRandomValues</code>. Nothing leaves your browser.</div>
+  </div>
+
+  <!-- ================= TAB 2: BASE64 ================= -->
+  <div class="panel" id="tab-b64" role="tabpanel" hidden>
+    <section>
+      <h2>Text</h2>
+      <div class="row">
+        <button id="tEnc">Encode →</button>
+        <button id="tDec">← Decode</button>
+        <label><input type="checkbox" id="urlSafe"> URL-safe (<code>-_</code>, no padding)</label>
+        <button class="secondary" id="tSwap">Swap</button>
+      </div>
+      <div class="cols">
+        <div><div class="hint">Text</div><textarea id="tPlain" spellcheck="false"></textarea></div>
+        <div><div class="hint">Base64</div><textarea id="tB64" spellcheck="false"></textarea></div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="secondary" data-copy="tPlain">Copy text</button>
+        <button class="secondary" data-copy="tB64">Copy Base64</button>
+        <span class="status" id="tStatus"></span>
+      </div>
+    </section>
+
+    <section>
+      <h2>File / image → Base64</h2>
+      <div class="drop" id="drop">Drop any file here or <label style="color:var(--accent);text-decoration:underline">browse<input type="file" id="fileIn" hidden></label></div>
+      <div class="row" style="margin-top:14px">
+        <label><input type="checkbox" id="asDataUri" checked> Include data URI prefix</label>
+        <button class="secondary" data-copy="fOut">Copy</button>
+        <button class="secondary" id="fSave">Save as .txt</button>
+        <span class="status" id="fStatus"></span>
+      </div>
+      <textarea id="fOut" spellcheck="false" readonly placeholder="Base64 output appears here"></textarea>
+    </section>
+
+    <section>
+      <h2>Base64 → file / image</h2>
+      <textarea id="dIn" spellcheck="false" placeholder="Paste Base64 or a data: URI"></textarea>
+      <div class="row" style="margin-top:12px">
+        <label>File name <input type="text" id="dName" placeholder="auto"></label>
+        <button id="dGo">Decode &amp; preview</button>
+        <button class="secondary" id="dSave" disabled>Download</button>
+        <span class="status" id="dStatus"></span>
+      </div>
+      <div id="dPreview"></div>
+    </section>
+  </div>
+
+  <!-- ================= TAB 3: FORMATTER ================= -->
+  <div class="panel" id="tab-fmt" role="tabpanel" hidden>
+    <section>
+      <div class="row">
+        <label>Language
+          <select id="lang">
+            <option value="json">JSON</option>
+            <option value="xml">XML</option>
+            <option value="html">HTML</option>
+            <option value="css">CSS</option>
+          </select>
+        </label>
+        <label>Indent
+          <select id="indent"><option value="2">2 spaces</option><option value="4">4 spaces</option><option value="tab">Tab</option></select>
+        </label>
+        <label id="sortWrap"><input type="checkbox" id="sortKeys"> Sort keys</label>
+      </div>
+      <div class="row">
+        <button id="fmtBtn">Format</button>
+        <button class="secondary" id="minBtn">Minify</button>
+        <button class="secondary" id="fmtCopy">Copy result</button>
+        <button class="secondary" id="fmtMove">Result → input</button>
+        <span class="status" id="fmtStatus"></span>
+      </div>
+      <div class="cols">
+        <div><div class="hint">Input</div><textarea id="fmtIn" spellcheck="false" style="min-height:360px"></textarea></div>
+        <div><div class="hint">Output</div><textarea id="fmtOut" spellcheck="false" readonly style="min-height:360px"></textarea></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ================= TAB 4: URL / HTML ================= -->
+  <div class="panel" id="tab-enc" role="tabpanel" hidden>
+    <section>
+      <h2>URL encode / decode</h2>
+      <div class="row">
+        <button data-op="urlEnc" data-in="uIn" data-out="uOut" data-status="uStatus">Encode component</button>
+        <button data-op="urlEncUri" data-in="uIn" data-out="uOut" data-status="uStatus">Encode full URL</button>
+        <button data-op="urlDec" data-in="uIn" data-out="uOut" data-status="uStatus">Decode</button>
+        <label><input type="checkbox" id="urlPlus"> Use <code>+</code> for spaces</label>
+      </div>
+      <div class="cols">
+        <div><div class="hint">Input</div><textarea id="uIn" spellcheck="false"></textarea></div>
+        <div><div class="hint">Output</div><textarea id="uOut" spellcheck="false" readonly></textarea></div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="secondary" data-copy="uOut">Copy output</button>
+        <button class="secondary" data-move="uOut" data-to="uIn">Output → input</button>
+        <span class="status" id="uStatus"></span>
+      </div>
+    </section>
+
+    <section>
+      <h2>HTML entities</h2>
+      <div class="row">
+        <button data-op="htmlEsc" data-in="hIn" data-out="hOut" data-status="hStatus">Escape</button>
+        <button data-op="htmlEscAll" data-in="hIn" data-out="hOut" data-status="hStatus">Escape + non-ASCII</button>
+        <button data-op="htmlUnesc" data-in="hIn" data-out="hOut" data-status="hStatus">Unescape</button>
+      </div>
+      <div class="cols">
+        <div><div class="hint">Input</div><textarea id="hIn" spellcheck="false"></textarea></div>
+        <div><div class="hint">Output</div><textarea id="hOut" spellcheck="false" readonly></textarea></div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="secondary" data-copy="hOut">Copy output</button>
+        <button class="secondary" data-move="hOut" data-to="hIn">Output → input</button>
+        <span class="status" id="hStatus"></span>
+      </div>
+    </section>
+
+    <section>
+      <h2>URL / query string parser</h2>
+      <textarea id="qIn" spellcheck="false" style="min-height:70px" placeholder="https://example.com/path?a=1&amp;b=hello%20world#top   — or just   a=1&amp;b=2"></textarea>
+      <table class="kv" style="margin-top:12px"><tbody id="qOut"></tbody></table>
+    </section>
+  </div>
+
+  <!-- ================= TAB 5: TIMESTAMP ================= -->
+  <div class="panel" id="tab-time" role="tabpanel" hidden>
+    <section>
+      <div class="row">
+        <input type="text" class="wide" id="tsIn" placeholder="Unix seconds / ms, ISO 8601, or any date string" spellcheck="false">
+        <button id="tsNow">Now</button>
+      </div>
+      <div class="row">
+        <label>Time zone <input type="text" id="tsZone" placeholder="local (e.g. America/New_York)" spellcheck="false" style="width:240px"></label>
+        <span class="hint" id="tsLive"></span>
+      </div>
+      <div class="status" id="tsStatus"></div>
+      <table class="kv"><tbody id="tsOut"></tbody></table>
+      <div class="hint" style="margin-top:10px">Plain numbers below 100,000,000,000 are read as seconds, larger ones as milliseconds.</div>
+    </section>
+  </div>
+
+  <!-- ================= TAB 6: DIFF ================= -->
+  <div class="panel" id="tab-diff" role="tabpanel" hidden>
+    <section>
+      <div class="cols">
+        <div><div class="hint">Original</div><textarea id="dfA" spellcheck="false" style="min-height:220px"></textarea></div>
+        <div><div class="hint">Changed</div><textarea id="dfB" spellcheck="false" style="min-height:220px"></textarea></div>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button id="dfGo">Compare</button>
+        <label><input type="checkbox" id="dfWs"> Ignore whitespace</label>
+        <label><input type="checkbox" id="dfCase"> Ignore case</label>
+        <label><input type="checkbox" id="dfJson"> Compare as JSON (sorted, pretty)</label>
+        <label><input type="checkbox" id="dfOnly"> Changes only</label>
+        <span class="status" id="dfStatus"></span>
+      </div>
+      <div class="diff" id="dfOut" hidden></div>
+    </section>
+  </div>
+
+  <!-- ================= TAB 7: REGEX ================= -->
+  <div class="panel" id="tab-rx" role="tabpanel" hidden>
+    <section>
+      <div class="row">
+        <span class="mono">/</span><input type="text" class="wide" id="rxPat" placeholder="pattern, e.g. (?&lt;year&gt;\d{4})-(\d{2})" spellcheck="false"><span class="mono">/</span>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="rx_g" checked> g</label>
+        <label><input type="checkbox" id="rx_i"> i</label>
+        <label><input type="checkbox" id="rx_m"> m</label>
+        <label><input type="checkbox" id="rx_s"> s</label>
+        <label><input type="checkbox" id="rx_u"> u</label>
+        <span class="status" id="rxStatus"></span>
+      </div>
+      <div class="hint">Test text</div>
+      <textarea id="rxText" spellcheck="false"></textarea>
+      <div class="hint" style="margin-top:12px">Highlighted matches</div>
+      <div class="hl" id="rxHl"></div>
+    </section>
+    <section>
+      <h2>Matches</h2>
+      <table class="kv"><thead><tr><th>#</th><th>Index</th><th>Match</th><th>Groups</th></tr></thead><tbody id="rxList"></tbody></table>
+    </section>
+    <section>
+      <h2>Replace</h2>
+      <div class="row"><input type="text" class="wide" id="rxRep" placeholder="Replacement, e.g. $2/$1 or $&lt;year&gt;" spellcheck="false"></div>
+      <textarea id="rxOut" readonly spellcheck="false" style="min-height:100px"></textarea>
+      <div class="row" style="margin-top:12px"><button class="secondary" data-copy="rxOut">Copy result</button></div>
+    </section>
+  </div>
+
+  <!-- ================= TAB 8: COLOUR ================= -->
+  <div class="panel" id="tab-color" role="tabpanel" hidden>
+    <section>
+      <div class="row">
+        <input type="color" id="clPick" value="#2f6fed">
+        <input type="text" class="wide" id="clIn" value="#2f6fed" placeholder="#hex, rgb(), hsl(), or a colour name" spellcheck="false">
+        <span class="status" id="clStatus"></span>
+      </div>
+      <div class="swatch" id="clSwatch"></div>
+      <div class="shades" id="clShades"></div>
+      <table class="kv" style="margin-top:14px"><tbody id="clOut"></tbody></table>
+    </section>
+  </div>
+
+  <!-- ================= TAB 9: FAKE DATA ================= -->
+  <div class="panel" id="tab-fake" role="tabpanel" hidden>
+    <section>
+      <h2>Fake records</h2>
+      <div class="row">
+        <label><input type="checkbox" class="fk" value="name" checked> Name</label>
+        <label><input type="checkbox" class="fk" value="email" checked> Email</label>
+        <label><input type="checkbox" class="fk" value="username"> Username</label>
+        <label><input type="checkbox" class="fk" value="phone" checked> Phone</label>
+        <label><input type="checkbox" class="fk" value="address"> Address</label>
+        <label><input type="checkbox" class="fk" value="company"> Company</label>
+        <label><input type="checkbox" class="fk" value="birthdate"> Birth date</label>
+        <label><input type="checkbox" class="fk" value="uuid"> UUID</label>
+        <label><input type="checkbox" class="fk" value="ip"> IP</label>
+      </div>
+      <div class="row">
+        <label>Rows <input type="number" id="fkCount" min="1" max="1000" value="5"></label>
+        <label>Format <select id="fkFmt"><option>JSON</option><option>CSV</option><option>TSV</option></select></label>
+        <button id="fkGo">Generate</button>
+        <button class="secondary" data-copy="fkOut">Copy</button>
+      </div>
+      <textarea id="fkOut" readonly spellcheck="false" style="min-height:240px"></textarea>
+      <div class="hint">Emails use reserved example domains and phone numbers use the fictional 555-01xx range.</div>
+    </section>
+    <section>
+      <h2>Lorem ipsum</h2>
+      <div class="row">
+        <label>Count <input type="number" id="lrCount" min="1" max="200" value="3"></label>
+        <label><select id="lrUnit"><option value="p">paragraphs</option><option value="s">sentences</option><option value="w">words</option></select></label>
+        <label><input type="checkbox" id="lrStart" checked> Start with “Lorem ipsum”</label>
+        <button id="lrGo">Generate</button>
+        <button class="secondary" data-copy="lrOut">Copy</button>
+      </div>
+      <textarea id="lrOut" readonly spellcheck="false" style="min-height:200px"></textarea>
+    </section>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+async function copyText(text, btn) {
+  try { await navigator.clipboard.writeText(text); }
+  catch { const t = document.createElement('textarea'); t.value = text; document.body.append(t); t.select(); document.execCommand('copy'); t.remove(); }
+  const old = btn.textContent; btn.textContent = 'Copied ✓'; setTimeout(() => btn.textContent = old, 1000);
+}
+function setStatus(id, msg, kind) { const el = $(id); el.textContent = msg || ''; el.className = 'status ' + (kind || ''); }
+function download(blob, name) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+document.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => copyText($(b.dataset.copy).value, b));
+
+// ---------- Tabs ----------
+function showTab(name) {
+  document.querySelectorAll('nav [role=tab]').forEach(t => t.setAttribute('aria-selected', t.dataset.tab === name));
+  document.querySelectorAll('.panel').forEach(p => p.hidden = p.id !== 'tab-' + name);
+  try { localStorage.setItem('utilsTab', name); } catch {}
+}
+document.querySelectorAll('nav [role=tab]').forEach(t => t.onclick = () => showTab(t.dataset.tab));
+try { const s = localStorage.getItem('utilsTab'); if (s && $('tab-' + s)) showTab(s); } catch {}
+
+/* =====================================================
+   TAB 1: generators
+   ===================================================== */
+// Uniform random int in [0, n) via rejection sampling (no modulo bias)
+function randInt(n) {
+  const limit = Math.floor(0x100000000 / n) * n, buf = new Uint32Array(1);
+  do { crypto.getRandomValues(buf); } while (buf[0] >= limit);
+  return buf[0] % n;
+}
+const SETS = {
+  lower: 'abcdefghijklmnopqrstuvwxyz',
+  upper: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+  digits: '0123456789',
+  symbols: '!@#$%^&*()-_=+[]{};:,.?/~'
+};
+function genPassword() {
+  const len = Math.min(128, Math.max(4, +$('lenNum').value || 20));
+  const strip = s => $('ambig').checked ? s.replace(/[O0Il1]/g, '') : s;
+  const sets = Object.keys(SETS).filter(k => $(k).checked).map(k => strip(SETS[k]));
+  if (!sets.length) { $('pw').textContent = ''; $('entropy').textContent = 'Select at least one character set.'; $('bar').style.width = '0'; return; }
+  const pool = sets.join('');
+  const chars = sets.map(s => s[randInt(s.length)]);          // guarantee one of each selected set
+  while (chars.length < len) chars.push(pool[randInt(pool.length)]);
+  for (let i = chars.length - 1; i > 0; i--) { const j = randInt(i + 1); [chars[i], chars[j]] = [chars[j], chars[i]]; }
+  $('pw').textContent = chars.join('').slice(0, len);
+  const bits = Math.round(len * Math.log2(pool.length));
+  const [label, color] = bits < 40 ? ['Weak', '#e5484d'] : bits < 60 ? ['Fair', '#f5a524'] : bits < 90 ? ['Strong', '#3ccf7e'] : ['Very strong', '#12a150'];
+  $('entropy').textContent = `${label} · ~${bits} bits of entropy · pool of ${pool.length} characters`;
+  $('bar').style.width = Math.min(100, bits / 1.28) + '%';
+  $('bar').style.background = color;
+}
+
+const hex = b => [...b].map(x => x.toString(16).padStart(2, '0')).join('');
+function uuid(version) {
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  if (version === 7) {
+    let t = Date.now();
+    for (let i = 5; i >= 0; i--) { b[i] = t % 256; t = Math.floor(t / 256); }
+  }
+  b[6] = (b[6] & 0x0f) | (version << 4);
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = hex(b);
+  return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+}
+function fmtGuid(g) {
+  if ($('nodash').checked) g = g.replace(/-/g, '');
+  if ($('upGuid').checked) g = g.toUpperCase();
+  if ($('braces').checked) g = `{${g}}`;
+  return g;
+}
+function genGuids() {
+  const n = Math.min(100, Math.max(1, +$('count').value || 1));
+  const box = $('guids'); box.textContent = '';
+  for (let i = 0; i < n; i++) {
+    const row = document.createElement('div'); row.className = 'out';
+    const v = document.createElement('div'); v.className = 'val'; v.textContent = fmtGuid(uuid(+$('ver').value));
+    const c = document.createElement('button'); c.className = 'secondary'; c.textContent = 'Copy';
+    c.onclick = () => copyText(v.textContent, c);
+    row.append(v, c); box.append(row);
+  }
+}
+$('len').oninput = () => { $('lenNum').value = $('len').value; genPassword(); };
+$('lenNum').oninput = () => { $('len').value = $('lenNum').value; genPassword(); };
+['lower','upper','digits','symbols','ambig'].forEach(id => $(id).onchange = genPassword);
+$('genPw').onclick = genPassword;
+$('copyPw').onclick = e => copyText($('pw').textContent, e.target);
+$('genGuid').onclick = genGuids;
+['ver','count','upGuid','braces','nodash'].forEach(id => $(id).onchange = genGuids);
+$('copyAll').onclick = e => copyText([...document.querySelectorAll('#guids .val')].map(v => v.textContent).join('\n'), e.target);
+genPassword(); genGuids();
+
+/* =====================================================
+   TAB 2: base64
+   ===================================================== */
+function bytesToB64(bytes) {
+  let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function b64ToBytes(str) {
+  str = str.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+  str += '='.repeat((4 - str.length % 4) % 4);
+  const bin = atob(str), out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+const stripDataUri = s => s.trim().replace(/^data:[^,]*,/i, '');
+
+$('tEnc').onclick = () => {
+  let b = bytesToB64(new TextEncoder().encode($('tPlain').value));
+  if ($('urlSafe').checked) b = b.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  $('tB64').value = b; setStatus('tStatus', 'Encoded ' + $('tPlain').value.length + ' chars', 'ok');
+};
+$('tDec').onclick = () => {
+  try {
+    $('tPlain').value = new TextDecoder('utf-8', { fatal: true }).decode(b64ToBytes(stripDataUri($('tB64').value)));
+    setStatus('tStatus', 'Decoded', 'ok');
+  } catch (e) {
+    setStatus('tStatus', e instanceof TypeError ? 'Decoded bytes are not valid UTF-8 text — use "Base64 → file" below.' : 'Invalid Base64 input.', 'err');
+  }
+};
+$('tSwap').onclick = () => { const a = $('tPlain').value; $('tPlain').value = $('tB64').value; $('tB64').value = a; setStatus('tStatus'); };
+
+// file -> base64
+let fileB64 = '', fileName = 'file';
+function encodeFile(file) {
+  if (!file) return;
+  const r = new FileReader();
+  r.onload = () => {
+    const uri = r.result, comma = uri.indexOf(',');
+    // readAsDataURL yields "data:;base64," for unknown types; normalise
+    fileB64 = { raw: uri.slice(comma + 1), prefix: (file.type ? 'data:' + file.type : 'data:application/octet-stream') + ';base64,' };
+    fileName = file.name;
+    refreshFileOut();
+    setStatus('fStatus', `${file.name} · ${file.size.toLocaleString()} bytes → ${fileB64.raw.length.toLocaleString()} chars`, 'ok');
+  };
+  r.onerror = () => setStatus('fStatus', 'Could not read file.', 'err');
+  r.readAsDataURL(file);
+}
+function refreshFileOut() { if (fileB64) $('fOut').value = ($('asDataUri').checked ? fileB64.prefix : '') + fileB64.raw; }
+$('asDataUri').onchange = refreshFileOut;
+$('fileIn').onchange = e => encodeFile(e.target.files[0]);
+$('fSave').onclick = () => $('fOut').value && download(new Blob([$('fOut').value], { type: 'text/plain' }), fileName + '.b64.txt');
+const drop = $('drop');
+['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => encodeFile(e.dataTransfer.files[0]));
+
+// base64 -> file
+const MAGIC = [
+  [[0x89,0x50,0x4e,0x47], 'image/png', 'png'], [[0xff,0xd8,0xff], 'image/jpeg', 'jpg'], [[0x47,0x49,0x46,0x38], 'image/gif', 'gif'],
+  [[0x25,0x50,0x44,0x46], 'application/pdf', 'pdf'], [[0x50,0x4b,0x03,0x04], 'application/zip', 'zip'], [[0x42,0x4d], 'image/bmp', 'bmp'],
+  [[0x1f,0x8b], 'application/gzip', 'gz']
+];
+function sniff(bytes) {
+  for (const [sig, mime, ext] of MAGIC) if (sig.every((v, i) => bytes[i] === v)) return { mime, ext };
+  if (bytes.length > 12 && String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF' && String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP') return { mime: 'image/webp', ext: 'webp' };
+  const head = new TextDecoder().decode(bytes.slice(0, 256)).trimStart();
+  if (/^<svg|^<\?xml[\s\S]*<svg/i.test(head)) return { mime: 'image/svg+xml', ext: 'svg' };
+  return { mime: 'application/octet-stream', ext: 'bin' };
+}
+let decoded = null;
+$('dGo').onclick = () => {
+  const input = $('dIn').value.trim();
+  const uriMime = (input.match(/^data:([^;,]+)/i) || [])[1];
+  try {
+    const bytes = b64ToBytes(stripDataUri(input));
+    const s = sniff(bytes), mime = uriMime || s.mime;
+    const ext = uriMime ? (uriMime.split('/')[1] || 'bin').split('+')[0] : s.ext;
+    if (decoded) URL.revokeObjectURL(decoded.url);
+    const blob = new Blob([bytes], { type: mime });
+    decoded = { blob, url: URL.createObjectURL(blob), name: $('dName').value.trim() || 'decoded.' + ext };
+    $('dSave').disabled = false;
+    setStatus('dStatus', `${bytes.length.toLocaleString()} bytes · ${mime}`, 'ok');
+    const box = $('dPreview'); box.textContent = '';
+    if (mime.startsWith('image/')) { const img = document.createElement('img'); img.className = 'preview'; img.src = decoded.url; box.append(img); }
+    else if (mime === 'application/pdf') { const f = document.createElement('iframe'); f.className = 'preview'; f.style.cssText = 'width:100%;height:400px'; f.src = decoded.url; box.append(f); }
+  } catch { setStatus('dStatus', 'Invalid Base64 input.', 'err'); $('dSave').disabled = true; $('dPreview').textContent = ''; }
+};
+$('dSave').onclick = () => decoded && download(decoded.blob, $('dName').value.trim() || decoded.name);
+
+/* =====================================================
+   TAB 3: formatter
+   ===================================================== */
+const VOID = new Set('area base br col embed hr img input link meta param source track wbr'.split(' '));
+const indentStr = () => $('indent').value === 'tab' ? '\t' : ' '.repeat(+$('indent').value);
+
+function sortDeep(v) {
+  if (Array.isArray(v)) return v.map(sortDeep);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.keys(v).sort().map(k => [k, sortDeep(v[k])]));
+  return v;
+}
+
+function formatMarkup(src, ind, html) {
+  const tokenRe = html
+    ? /<!--[\s\S]*?-->|<(script|style|pre|textarea)\b[^>]*>[\s\S]*?<\/\1\s*>|<!\[CDATA\[[\s\S]*?\]\]>|<[^>]+>|[^<]+/gi
+    : /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<[^>]+>|[^<]+/g;
+  const toks = (src.match(tokenRe) || []).map(t => t.trim() ).filter(Boolean);
+  const isOpen = t => /^<[A-Za-z]/.test(t) && !t.endsWith('/>') && !(html && VOID.has(t.match(/^<([\w:-]+)/)[1].toLowerCase()));
+  const isClose = t => /^<\//.test(t);
+  const nameOf = t => t.match(/^<\/?([\w:.-]+)/)[1].toLowerCase();
+  const lines = []; let d = 0;
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (isClose(t)) { d = Math.max(0, d - 1); lines.push(ind.repeat(d) + t); continue; }
+    if (isOpen(t) && !(html && /^<(script|style|pre|textarea)\b[\s\S]*<\/\1\s*>$/i.test(t))) {
+      const n1 = toks[i + 1], n2 = toks[i + 2];
+      if (n1 && isClose(n1) && nameOf(n1) === nameOf(t)) { lines.push(ind.repeat(d) + t + n1); i += 1; continue; }
+      if (n1 && !n1.startsWith('<') && n2 && isClose(n2) && nameOf(n2) === nameOf(t)) { lines.push(ind.repeat(d) + t + n1.replace(/\s+/g, ' ') + n2); i += 2; continue; }
+      lines.push(ind.repeat(d) + t); d++; continue;
+    }
+    // text, comments, doctype, PI, self-closing, raw blocks
+    lines.push(ind.repeat(d) + (t.startsWith('<') ? t : t.replace(/\s+/g, ' ')));
+  }
+  return lines.join('\n');
+}
+function minifyMarkup(src) {
+  return src.replace(/<!--[\s\S]*?-->/g, '').replace(/>\s+</g, '><').replace(/\s{2,}/g, ' ').trim();
+}
+
+function formatCss(src, ind, minify) {
+  let out = '', depth = 0, paren = 0, quote = '', buf = '';
+  const nl = () => minify ? '' : '\n' + ind.repeat(depth);
+  const flush = () => { let b = buf.trim().replace(/\s+/g, ' '); if (minify && depth) b = b.replace(/\s*:\s*/, ':'); out += b; buf = ''; };
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (quote) { buf += c; if (c === '\\') buf += src[++i]; else if (c === quote) quote = ''; continue; }
+    if (c === '"' || c === "'") { quote = c; buf += c; continue; }
+    if (c === '/' && src[i + 1] === '*') {
+      const end = src.indexOf('*/', i + 2), stop = end < 0 ? src.length : end + 2;
+      if (!minify) { flush(); out += (out && !out.endsWith('\n') ? nl() : '') + src.slice(i, stop) + nl(); }
+      i = stop - 1; continue;
+    }
+    if (c === '(') paren++; if (c === ')') paren = Math.max(0, paren - 1);
+    if (paren) { buf += c; continue; }
+    if (c === '{') { flush(); out += (minify ? '{' : ' {'); depth++; out += nl(); }
+    else if (c === '}') { const had = buf.trim(); flush(); if (!minify && had) out += ';'; out = out.replace(/[ \t]+$/, ''); depth = Math.max(0, depth - 1); out = minify ? out.replace(/;?$/, '') : out.replace(/\n[ \t]*$/, ''); out += (minify ? '}' : '\n' + ind.repeat(depth) + '}'); out += depth ? nl() : (minify ? '' : '\n\n'); }
+    else if (c === ';') { flush(); out += ';' + nl(); }
+    else if (c === ':' && !minify) { buf += ': '; }
+    else buf += c;
+  }
+  flush();
+  return out.replace(/:\s+(?=\s)/g, ': ').replace(/[ \t]+\n/g, '\n').trim();
+}
+
+function runFormat(minify) {
+  const lang = $('lang').value, src = $('fmtIn').value, ind = indentStr();
+  if (!src.trim()) { $('fmtOut').value = ''; return setStatus('fmtStatus'); }
+  try {
+    let res;
+    if (lang === 'json') {
+      let v = JSON.parse(src);
+      if ($('sortKeys').checked) v = sortDeep(v);
+      res = minify ? JSON.stringify(v) : JSON.stringify(v, null, ind);
+    } else if (lang === 'xml') {
+      const doc = new DOMParser().parseFromString(src, 'application/xml');
+      const err = doc.querySelector('parsererror');
+      if (err) throw new Error(err.textContent.split('\n')[0].replace(/^error on line/i, 'Line').trim());
+      res = minify ? minifyMarkup(src) : formatMarkup(src, ind, false);
+    } else if (lang === 'html') {
+      res = minify ? minifyMarkup(src) : formatMarkup(src, ind, true);
+    } else {
+      res = formatCss(src, ind, minify);
+    }
+    $('fmtOut').value = res;
+    setStatus('fmtStatus', `Valid ${lang.toUpperCase()} · ${src.length.toLocaleString()} → ${res.length.toLocaleString()} chars`, 'ok');
+  } catch (e) { $('fmtOut').value = ''; setStatus('fmtStatus', e.message, 'err'); }
+}
+$('fmtBtn').onclick = () => runFormat(false);
+$('minBtn').onclick = () => runFormat(true);
+$('fmtCopy').onclick = e => copyText($('fmtOut').value, e.target);
+$('fmtMove').onclick = () => { if ($('fmtOut').value) { $('fmtIn').value = $('fmtOut').value; $('fmtOut').value = ''; } };
+$('lang').onchange = () => { $('sortWrap').style.display = $('lang').value === 'json' ? '' : 'none'; };
+$('fmtIn').addEventListener('keydown', e => {
+  if (e.key === 'Tab') { e.preventDefault(); document.execCommand('insertText', false, indentStr()); }
+});
+
+/* =====================================================
+   Shared helpers for the tabs below
+   ===================================================== */
+// Rebuild a key/value table; each row gets a Copy button for its value
+function renderKv(tbodyId, rows) {
+  const tb = $(tbodyId); tb.textContent = '';
+  for (const [k, v, mono] of rows) {
+    const tr = tb.insertRow();
+    tr.insertCell().textContent = k;
+    const td = tr.insertCell(); td.textContent = v; if (mono !== false) td.className = 'mono';
+    const cb = document.createElement('button'); cb.className = 'secondary'; cb.textContent = 'Copy';
+    cb.onclick = () => copyText(String(v), cb);
+    tr.insertCell().append(cb);
+  }
+}
+const pick = a => a[randInt(a.length)];
+const csvCell = v => /[",\n\r\t]/.test(v) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v);
+
+/* =====================================================
+   TAB 4: URL / HTML
+   ===================================================== */
+const OPS = {
+  urlEnc: s => { const r = encodeURIComponent(s); return $('urlPlus').checked ? r.replace(/%20/g, '+') : r; },
+  urlEncUri: s => { const r = encodeURI(s); return $('urlPlus').checked ? r.replace(/%20/g, '+') : r; },
+  urlDec: s => decodeURIComponent($('urlPlus').checked ? s.replace(/\+/g, ' ') : s),
+  htmlEsc: s => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
+  htmlEscAll: s => OPS.htmlEsc(s).replace(/[^\x00-\x7f]/gu, ch => '&#' + ch.codePointAt(0) + ';'),
+  htmlUnesc: s => { const t = document.createElement('textarea'); t.innerHTML = s; return t.value; }   // textarea content is inert text, so tags are not executed
+};
+document.querySelectorAll('[data-op]').forEach(b => b.onclick = () => {
+  try { $(b.dataset.out).value = OPS[b.dataset.op]($(b.dataset.in).value); setStatus(b.dataset.status, 'Done', 'ok'); }
+  catch (e) { setStatus(b.dataset.status, e instanceof URIError ? 'Invalid percent-encoding.' : e.message, 'err'); }
+});
+document.querySelectorAll('[data-move]').forEach(b => b.onclick = () => { $(b.dataset.to).value = $(b.dataset.move).value; $(b.dataset.move).value = ''; });
+
+function parseQuery() {
+  const s = $('qIn').value.trim(), rows = [];
+  if (!s) return renderKv('qOut', rows);
+  let params;
+  try {
+    const u = new URL(s);
+    rows.push(['Protocol', u.protocol], ['Host', u.hostname]);
+    if (u.port) rows.push(['Port', u.port]);
+    if (u.username) rows.push(['User', decodeURIComponent(u.username)]);
+    rows.push(['Path', decodeURIComponent(u.pathname)]);
+    if (u.hash) rows.push(['Fragment', u.hash.slice(1)]);
+    params = u.searchParams;
+  } catch { params = new URLSearchParams(s.replace(/^[^?]*\?/, '').replace(/#.*$/, '')); }
+  for (const [k, v] of params) rows.push(['? ' + k, v]);
+  renderKv('qOut', rows);
+}
+$('qIn').oninput = parseQuery;
+
+/* =====================================================
+   TAB 5: timestamp
+   ===================================================== */
+function parseTime(s) {
+  s = s.trim(); if (!s) return null;
+  if (/^-?\d+(\.\d+)?$/.test(s)) { const n = +s; return { d: new Date(Math.abs(n) < 1e11 ? n * 1000 : n), kind: Math.abs(n) < 1e11 ? 'Unix seconds' : 'Unix milliseconds' }; }
+  const d = new Date(s); return isNaN(d) ? undefined : { d, kind: 'Date string' };
+}
+function relTime(ms) {
+  const units = [['year', 31557600000], ['month', 2629800000], ['day', 86400000], ['hour', 3600000], ['minute', 60000], ['second', 1000]];
+  const diff = ms - Date.now();
+  for (const [u, size] of units) if (Math.abs(diff) >= size || u === 'second') return new Intl.RelativeTimeFormat('en', { numeric: 'auto' }).format(Math.round(diff / size), u);
+}
+function renderTime() {
+  const r = parseTime($('tsIn').value);
+  if (r === null) { renderKv('tsOut', []); return setStatus('tsStatus'); }
+  if (r === undefined || isNaN(r.d)) { renderKv('tsOut', []); return setStatus('tsStatus', 'Could not parse that as a date or timestamp.', 'err'); }
+  let zone = $('tsZone').value.trim(), zoneErr = false;
+  const fmt = (tz, opts) => new Intl.DateTimeFormat('en-GB', { dateStyle: 'full', timeStyle: 'long', ...opts, timeZone: tz }).format(r.d);
+  try { fmt(zone || undefined); } catch { zoneErr = true; zone = ''; }
+  const local = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  try {
+    const ms = r.d.getTime();
+    renderKv('tsOut', [
+      ['Detected as', r.kind, false],
+      ['Unix seconds', Math.floor(ms / 1000)],
+      ['Unix milliseconds', ms],
+      ['ISO 8601 (UTC)', r.d.toISOString()],
+      ['UTC', fmt('UTC'), false],
+      [zone ? zone : 'Local (' + local + ')', fmt(zone || undefined), false],
+      ['Relative', relTime(ms), false],
+      ['RFC 2822', r.d.toUTCString()]
+    ]);
+    setStatus('tsStatus', zoneErr ? 'Unknown time zone — showing local time.' : '', zoneErr ? 'err' : '');
+  } catch { renderKv('tsOut', []); setStatus('tsStatus', 'Date is out of range.', 'err'); }
+}
+$('tsIn').oninput = renderTime; $('tsZone').oninput = renderTime;
+$('tsNow').onclick = () => { $('tsIn').value = Date.now(); renderTime(); };
+setInterval(() => { $('tsLive').textContent = 'Now: ' + Math.floor(Date.now() / 1000); }, 1000);
+$('tsLive').textContent = 'Now: ' + Math.floor(Date.now() / 1000);
+
+/* =====================================================
+   TAB 6: diff (line-based LCS)
+   ===================================================== */
+function diffLines(a, b, key) {
+  const ka = a.map(key), kb = b.map(key);
+  let s = 0; while (s < a.length && s < b.length && ka[s] === kb[s]) s++;
+  let ea = a.length, eb = b.length; while (ea > s && eb > s && ka[ea - 1] === kb[eb - 1]) { ea--; eb--; }
+  const n = ea - s, m = eb - s;
+  if (n * m > 16e6) throw new Error('Inputs are too different/large to diff in the browser.');
+  const w = m + 1, L = new Uint32Array((n + 1) * w);
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+    L[i * w + j] = ka[s + i] === kb[s + j] ? L[(i + 1) * w + j + 1] + 1 : Math.max(L[(i + 1) * w + j], L[i * w + j + 1]);
+  const ops = [];
+  for (let i = 0; i < s; i++) ops.push({ t: '=', a: i, b: i, text: a[i] });
+  let i = 0, j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && ka[s + i] === kb[s + j]) { ops.push({ t: '=', a: s + i, b: s + j, text: b[s + j] }); i++; j++; }
+    else if (j < m && (i === n || L[i * w + j + 1] >= L[(i + 1) * w + j])) { ops.push({ t: '+', b: s + j, text: b[s + j] }); j++; }
+    else { ops.push({ t: '-', a: s + i, text: a[s + i] }); i++; }
+  }
+  for (let k = 0; k < a.length - ea; k++) ops.push({ t: '=', a: ea + k, b: eb + k, text: a[ea + k] });
+  return ops;
+}
+function runDiff() {
+  try {
+    let A = $('dfA').value, B = $('dfB').value;
+    if ($('dfJson').checked) {
+      const norm = (t, name) => { try { return JSON.stringify(sortDeep(JSON.parse(t)), null, 2); } catch (e) { throw new Error(name + ' is not valid JSON: ' + e.message); } };
+      A = norm(A, 'Original'); B = norm(B, 'Changed');
+    }
+    const key = l => { if ($('dfWs').checked) l = l.replace(/\s+/g, ' ').trim(); return $('dfCase').checked ? l.toLowerCase() : l; };
+    const ops = diffLines(A.split(/\r?\n/), B.split(/\r?\n/), key);
+    const add = ops.filter(o => o.t === '+').length, del = ops.filter(o => o.t === '-').length;
+    const show = ops.map(() => true);
+    if ($('dfOnly').checked) {
+      show.fill(false);
+      ops.forEach((o, i) => { if (o.t !== '=') for (let k = Math.max(0, i - 3); k <= Math.min(ops.length - 1, i + 3); k++) show[k] = true; });
+    }
+    const out = $('dfOut'); out.textContent = ''; out.hidden = false;
+    const row = (cls, a, b, sign, text) => {
+      const d = document.createElement('div'); d.className = cls;
+      for (const [c, t] of [['ln', a ?? ''], ['ln', b ?? ''], ['sg', sign], ['', text]]) { const sp = document.createElement('span'); if (c) sp.className = c; sp.textContent = t; d.append(sp); }
+      out.append(d);
+    };
+    let gap = false;
+    ops.forEach((o, i) => {
+      if (!show[i]) { if (!gap) { const g = document.createElement('div'); g.className = 'gap'; g.textContent = '⋯'; out.append(g); gap = true; } return; }
+      gap = false;
+      if (o.t === '=') row('', o.a + 1, o.b + 1, ' ', o.text);
+      else if (o.t === '+') row('add', '', o.b + 1, '+', o.text);
+      else row('del', o.a + 1, '', '−', o.text);
+    });
+    setStatus('dfStatus', add || del ? `+${add} added, −${del} removed` : 'Identical', add || del ? '' : 'ok');
+  } catch (e) { $('dfOut').hidden = true; setStatus('dfStatus', e.message, 'err'); }
+}
+$('dfGo').onclick = runDiff;
+['dfWs', 'dfCase', 'dfJson', 'dfOnly'].forEach(id => $(id).onchange = () => { if (!$('dfOut').hidden) runDiff(); });
+
+/* =====================================================
+   TAB 7: regex tester
+   ===================================================== */
+function runRegex() {
+  const pat = $('rxPat').value, text = $('rxText').value, hl = $('rxHl'), tb = $('rxList');
+  hl.textContent = text; tb.textContent = ''; $('rxOut').value = '';
+  if (!pat) return setStatus('rxStatus');
+  const flags = [...'gimsu'].filter(f => $('rx_' + f).checked).join('');
+  let re;
+  try { re = new RegExp(pat, flags); } catch (e) { return setStatus('rxStatus', e.message.replace(/^Invalid regular expression: /, ''), 'err'); }
+  const LIMIT = 2000;
+  const matches = [];
+  if (re.global) { for (const m of text.matchAll(re)) { matches.push(m); if (matches.length >= LIMIT) break; } }
+  else { const m = re.exec(text); if (m) matches.push(m); }
+  // highlight
+  hl.textContent = '';
+  let pos = 0;
+  for (const m of matches) {
+    if (!m[0].length) continue;
+    hl.append(text.slice(pos, m.index));
+    const mk = document.createElement('mark'); mk.textContent = m[0]; hl.append(mk);
+    pos = m.index + m[0].length;
+  }
+  hl.append(text.slice(pos));
+  // table
+  matches.forEach((m, i) => {
+    const tr = tb.insertRow();
+    tr.insertCell().textContent = i + 1;
+    tr.insertCell().textContent = m.index;
+    tr.insertCell().textContent = m[0] === '' ? '(empty)' : m[0];
+    const groups = [];
+    for (let g = 1; g < m.length; g++) groups.push(`$${g} = ${m[g] === undefined ? 'undefined' : JSON.stringify(m[g])}`);
+    if (m.groups) for (const [k, v] of Object.entries(m.groups)) groups.push(`<${k}> = ${v === undefined ? 'undefined' : JSON.stringify(v)}`);
+    tr.insertCell().textContent = groups.join('\n');
+    tr.cells[3].style.whiteSpace = 'pre-wrap';
+  });
+  setStatus('rxStatus', matches.length ? `${matches.length}${matches.length >= LIMIT ? '+' : ''} match${matches.length === 1 ? '' : 'es'}` : 'No matches', matches.length ? 'ok' : '');
+  if ($('rxRep').value !== '') $('rxOut').value = text.replace(re, $('rxRep').value);
+}
+['rxPat', 'rxText', 'rxRep'].forEach(id => $(id).oninput = runRegex);
+['g', 'i', 'm', 's', 'u'].forEach(f => $('rx_' + f).onchange = runRegex);
+
+/* =====================================================
+   TAB 8: colour
+   ===================================================== */
+const probe = document.createElement('span'); probe.style.display = 'none'; document.body.append(probe);
+function parseColor(s) {
+  probe.style.color = ''; probe.style.color = s.trim();
+  if (!probe.style.color) return null;
+  const c = getComputedStyle(probe).color, n = c.match(/-?\d*\.?\d+(?:e-?\d+)?/g).map(Number);
+  return c.startsWith('color(') ? { r: n[0] * 255, g: n[1] * 255, b: n[2] * 255, a: n[3] ?? 1 } : { r: n[0], g: n[1], b: n[2], a: n[3] ?? 1 };
+}
+function rgb2hsl({ r, g, b }) {
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn, l = (mx + mn) / 2;
+  let h = 0, s = 0;
+  if (d) {
+    s = d / (1 - Math.abs(2 * l - 1));
+    h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    h = (h * 60 + 360) % 360;
+  }
+  return { h, s: s * 100, l: l * 100 };
+}
+function rgb2hsv({ r, g, b }) {
+  const mx = Math.max(r, g, b) / 255, mn = Math.min(r, g, b) / 255, h = rgb2hsl({ r, g, b }).h;
+  return { h, s: mx ? (mx - mn) / mx * 100 : 0, v: mx * 100 };
+}
+function lum({ r, g, b }) {
+  const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+}
+const contrast = (c, other) => { const a = lum(c), b = lum(other); return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05); };
+const wcag = r => r >= 7 ? 'AAA' : r >= 4.5 ? 'AA' : r >= 3 ? 'AA large only' : 'fail';
+function renderColor(fromPicker) {
+  const c = parseColor($('clIn').value);
+  if (!c) { setStatus('clStatus', 'Unrecognised colour.', 'err'); return; }
+  setStatus('clStatus');
+  const R = Math.round(c.r), G = Math.round(c.g), B = Math.round(c.b), A = +c.a.toFixed(3);
+  const hx = v => v.toString(16).padStart(2, '0');
+  const hex = '#' + hx(R) + hx(G) + hx(B);
+  const hsl = rgb2hsl(c), hsv = rgb2hsv(c), r1 = n => Math.round(n), a = A < 1;
+  if (!fromPicker) $('clPick').value = hex;
+  $('clSwatch').style.background = `rgba(${R},${G},${B},${A})`;
+  const cw = contrast(c, { r: 255, g: 255, b: 255 }), cb = contrast(c, { r: 0, g: 0, b: 0 });
+  renderKv('clOut', [
+    ['HEX', hex],
+    ...(a ? [['HEX (alpha)', hex + hx(Math.round(A * 255))]] : []),
+    ['RGB', a ? `rgba(${R}, ${G}, ${B}, ${A})` : `rgb(${R}, ${G}, ${B})`],
+    ['HSL', a ? `hsla(${r1(hsl.h)}, ${r1(hsl.s)}%, ${r1(hsl.l)}%, ${A})` : `hsl(${r1(hsl.h)}, ${r1(hsl.s)}%, ${r1(hsl.l)}%)`],
+    ['HSV', `hsv(${r1(hsv.h)}, ${r1(hsv.s)}%, ${r1(hsv.v)}%)`],
+    ['Contrast on white', `${cw.toFixed(2)} : 1 — ${wcag(cw)}`, false],
+    ['Contrast on black', `${cb.toFixed(2)} : 1 — ${wcag(cb)}`, false]
+  ]);
+  const sh = $('clShades'); sh.textContent = '';
+  for (let l = 10; l <= 90; l += 10) {
+    const d = document.createElement('div'), col = `hsl(${r1(hsl.h)}, ${r1(hsl.s)}%, ${l}%)`;
+    d.style.background = col; d.title = col; d.onclick = () => { $('clIn').value = col; renderColor(); };
+    sh.append(d);
+  }
+}
+$('clIn').oninput = () => renderColor();
+$('clPick').oninput = () => { $('clIn').value = $('clPick').value; renderColor(true); };
+
+/* =====================================================
+   TAB 9: fake data
+   ===================================================== */
+const FIRST = 'James Mary Robert Patricia John Jennifer Michael Linda David Elizabeth William Barbara Richard Susan Joseph Jessica Thomas Sarah Daniel Karen Omar Layla Noah Emma Liam Olivia Mateo Sofia Yusuf Aisha Hiro Mei Arjun Priya'.split(' ');
+const LAST = 'Smith Johnson Williams Brown Jones Garcia Miller Davis Rodriguez Martinez Anderson Taylor Thomas Moore Jackson Martin Lee Thompson White Harris Khan Patel Nguyen Kim Tanaka Silva Rossi Muller Haddad Cohen Ivanov'.split(' ');
+const STREETS = 'Maple Oak Cedar Pine Elm Washington Lake Hill Sunset Park River Church Highland Willow Mill'.split(' ');
+const SUFFIX = 'St Ave Blvd Rd Ln Dr Way Ct'.split(' ');
+const CITIES = [['Springfield', 'IL'], ['Riverton', 'WY'], ['Fairview', 'OR'], ['Franklin', 'TN'], ['Georgetown', 'TX'], ['Clinton', 'IA'], ['Salem', 'MA'], ['Madison', 'WI'], ['Ashland', 'KY'], ['Burlington', 'VT']];
+const CORP = ['Inc', 'LLC', 'Group', 'Labs', 'Systems', 'Partners', 'Industries', 'Works'];
+const DOMAINS = ['example.com', 'example.org', 'example.net'];
+const digits = n => Array.from({ length: n }, () => randInt(10)).join('');
+const FIELD = {
+  name: p => p.name,
+  email: p => `${p.first}.${p.last}${randInt(100)}@${pick(DOMAINS)}`.toLowerCase(),
+  username: p => (p.first[0] + p.last + randInt(1000)).toLowerCase(),
+  phone: () => `(555) 555-01${digits(2)}`,
+  address: () => { const [c, s] = pick(CITIES); return `${1 + randInt(9999)} ${pick(STREETS)} ${pick(SUFFIX)}, ${c}, ${s} ${digits(5)}`; },
+  company: () => `${pick(LAST)} ${pick(CORP)}`,
+  birthdate: () => { const t = Date.UTC(1950, 0, 1) + randInt(55 * 365) * 86400000; return new Date(t).toISOString().slice(0, 10); },
+  uuid: () => uuid(4),
+  ip: () => `10.${randInt(256)}.${randInt(256)}.${1 + randInt(254)}`
+};
+function genFake() {
+  const fields = [...document.querySelectorAll('.fk:checked')].map(c => c.value);
+  const n = Math.min(1000, Math.max(1, +$('fkCount').value || 1));
+  if (!fields.length) { $('fkOut').value = ''; return; }
+  const rows = Array.from({ length: n }, () => {
+    const first = pick(FIRST), last = pick(LAST), p = { first, last, name: first + ' ' + last };
+    return Object.fromEntries(fields.map(f => [f, FIELD[f](p)]));
+  });
+  const fmt = $('fkFmt').value;
+  if (fmt === 'JSON') $('fkOut').value = JSON.stringify(rows, null, 2);
+  else {
+    const sep = fmt === 'CSV' ? ',' : '\t';
+    $('fkOut').value = [fields.join(sep), ...rows.map(r => fields.map(f => csvCell(r[f])).join(sep))].join('\n');
+  }
+}
+$('fkGo').onclick = genFake;
+document.querySelectorAll('.fk').forEach(c => c.onchange = genFake);
+$('fkCount').onchange = $('fkFmt').onchange = genFake;
+
+const LOREM = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua enim ad minim veniam quis nostrud exercitation ullamco laboris nisi aliquip ex ea commodo consequat duis aute irure in reprehenderit voluptate velit esse cillum fugiat nulla pariatur excepteur sint occaecat cupidatat non proident sunt culpa qui officia deserunt mollit anim id est laborum'.split(' ');
+function genLorem() {
+  const n = Math.min(200, Math.max(1, +$('lrCount').value || 1)), unit = $('lrUnit').value;
+  const words = k => Array.from({ length: k }, () => pick(LOREM));
+  const sentence = () => { const w = words(6 + randInt(9)); w[0] = w[0][0].toUpperCase() + w[0].slice(1); return w.join(' ') + '.'; };
+  let out;
+  if (unit === 'w') out = words(n).join(' ');
+  else if (unit === 's') out = Array.from({ length: n }, sentence).join(' ');
+  else out = Array.from({ length: n }, () => Array.from({ length: 3 + randInt(4) }, sentence).join(' ')).join('\n\n');
+  if ($('lrStart').checked) out = out.replace(/^\S+(\s+\S+)?/, unit === 'w' ? 'lorem ipsum' : 'Lorem ipsum');
+  $('lrOut').value = out;
+}
+$('lrGo').onclick = genLorem;
+['lrCount', 'lrUnit', 'lrStart'].forEach(id => $(id).onchange = genLorem);
+genFake(); genLorem(); renderColor();
+</script>
+</body>
+</html>

@@ -3611,6 +3611,7 @@ dependencies = [
  "eframe",
  "encoding_rs",
  "globset",
+ "gtk",
  "md-5",
  "png",
  "regex",
