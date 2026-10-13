@@ -1,10 +1,11 @@
 //! Bottom panel: commit metadata, changed files, and the selected file's diff.
 
 use crate::diffview::{self, DiffOpts};
+use crate::filemenu::{self, FileRequest};
+use crate::filerows;
 use crate::filetree::{self, ViewMode};
-use crate::icons;
 use crate::timefmt;
-use eframe::egui::{self, Color32, RichText, Sense};
+use eframe::egui::{self, Color32, Pos2, RichText, Sense};
 use gitgoing_core::diff::{self, ChangeKind, CommitDetail, FileDiff};
 use gitgoing_core::Oid;
 use std::path::{Path, PathBuf};
@@ -24,6 +25,8 @@ pub struct Detail {
     diff_rx: Fetch<FileDiff>,
     diff: Option<Result<FileDiff, String>>,
     mode: ViewMode,
+    /// A file-menu choice for the app to carry out.
+    pub file_request: Option<FileRequest>,
 }
 
 /// Error types that can be shown to the user as a message.
@@ -82,6 +85,7 @@ impl Detail {
             diff_rx: None,
             diff: None,
             mode: ViewMode::default(),
+            file_request: None,
         }
     }
 
@@ -129,6 +133,7 @@ impl Detail {
 pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, d: &mut Detail) -> bool {
     let mut close = false;
     let mut pick = None;
+    let mut request = None;
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| match &d.commit {
         None => {
             ui.spinner();
@@ -156,10 +161,10 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, d: &mut Detail) -> bool {
             ui.add_space(4.0);
             message_with_hashes(ui, &c.message);
             ui.separator();
-            ui.horizontal(|ui| {
-                ui.label(format!("{} changed file(s)", c.files.len()));
-                filetree::mode_toggle(ui, &mut d.mode);
-            });
+            filerows::section_header(ui, "Changed files", c.files.len(), None, None, None);
+            ui.add_space(4.0);
+            filetree::mode_toggle(ui, &mut d.mode);
+            ui.add_space(4.0);
             let selected = if d.diff_open { d.file } else { None };
             let mode = d.mode;
             let mut row = |ui: &mut egui::Ui, i: usize, name: &str| {
@@ -169,17 +174,36 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, d: &mut Detail) -> bool {
                     None => f.path.clone(),
                 };
                 // Path view shows the whole (rename) text; the others show `name`.
-                let name = if mode == ViewMode::Path { full.clone() } else { name.to_owned() };
-                ui.horizontal(|ui| {
-                    icons::change_badge(ui, f.kind);
-                    if ui.selectable_label(selected == Some(i), name).on_hover_text(full).clicked() {
-                        pick = Some(i);
-                    }
-                    if f.binary {
-                        ui.weak("bin");
-                    } else {
-                        ui.colored_label(Color32::from_rgb(0x4c, 0xaf, 0x50), format!("+{}", f.additions));
-                        ui.colored_label(Color32::from_rgb(0xe5, 0x53, 0x4b), format!("-{}", f.deletions));
+                let shown = if mode == ViewMode::Path { full.clone() } else { name.to_owned() };
+                let r = filerows::file_row(ui, f.kind, &shown, &full, selected == Some(i), 78.0, 78.0);
+                // Line counts at the right edge.
+                let p = ui.painter_at(r.rect);
+                let font = egui::TextStyle::Small.resolve(ui.style());
+                let cy = r.rect.center().y;
+                if f.binary {
+                    p.text(Pos2::new(r.rect.right() - 10.0, cy), egui::Align2::RIGHT_CENTER, "binary", font, ui.visuals().weak_text_color());
+                } else {
+                    let del = p.text(
+                        Pos2::new(r.rect.right() - 10.0, cy),
+                        egui::Align2::RIGHT_CENTER,
+                        format!("-{}", f.deletions),
+                        font.clone(),
+                        Color32::from_rgb(0xe5, 0x53, 0x4b),
+                    );
+                    p.text(
+                        Pos2::new(del.left() - 8.0, cy),
+                        egui::Align2::RIGHT_CENTER,
+                        format!("+{}", f.additions),
+                        font,
+                        Color32::from_rgb(0x4c, 0xaf, 0x50),
+                    );
+                }
+                if r.resp.clicked() {
+                    pick = Some(i);
+                }
+                r.resp.context_menu(|ui| {
+                    if let Some(action) = filemenu::items(ui, &f.path) {
+                        request = Some(FileRequest { action, path: f.path.clone(), commit: Some(c.id), staged: false });
                     }
                 });
             };
@@ -201,6 +225,9 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, d: &mut Detail) -> bool {
             }
         }
     });
+    if request.is_some() {
+        d.file_request = request;
+    }
     if let Some(i) = pick {
         d.diff_open = true;
         d.select_file(ctx, i);

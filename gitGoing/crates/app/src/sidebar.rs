@@ -24,6 +24,10 @@ pub enum SidebarAction {
     SetUpstream(String),
     PushTag(String),
     DeleteRemoteTag(String),
+    /// Pin (or unpin) a local branch, by full reference name.
+    SetPinned(String, bool),
+    /// Move a pinned branch up (-1) or down (+1) in the pinned list.
+    MovePinned(String, i32),
     /// Hide (or show) these branches/tags (full reference names) in the graph.
     SetHidden(Vec<String>, bool),
     /// Show only this branch or tag (full reference name).
@@ -50,8 +54,8 @@ pub struct Sidebar {
     /// Scroll the local list to the current branch on the next frame.
     locate: bool,
     stashes: Vec<StashEntry>,
-    /// Local, remote, tags, stashes.
-    sections: [SectionState; 4],
+    /// Local, remote, tags, stashes, pinned.
+    sections: [SectionState; 5],
 }
 
 /// Whether a section is expanded and how tall its scrolling list is.
@@ -107,7 +111,13 @@ impl Sidebar {
 
     /// `hidden` holds the full names of branches and tags hidden from the graph;
     /// `head` is the short name of the checked-out branch, which can't be hidden.
-    pub fn show(&mut self, ui: &mut egui::Ui, hidden: &BTreeSet<String>, head: Option<&str>) -> Option<SidebarAction> {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        hidden: &BTreeSet<String>,
+        pinned: &[String],
+        head: Option<&str>,
+    ) -> Option<SidebarAction> {
         let mut act = None;
         // Never wrap names; cut off the right-hand side instead.
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
@@ -143,7 +153,36 @@ impl Sidebar {
 
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             let force_open = !q.is_empty();
+            let bc = BranchCtx { hidden, pinned, head_full: head_full.as_deref() };
+
+            // PINNED: the branches the user keeps an eye on, in the order they were pinned.
+            let pinned_rows: Vec<_> = pinned
+                .iter()
+                .filter_map(|full| {
+                    let name = full.strip_prefix("refs/heads/")?;
+                    self.local.iter().find(|(n, _, _)| n == name)
+                })
+                .filter(|(n, _, _)| hit(n))
+                .collect();
+            section(ui, "PINNED", pinned_rows.len(), pinned.len(), HeaderButton::None, &mut self.sections[4], |ui| {
+                if pinned.is_empty() {
+                    ui.add_space(2.0);
+                    ui.weak("  Hover a branch in LOCAL and click its pin to keep it here.");
+                }
+                let n = pinned_rows.len();
+                for (i, (name, current, oid)) in pinned_rows.iter().enumerate() {
+                    local_branch_row(ui, &bc, &mut act, 0, name, name, *current, *oid, false, Some((i, n)));
+                }
+            });
+
             let local: Vec<_> = self.local.iter().filter(|(n, _, _)| hit(n)).collect();
+            // The current branch may sit inside collapsed folders (`feature/x`): open them,
+            // or there is no row to scroll to.
+            if locate {
+                if let Some((name, _, _)) = self.local.iter().find(|(_, current, _)| *current) {
+                    expand_ancestors(ui, "local", name);
+                }
+            }
             locate_clicked = section(ui, "LOCAL", local.len(), self.local.len(), HeaderButton::Locate, &mut self.sections[0], |ui| {
                 let items: Vec<(&str, usize)> = local.iter().enumerate().map(|(i, e)| (e.0.as_str(), i)).collect();
                 let nodes = filetree::build(&items, false, false);
@@ -152,47 +191,7 @@ impl Sidebar {
                 let is_hidden = |i: usize| !local[i].1 && hidden.contains(&format!("refs/heads/{}", local[i].0));
                 tree(ui, "local", &nodes, 0, "", force_open, &is_hidden, &mut toggles, &mut |ui, i, name, depth| {
                     let (full, current, oid) = local[i];
-                    let full_ref = format!("refs/heads/{full}");
-                    let hid = hidden.contains(&full_ref);
-                    let (r, eye) = row_eye(ui, depth, Icon::Branch, name, *current, (!*current).then_some(hid));
-                    if eye {
-                        act = Some(SidebarAction::SetHidden(vec![full_ref], !hid));
-                        return;
-                    }
-                    let r = r.on_hover_text("Click to show in the graph; double-click to check out");
-                    if *current && locate {
-                        r.scroll_to_me(Some(egui::Align::Center));
-                    }
-                    if r.clicked() {
-                        act = Some(SidebarAction::Goto(*oid));
-                    }
-                    if r.double_clicked() && !*current {
-                        act = Some(SidebarAction::Checkout(full.clone()));
-                    }
-                    r.context_menu(|ui| {
-                        if ui.add_enabled(!*current, egui::Button::new("Check out")).clicked() {
-                            act = Some(SidebarAction::Checkout(full.clone()));
-                            ui.close_menu();
-                        }
-                        if ui.add_enabled(!*current, egui::Button::new("Merge into current branch")).clicked() {
-                            act = Some(SidebarAction::Merge(full.clone()));
-                            ui.close_menu();
-                        }
-                        if ui.add_enabled(!*current, egui::Button::new("Rebase current branch onto this")).clicked() {
-                            act = Some(SidebarAction::RebaseOnto(full.clone()));
-                            ui.close_menu();
-                        }
-                        if ui.button("Set upstream…").clicked() {
-                            act = Some(SidebarAction::SetUpstream(full.clone()));
-                            ui.close_menu();
-                        }
-                        if ui.add_enabled(!*current, egui::Button::new("Delete…")).clicked() {
-                            act = Some(SidebarAction::Delete(full.clone()));
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        visibility_menu(ui, &mut act, &format!("refs/heads/{full}"), hid, *current);
-                    });
+                    local_branch_row(ui, &bc, &mut act, depth, name, full, *current, *oid, locate, None);
                 });
                 for (ids, hide) in toggles {
                     act = Some(SidebarAction::SetHidden(ids.iter().map(|&i| format!("refs/heads/{}", local[i].0)).collect(), hide));
@@ -495,6 +494,30 @@ fn row_eye(
     current: bool,
     eye: Option<bool>,
 ) -> (Response, bool) {
+    let (resp, clicks) = row_full(ui, depth, icon, text, current, eye, None);
+    (resp, clicks.eye)
+}
+
+/// Which of a row's small buttons were clicked.
+#[derive(Default, Clone, Copy)]
+struct RowClicks {
+    eye: bool,
+    pin: bool,
+}
+
+/// A tree row with up to two small buttons at its right edge: an eye (hide the
+/// branch from the graph; `Some(true)` = hidden) and a pin (`Some(true)` = pinned).
+/// The eye shows on hover and always when hidden; the pin shows on hover and
+/// always when pinned.
+fn row_full(
+    ui: &mut egui::Ui,
+    depth: usize,
+    icon: Icon,
+    text: &str,
+    current: bool,
+    eye: Option<bool>,
+    pin: Option<bool>,
+) -> (Response, RowClicks) {
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_H), Sense::click());
     let p = ui.painter_at(rect);
     let visuals = ui.visuals();
@@ -527,22 +550,132 @@ fn row_eye(
     }
     let font = egui::TextStyle::Body.resolve(ui.style());
 
-    let mut eye_clicked = false;
+    let mut clicks = RowClicks::default();
     let mut text_clip = rect;
-    if let Some(is_hidden) = eye {
-        let eye_rect = Rect::from_center_size(Pos2::new(rect.right() - 16.0, cy), Vec2::splat(20.0));
-        text_clip.max.x = eye_rect.left() - 2.0;
-        // Shown while hovering, and always for hidden rows so they are easy to spot.
-        if resp.hovered() || is_hidden {
-            let over_eye = resp.hover_pos().is_some_and(|p| eye_rect.contains(p));
-            let col = if over_eye { visuals.strong_text_color() } else { visuals.weak_text_color() };
-            icons::draw(&p, eye_rect.center(), if is_hidden { Icon::EyeOff } else { Icon::Eye }, 1.0, col);
-            eye_clicked = resp.clicked() && resp.interact_pointer_pos().is_some_and(|p| eye_rect.contains(p));
+    let mut right = rect.right() - 16.0;
+    let pointer = resp.hover_pos();
+    let click = resp.clicked().then(|| resp.interact_pointer_pos()).flatten();
+    for (kind, state) in [(0, eye), (1, pin)] {
+        let Some(on) = state else { continue };
+        let button = Rect::from_center_size(Pos2::new(right, cy), Vec2::splat(20.0));
+        text_clip.max.x = button.left() - 2.0;
+        right -= 22.0;
+        // Shown while hovering, and always when on, so the state is easy to spot.
+        if !(resp.hovered() || on) {
+            continue;
+        }
+        let over = pointer.is_some_and(|p| button.contains(p));
+        let col = if over {
+            visuals.strong_text_color()
+        } else if kind == 1 && on {
+            Color32::from_rgb(0xe5, 0xc0, 0x7b)
+        } else {
+            visuals.weak_text_color()
+        };
+        let icon = match (kind, on) {
+            (0, true) => Icon::EyeOff,
+            (0, false) => Icon::Eye,
+            (_, true) => Icon::PinFilled,
+            (_, false) => Icon::Pin,
+        };
+        icons::draw(&p, button.center(), icon, 1.0, col);
+        if click.is_some_and(|p| button.contains(p)) {
+            if kind == 0 {
+                clicks.eye = true;
+            } else {
+                clicks.pin = true;
+            }
         }
     }
-    // Names are cut off at the right edge (before the eye), never wrapped.
+    // Names are cut off at the right edge (before the buttons), never wrapped.
     ui.painter_at(text_clip).text(Pos2::new(text_x, cy), egui::Align2::LEFT_CENTER, text, font, color);
-    (resp, eye_clicked)
+    (resp, clicks)
+}
+
+/// What the branch rows need to know about the repository's state.
+struct BranchCtx<'a> {
+    hidden: &'a BTreeSet<String>,
+    pinned: &'a [String],
+    head_full: Option<&'a str>,
+}
+
+/// One local branch row, used by both the PINNED and LOCAL sections.
+/// `slot` is `Some((index, count))` in the PINNED list, which adds move up/down.
+#[allow(clippy::too_many_arguments)]
+fn local_branch_row(
+    ui: &mut egui::Ui,
+    bc: &BranchCtx,
+    act: &mut Option<SidebarAction>,
+    depth: usize,
+    label: &str,
+    full: &str,
+    current: bool,
+    oid: Oid,
+    locate: bool,
+    slot: Option<(usize, usize)>,
+) {
+    let full_ref = format!("refs/heads/{full}");
+    let hid = bc.hidden.contains(&full_ref);
+    let is_pinned = bc.pinned.contains(&full_ref);
+    let _ = bc.head_full;
+    let (r, clicks) = row_full(ui, depth, Icon::Branch, label, current, (!current).then_some(hid), Some(is_pinned));
+    if clicks.eye {
+        *act = Some(SidebarAction::SetHidden(vec![full_ref], !hid));
+        return;
+    }
+    if clicks.pin {
+        *act = Some(SidebarAction::SetPinned(full_ref, !is_pinned));
+        return;
+    }
+    let r = r.on_hover_text("Click to show in the graph; double-click to check out");
+    if current && locate {
+        r.scroll_to_me(Some(egui::Align::Center));
+    }
+    if r.clicked() {
+        *act = Some(SidebarAction::Goto(oid));
+    }
+    if r.double_clicked() && !current {
+        *act = Some(SidebarAction::Checkout(full.to_owned()));
+    }
+    r.context_menu(|ui| {
+        if ui.add_enabled(!current, egui::Button::new("Check out")).clicked() {
+            *act = Some(SidebarAction::Checkout(full.to_owned()));
+            ui.close_menu();
+        }
+        if ui.add_enabled(!current, egui::Button::new("Merge into current branch")).clicked() {
+            *act = Some(SidebarAction::Merge(full.to_owned()));
+            ui.close_menu();
+        }
+        if ui.add_enabled(!current, egui::Button::new("Rebase current branch onto this")).clicked() {
+            *act = Some(SidebarAction::RebaseOnto(full.to_owned()));
+            ui.close_menu();
+        }
+        if ui.button("Set upstream…").clicked() {
+            *act = Some(SidebarAction::SetUpstream(full.to_owned()));
+            ui.close_menu();
+        }
+        if ui.add_enabled(!current, egui::Button::new("Delete…")).clicked() {
+            *act = Some(SidebarAction::Delete(full.to_owned()));
+            ui.close_menu();
+        }
+        ui.separator();
+        if ui.button(if is_pinned { "Unpin" } else { "Pin to the top" }).clicked() {
+            *act = Some(SidebarAction::SetPinned(format!("refs/heads/{full}"), !is_pinned));
+            ui.close_menu();
+        }
+        if let Some((i, n)) = slot {
+            if ui.add_enabled(i > 0, egui::Button::new("Move up")).clicked() {
+                *act = Some(SidebarAction::MovePinned(format!("refs/heads/{full}"), -1));
+                ui.close_menu();
+            }
+            if ui.add_enabled(i + 1 < n, egui::Button::new("Move down")).clicked() {
+                *act = Some(SidebarAction::MovePinned(format!("refs/heads/{full}"), 1));
+                ui.close_menu();
+            }
+        }
+        ui.separator();
+        visibility_menu(ui, act, &format!("refs/heads/{full}"), hid, current);
+    });
 }
 
 /// The visibility entries of a branch/tag context menu.
@@ -565,6 +698,19 @@ fn visibility_menu(ui: &mut egui::Ui, act: &mut Option<SidebarAction>, full_ref:
 }
 
 /// Render `nodes` as folders (collapsible rows) and leaves.
+/// Expand every folder above `name` (a `/`-separated branch or tag name) in the
+/// tree identified by `salt`, using the same ids `tree` stores its state under.
+fn expand_ancestors(ui: &egui::Ui, salt: &str, name: &str) {
+    let parts: Vec<&str> = name.split('/').collect();
+    let mut prefix = String::new();
+    for part in &parts[..parts.len().saturating_sub(1)] {
+        prefix.push_str(part);
+        prefix.push('/');
+        let id = egui::Id::new((salt, &prefix));
+        ui.data_mut(|d| d.insert_persisted(id, true));
+    }
+}
+
 /// The ids of every leaf under `nodes`.
 fn leaf_ids(nodes: &[Node]) -> Vec<usize> {
     let mut out = Vec::new();
@@ -613,5 +759,57 @@ fn tree(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_collapsed_branch_row_appears_once_its_folders_are_expanded() {
+        let ctx = egui::Context::default();
+        let items = [("feature/login/fix-typo", 0usize), ("main", 1)];
+        let nodes = filetree::build(&items, false, false);
+        let rendered = |ui: &mut egui::Ui| {
+            let mut leaves = Vec::new();
+            let mut toggles = Vec::new();
+            tree(ui, "local", &nodes, 0, "", false, &|_| false, &mut toggles, &mut |_, id, _, _| leaves.push(id));
+            leaves
+        };
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                // The user collapsed the folders.
+                for full in ["feature/", "feature/login/"] {
+                    ui.data_mut(|d| d.insert_persisted(egui::Id::new(("local", full.to_owned())), false));
+                }
+                assert_eq!(rendered(ui), vec![1], "only `main` is listed while the folders are closed");
+                expand_ancestors(ui, "local", "feature/login/fix-typo");
+                assert_eq!(rendered(ui), vec![0, 1], "the nested branch shows once its folders are open");
+            });
+        });
+    }
+
+    #[test]
+    fn locating_a_branch_opens_every_folder_above_it() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                // Collapse the folders first, as the user would have.
+                for full in ["feature/", "feature/login/"] {
+                    ui.data_mut(|d| d.insert_persisted(egui::Id::new(("local", full.to_owned())), false));
+                }
+                expand_ancestors(ui, "local", "feature/login/fix-typo");
+                for full in ["feature/", "feature/login/"] {
+                    let open = ui.data_mut(|d| d.get_persisted::<bool>(egui::Id::new(("local", full.to_owned()))));
+                    assert_eq!(open, Some(true), "{full} is open");
+                }
+                // A branch with no folder has nothing to open; unrelated folders are untouched.
+                ui.data_mut(|d| d.insert_persisted(egui::Id::new(("local", "other/".to_owned())), false));
+                expand_ancestors(ui, "local", "main");
+                let other = ui.data_mut(|d| d.get_persisted::<bool>(egui::Id::new(("local", "other/".to_owned()))));
+                assert_eq!(other, Some(false));
+            });
+        });
     }
 }

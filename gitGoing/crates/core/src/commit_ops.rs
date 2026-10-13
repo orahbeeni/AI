@@ -133,7 +133,7 @@ pub fn checkout_detached(repo_path: &Path, id: Oid) -> Result<(), git2::Error> {
     let repo = Repository::discover(repo_path)?;
     crate::merge::ensure_clean_state(&repo)?;
     let commit = repo.find_commit(id)?;
-    repo.checkout_tree(commit.as_object(), Some(CheckoutBuilder::new().safe()))?;
+    crate::branches::checkout_safely(&repo, commit.as_object())?;
     repo.set_head_detached(id)
 }
 

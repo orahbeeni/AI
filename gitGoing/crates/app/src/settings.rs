@@ -51,11 +51,13 @@ pub struct Settings {
     pub split_diff: bool,
     /// Open diffs ignoring whitespace changes.
     pub ignore_whitespace: bool,
+    /// Play the intro animation at start.
+    pub show_intro: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { theme: ThemeChoice::System, zoom: 1.0, pull_mode: PullMode::Merge, split_diff: false, ignore_whitespace: false }
+        Settings { theme: ThemeChoice::System, zoom: 1.0, pull_mode: PullMode::Merge, split_diff: false, ignore_whitespace: false, show_intro: true }
     }
 }
 
@@ -70,6 +72,7 @@ impl Settings {
                 .unwrap_or(d.pull_mode),
             split_diff: get("split_diff").is_some_and(|v| v == "1"),
             ignore_whitespace: get("ignore_ws").is_some_and(|v| v == "1"),
+            show_intro: get("intro").is_none_or(|v| v != "0"),
         }
     }
 
@@ -79,6 +82,7 @@ impl Settings {
         set("pull_mode", pull_key(self.pull_mode).to_owned());
         set("split_diff", (self.split_diff as u8).to_string());
         set("ignore_ws", (self.ignore_whitespace as u8).to_string());
+        set("intro", (self.show_intro as u8).to_string());
     }
 
     /// Push the settings into egui and the diff view.
@@ -138,6 +142,8 @@ impl SettingsWindow {
                     ui.label("Interface scale");
                     ui.add(egui::Slider::new(&mut s.zoom, 0.7..=1.6).step_by(0.05).fixed_decimals(2));
                 });
+                ui.checkbox(&mut s.show_intro, "Play the intro animation at start")
+                    .on_hover_text("Takes effect the next time the app starts");
                 ui.add_space(8.0);
                 ui.strong("Git");
                 ui.horizontal(|ui| {
@@ -196,6 +202,7 @@ mod tests {
             pull_mode: PullMode::Rebase,
             split_diff: true,
             ignore_whitespace: true,
+            show_intro: false,
         };
         let mut store = HashMap::new();
         s.save(|k, v| {

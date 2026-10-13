@@ -229,7 +229,7 @@ pub(super) fn history_view(
                             None => format!("// WIP  ({wip_count} changed)"),
                         },
                         font.clone(),
-                        if l.changes.as_ref().and_then(|c| c.operation()).is_some_and(|(_, n)| n > 0) { Color32::from_rgb(0xe5, 0x53, 0x4b) } else { weak },
+                        if l.changes.as_ref().and_then(|c| c.operation()).is_some_and(|(_, n)| n > 0) { Color32::from_rgb(0xe5, 0x53, 0x4b) } else if l.show_changes { visuals.selection.stroke.color } else { weak },
                     );
                     continue;
                 }
@@ -340,18 +340,20 @@ pub(super) fn history_view(
                         if !l.hidden.is_empty() && l.hidden.contains(&label.full_name()) {
                             continue;
                         }
-                        let (bg, fg) = match label.kind {
-                            RefKind::Head => (Color32::from_rgb(0x2e, 0x7d, 0x32), Color32::WHITE),
-                            RefKind::Local => (Color32::from_rgb(0x1f, 0x6f, 0xa8), Color32::WHITE),
-                            RefKind::Remote => (Color32::from_rgb(0x6a, 0x4c, 0x93), Color32::WHITE),
-                            RefKind::Tag => (Color32::from_rgb(0xb2, 0x8a, 0x1e), Color32::BLACK),
-                        };
+                        // A chip takes the colour of the graph line it sits on; remote ones are a little darker.
+                        let lane = PALETTE[row.graph.node_color as usize % PALETTE.len()];
+                        let bg = if label.kind == RefKind::Remote { lane.gamma_multiply(0.7) } else { lane };
+                        let lum = 0.299 * bg.r() as f32 + 0.587 * bg.g() as f32 + 0.114 * bg.b() as f32;
+                        let fg = if lum > 140.0 { Color32::BLACK } else { Color32::WHITE };
                         let galley = rp.layout_no_wrap(label.name.clone(), small.clone(), fg);
                         let chip = Rect::from_min_size(
                             Pos2::new(x, cy - 8.0),
                             galley.size() + Vec2::new(10.0, 4.0),
                         );
                         rp.rect_filled(chip, 4.0, bg);
+                        if label.kind == RefKind::Head {
+                            rp.rect_stroke(chip, 4.0, Stroke::new(1.5_f32, Color32::WHITE), egui::StrokeKind::Inside);
+                        }
                         rp.galley(chip.min + Vec2::new(5.0, 2.0), galley, fg);
                         x = chip.right() + 4.0;
                     }

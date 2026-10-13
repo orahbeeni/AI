@@ -64,7 +64,7 @@ pub(crate) fn merge_reference(repo: &Repository, reference: &Reference) -> Resul
 
     if analysis.is_fast_forward() {
         let target = repo.find_commit(theirs.id())?;
-        repo.checkout_tree(target.as_object(), Some(CheckoutBuilder::new().safe()))?;
+        crate::branches::checkout_safely(repo, target.as_object())?;
         match head.name().filter(|_| head.is_branch()) {
             Some(refname) => {
                 repo.reference(refname, target.id(), true, "gitgoing: merge (fast-forward)")?;

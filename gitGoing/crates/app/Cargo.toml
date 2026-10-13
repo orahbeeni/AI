@@ -9,6 +9,7 @@ gitgoing-core = { path = "../core" }
 eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "x11", "wayland", "persistence"] }
 rfd = "0.15"
 png = { version = "0.17", default-features = false }
+jpeg-decoder = { version = "0.3", default-features = false }
 
 [dev-dependencies]
 tempfile = "3"

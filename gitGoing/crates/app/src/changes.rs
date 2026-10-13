@@ -2,9 +2,11 @@
 
 use crate::detail::{spawn, Fetch};
 use crate::diffview::{self, DiffOpts, HunkBtn};
+use crate::filemenu::{self, FileRequest};
+use crate::filerows;
 use crate::filetree::{self, ViewMode};
 use crate::icons;
-use eframe::egui::{self, Color32};
+use eframe::egui::{self, Color32, Sense, Vec2};
 use gitgoing_core::diff::{ChangeKind, FileDiff};
 use gitgoing_core::merge::{self, Side};
 use gitgoing_core::rebase;
@@ -35,6 +37,13 @@ pub struct Changes {
     confirm: Option<Discard>,
     /// A conflicted file the user asked to resolve in the editor window.
     resolve_request: Option<String>,
+    /// A file-menu choice for the app to carry out.
+    file_request: Option<FileRequest>,
+    /// The Unstaged and Staged sections are expanded.
+    unstaged_open: bool,
+    staged_open: bool,
+    /// Share of the list area the Unstaged section gets when both are open.
+    split: f32,
     /// Show files as a directory tree instead of a flat path list.
     mode: ViewMode,
 }
@@ -68,6 +77,10 @@ impl Changes {
             opts: DiffOpts::default(),
             confirm: None,
             resolve_request: None,
+            file_request: None,
+            unstaged_open: true,
+            staged_open: true,
+            split: 0.6,
             mode: ViewMode::default(),
         };
         c.refresh(ctx);
@@ -83,6 +96,10 @@ impl Changes {
 
     pub fn take_resolve_request(&mut self) -> Option<String> {
         self.resolve_request.take()
+    }
+
+    pub fn take_file_request(&mut self) -> Option<FileRequest> {
+        self.file_request.take()
     }
 
     pub fn repo(&self) -> &PathBuf {
@@ -214,6 +231,7 @@ enum Discard {
 
 enum Act {
     OpenResolver(String),
+    File(FileRequest),
     RebaseContinue,
     RebaseSkip,
     Discard(String, ChangeKind),
@@ -328,19 +346,21 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, c: &mut Changes) -> bool {
 
     egui::CentralPanel::default().show_inside(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.strong("Working changes");
-            if ui.small_button("Refresh").clicked() {
-                c.refresh(ctx);
-            }
-            if ui.small_button("Close").clicked() {
-                close = true;
-            }
+            ui.label(egui::RichText::new("Working changes").size(15.0).strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if icons::icon_button(ui, icons::Icon::Close, false, "Close", true).clicked() {
+                    close = true;
+                }
+                if icons::icon_button(ui, icons::Icon::Fetch, false, "Refresh", true).clicked() {
+                    c.refresh(ctx);
+                }
+            });
         });
-        ui.horizontal(|ui| {
-            filetree::mode_toggle(ui, &mut c.mode);
-        });
+        ui.add_space(2.0);
+        filetree::mode_toggle(ui, &mut c.mode);
+        ui.add_space(6.0);
         let mode = c.mode;
-        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| match &c.status {
+        match &c.status {
             None => {
                 ui.spinner();
             }
@@ -391,11 +411,50 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, c: &mut Changes) -> bool {
                     ui.add_space(6.0);
                 }
                 let sel = if c.diff_open { &c.selected } else { &None };
-                file_list(ui, FileList { title: "Unstaged Files", entries: &s.unstaged, staged: false }, sel, busy, mode, &mut act);
-                ui.add_space(6.0);
-                file_list(ui, FileList { title: "Staged Files", entries: &s.staged, staged: true }, sel, busy, mode, &mut act);
+
+                // Two sections whose headings stay put: each has its own scrolling list,
+                // and clicking a heading expands or collapses its section.
+                const HEADER_H: f32 = 28.0;
+                const DIVIDER_H: f32 = 8.0;
+                let both = c.unstaged_open && c.staged_open;
+                let body_total = (ui.available_height() - 2.0 * HEADER_H - if both { DIVIDER_H } else { 0.0 }).max(0.0);
+                let (h_unstaged, h_staged) = section_heights(body_total, c.unstaged_open, c.staged_open, c.split);
+
+                let list = FileList { title: "Unstaged", entries: &s.unstaged, staged: false };
+                if section_head(ui, &list, Some(c.unstaged_open), busy, &mut act) {
+                    c.unstaged_open = !c.unstaged_open;
+                }
+                if c.unstaged_open {
+                    list_body(ui, h_unstaged, list, sel, busy, mode, &mut act);
+                }
+
+                if both {
+                    // Drag to change how the height is shared.
+                    let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), DIVIDER_H), Sense::drag());
+                    let active = resp.hovered() || resp.dragged();
+                    if active {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                    }
+                    let stroke = if active {
+                        ui.visuals().widgets.active.fg_stroke
+                    } else {
+                        ui.visuals().widgets.noninteractive.bg_stroke
+                    };
+                    ui.painter().hline(rect.x_range(), rect.center().y, stroke);
+                    if resp.dragged() && body_total > 1.0 {
+                        c.split = (c.split + resp.drag_delta().y / body_total).clamp(0.12, 0.88);
+                    }
+                }
+
+                let list = FileList { title: "Staged", entries: &s.staged, staged: true };
+                if section_head(ui, &list, Some(c.staged_open), busy, &mut act) {
+                    c.staged_open = !c.staged_open;
+                }
+                if c.staged_open {
+                    list_body(ui, h_staged, list, sel, busy, mode, &mut act);
+                }
             }
-        });
+        }
     });
 
     match act {
@@ -418,6 +477,7 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, c: &mut Changes) -> bool {
             }
         }
         Some(Act::OpenResolver(p)) => c.resolve_request = Some(p),
+        Some(Act::File(r)) => c.file_request = Some(r),
         Some(Act::RebaseContinue) => c.run_op(ctx, |r| rebase_step(rebase::continue_(r))),
         Some(Act::RebaseSkip) => c.run_op(ctx, |r| rebase_step(rebase::skip(r))),
         Some(Act::ConfirmAbort(v)) => c.confirm_abort = v,
@@ -556,13 +616,66 @@ pub fn diff_pane(ui: &mut egui::Ui, c: &mut Changes) -> bool {
 }
 
 /// One of the two file lists (unstaged or staged).
+#[derive(Clone, Copy)]
 struct FileList<'a> {
     title: &'a str,
     entries: &'a [StatusEntry],
     staged: bool,
 }
 
-fn file_list(
+/// How the list height is shared: an open section alone gets all of it; two
+/// open sections split it by `split` (the Unstaged share); a closed one gets none.
+fn section_heights(total: f32, unstaged_open: bool, staged_open: bool, split: f32) -> (f32, f32) {
+    match (unstaged_open, staged_open) {
+        (true, true) => (total * split, total * (1.0 - split)),
+        (true, false) => (total, 0.0),
+        (false, true) => (0.0, total),
+        (false, false) => (0.0, 0.0),
+    }
+}
+
+/// A section's heading (pinned above its list). Returns true if the heading was
+/// clicked to expand or collapse the section.
+fn section_head(ui: &mut egui::Ui, list: &FileList, open: Option<bool>, busy: bool, act: &mut Option<Act>) -> bool {
+    let FileList { title, entries, staged } = *list;
+    let any_discardable = entries.iter().any(|e| e.kind != ChangeKind::Conflicted);
+    let clicks = filerows::section_header(
+        ui,
+        title,
+        entries.len(),
+        open,
+        Some((if staged { "Unstage all" } else { "Stage all" }, !busy && !entries.is_empty())),
+        (!staged).then_some((icons::Icon::Trash, "Discard all unstaged changes", !busy && any_discardable)),
+    );
+    if clicks.text {
+        let all = entries.iter().map(|e| e.path.clone()).collect();
+        *act = Some(if staged { Act::Unstage(all) } else { Act::Stage(all) });
+    }
+    if clicks.icon {
+        *act = Some(Act::DiscardAll);
+    }
+    clicks.toggle
+}
+
+/// A section's list inside its own scroll area of the given height.
+fn list_body(
+    ui: &mut egui::Ui,
+    height: f32,
+    list: FileList,
+    selected: &Option<(String, bool)>,
+    busy: bool,
+    mode: ViewMode,
+    act: &mut Option<Act>,
+) {
+    ui.allocate_ui(Vec2::new(ui.available_width(), height), |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt(("changes_list", list.staged))
+            .auto_shrink(false)
+            .show(ui, |ui| file_rows(ui, list, selected, busy, mode, act));
+    });
+}
+
+fn file_rows(
     ui: &mut egui::Ui,
     list: FileList,
     selected: &Option<(String, bool)>,
@@ -571,68 +684,87 @@ fn file_list(
     act: &mut Option<Act>,
 ) {
     let FileList { title, entries, staged } = list;
-    ui.horizontal(|ui| {
-        ui.strong(format!("{title} ({})", entries.len()));
-        if !staged {
-            let any = entries.iter().any(|e| e.kind != ChangeKind::Conflicted);
-            if ui
-                .add_enabled(!busy && any, egui::Button::new("Discard all").small())
-                .on_hover_text("Throw away all unstaged changes")
-                .clicked()
-            {
-                *act = Some(Act::DiscardAll);
-            }
-        }
-        let label = if staged { "Unstage all" } else { "Stage all" };
-        if ui.add_enabled(!busy && !entries.is_empty(), egui::Button::new(label).small()).clicked() {
-            let all = entries.iter().map(|e| e.path.clone()).collect();
-            *act = Some(if staged { Act::Unstage(all) } else { Act::Stage(all) });
-        }
-    });
-    let mut row = |ui: &mut egui::Ui, e: &StatusEntry, name: &str| {
+    if entries.is_empty() {
+        ui.add_space(2.0);
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(!busy, egui::Button::new(if staged { "-" } else { "+" }).small())
-                .on_hover_text(match (staged, e.kind) {
-                    (true, _) => "Unstage",
-                    (false, ChangeKind::Conflicted) => "Mark resolved (keep the file as it is now)",
-                    (false, _) => "Stage",
-                })
-                .clicked()
-            {
-                let p = vec![e.path.clone()];
-                *act = Some(if staged { Act::Unstage(p) } else { Act::Stage(p) });
-            }
-            if e.kind == ChangeKind::Conflicted {
-                if ui
-                    .add_enabled(!busy, egui::Button::new("Resolve…").small())
-                    .on_hover_text("Open the conflict editor")
-                    .clicked()
-                {
-                    *act = Some(Act::OpenResolver(e.path.clone()));
-                }
-                for (label, side, tip) in [
-                    ("Ours", Side::Ours, "Keep the current branch's version"),
-                    ("Theirs", Side::Theirs, "Take the incoming version"),
-                ] {
-                    if ui.add_enabled(!busy, egui::Button::new(label).small()).on_hover_text(tip).clicked() {
-                        *act = Some(Act::Resolve(e.path.clone(), side));
-                    }
-                }
-            }
-            icons::change_badge(ui, e.kind);
-            if !staged && e.kind != ChangeKind::Conflicted
-                && icons::small_icon_button(ui, icons::Icon::Trash, "Discard changes", !busy).clicked()
-            {
-                *act = Some(Act::Discard(e.path.clone(), e.kind));
-            }
-            let sel = selected.as_ref().is_some_and(|(p, s)| *p == e.path && *s == staged);
-            let label = ui.selectable_label(sel, name).on_hover_text(&e.path);
-            if label.clicked() {
-                *act = Some(Act::Select(e.path.clone(), staged));
-            }
-            if label.double_clicked() && e.kind == ChangeKind::Conflicted {
+            ui.add_space(8.0);
+            ui.weak(if staged { "Nothing staged" } else { "No unstaged changes" });
+        });
+        return;
+    }
+
+    let warn = Color32::from_rgb(0xe5, 0xc0, 0x7b);
+    let mut row = |ui: &mut egui::Ui, e: &StatusEntry, name: &str| {
+        let sel = selected.as_ref().is_some_and(|(p, s)| *p == e.path && *s == staged);
+        let conflicted = e.kind == ChangeKind::Conflicted;
+        let salt = format!("{}|{staged}", e.path);
+        let (idle, active) = if conflicted { (96.0, 96.0) } else if staged { (8.0, 40.0) } else { (8.0, 66.0) };
+        let r = filerows::file_row(ui, e.kind, name, &e.path, sel, idle, active);
+
+        if conflicted {
+            if filerows::pill(ui, &r, &salt, "Resolve…", !busy, warn) {
                 *act = Some(Act::OpenResolver(e.path.clone()));
+                return;
+            }
+        } else {
+            let buttons: Vec<(icons::Icon, &str, bool)> = if staged {
+                vec![(icons::Icon::Minus, "Unstage", !busy)]
+            } else {
+                vec![(icons::Icon::Plus, "Stage", !busy), (icons::Icon::Trash, "Discard changes…", !busy)]
+            };
+            match filerows::hover_buttons(ui, &r, sel, &salt, &buttons) {
+                Some(0) => {
+                    let p = vec![e.path.clone()];
+                    *act = Some(if staged { Act::Unstage(p) } else { Act::Stage(p) });
+                    return;
+                }
+                Some(_) => {
+                    *act = Some(Act::Discard(e.path.clone(), e.kind));
+                    return;
+                }
+                None => {}
+            }
+        }
+
+        if r.resp.clicked() {
+            *act = Some(Act::Select(e.path.clone(), staged));
+        }
+        if r.resp.double_clicked() && conflicted {
+            *act = Some(Act::OpenResolver(e.path.clone()));
+        }
+        r.resp.context_menu(|ui| {
+            if conflicted {
+                if ui.button("Resolve in editor…").clicked() {
+                    *act = Some(Act::OpenResolver(e.path.clone()));
+                    ui.close_menu();
+                }
+                if ui.button("Use ours (keep the current branch's version)").clicked() {
+                    *act = Some(Act::Resolve(e.path.clone(), Side::Ours));
+                    ui.close_menu();
+                }
+                if ui.button("Use theirs (take the incoming version)").clicked() {
+                    *act = Some(Act::Resolve(e.path.clone(), Side::Theirs));
+                    ui.close_menu();
+                }
+                if ui.button("Mark resolved as it is now").clicked() {
+                    *act = Some(Act::Stage(vec![e.path.clone()]));
+                    ui.close_menu();
+                }
+            } else {
+                let label = if staged { "Unstage" } else { "Stage" };
+                if ui.add_enabled(!busy, egui::Button::new(label)).clicked() {
+                    let p = vec![e.path.clone()];
+                    *act = Some(if staged { Act::Unstage(p) } else { Act::Stage(p) });
+                    ui.close_menu();
+                }
+                if !staged && ui.add_enabled(!busy, egui::Button::new("Discard changes…")).clicked() {
+                    *act = Some(Act::Discard(e.path.clone(), e.kind));
+                    ui.close_menu();
+                }
+            }
+            ui.separator();
+            if let Some(action) = filemenu::items(ui, &e.path) {
+                *act = Some(Act::File(FileRequest { action, path: e.path.clone(), commit: None, staged }));
             }
         });
     };
@@ -651,5 +783,19 @@ fn file_list(
                 row(ui, e, filetree::file_name(&e.path));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::section_heights;
+
+    #[test]
+    fn open_sections_share_the_height_and_a_closed_one_gives_it_up() {
+        let (a, b) = section_heights(100.0, true, true, 0.6);
+        assert!((a - 60.0).abs() < 1e-3 && (b - 40.0).abs() < 1e-3, "{a} {b}");
+        assert_eq!(section_heights(100.0, true, false, 0.6), (100.0, 0.0));
+        assert_eq!(section_heights(100.0, false, true, 0.6), (0.0, 100.0));
+        assert_eq!(section_heights(100.0, false, false, 0.6), (0.0, 0.0));
     }
 }

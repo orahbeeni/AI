@@ -8,6 +8,7 @@ pub mod conflict;
 pub mod gitcmd;
 pub mod gitlog;
 pub mod diff;
+pub mod filehist;
 pub mod graph;
 pub mod history;
 pub mod merge;

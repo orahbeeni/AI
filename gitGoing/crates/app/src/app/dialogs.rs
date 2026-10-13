@@ -6,6 +6,8 @@ use super::*;
 impl RepoTab {
     /// Draw whichever dialogs are open.
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
+        self.dialog_error(ctx);
+        self.dialog_stash_offer(ctx);
         self.dialog_new_branch(ctx);
         self.dialog_new_tag(ctx);
         self.dialog_force_push(ctx);
@@ -14,6 +16,124 @@ impl RepoTab {
         self.dialog_remote(ctx);
         self.dialog_upstream(ctx);
         self.dialog_confirm(ctx);
+        self.file_windows(ctx);
+    }
+
+    /// A failed operation, in a window so it can't be missed.
+    fn dialog_error(&mut self, ctx: &egui::Context) {
+        let mut close = false;
+        if let Some((title, message)) = &self.error_dlg {
+            egui::Window::new(title)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.set_max_width(520.0);
+                    ui.colored_label(Color32::from_rgb(0xe5, 0x53, 0x4b), message);
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        close = ui.button("OK").clicked();
+                        if ui.button("Copy message").clicked() {
+                            ui.ctx().copy_text(message.clone());
+                        }
+                    });
+                });
+        }
+        if close {
+            self.error_dlg = None;
+        }
+    }
+
+    /// A checkout was stopped by uncommitted changes: say so, and offer to stash them.
+    fn dialog_stash_offer(&mut self, ctx: &egui::Context) {
+        // 0 = nothing, 1 = stash + checkout, 2 = stash + checkout + pop, 3 = cancel
+        let mut choice = 0;
+        if let Some(o) = &self.stash_offer {
+            let amber = Color32::from_rgb(0xf5, 0xa6, 0x23);
+            // Dim everything behind the dialog and swallow clicks on it.
+            let screen = ctx.screen_rect();
+            egui::Area::new(egui::Id::new("stash_offer_backdrop"))
+                .order(egui::Order::Middle)
+                .fixed_pos(screen.min)
+                .show(ctx, |ui| {
+                    ui.allocate_response(screen.size(), egui::Sense::click_and_drag());
+                    ui.painter().rect_filled(screen, 0.0, Color32::from_black_alpha(150));
+                });
+            let frame = egui::Frame::window(&ctx.style())
+                .stroke(Stroke::new(2.0_f32, amber))
+                .inner_margin(egui::Margin::same(16))
+                .shadow(egui::Shadow { offset: [0, 6], blur: 28, spread: 4, color: Color32::from_black_alpha(160) });
+            egui::Window::new("stash_offer")
+                .title_bar(false)
+                .frame(frame)
+                .collapsible(false)
+                .resizable(false)
+                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.set_max_width(520.0);
+                    ui.horizontal(|ui| {
+                        let (r, _) = ui.allocate_exact_size(Vec2::splat(26.0), egui::Sense::hover());
+                        let p = ui.painter();
+                        let pts = vec![r.center_top() + Vec2::new(0.0, 1.0), r.right_bottom(), r.left_bottom()];
+                        p.add(egui::Shape::convex_polygon(pts, amber, Stroke::NONE));
+                        p.text(r.center() + Vec2::new(0.0, 4.0), egui::Align2::CENTER_CENTER, "!", egui::FontId::proportional(15.0), Color32::BLACK);
+                        ui.label(egui::RichText::new("Uncommitted changes are in the way").size(18.0).strong().color(amber));
+                    });
+                    ui.add_space(10.0);
+                    ui.label(&o.message);
+                    ui.add_space(8.0);
+                    ui.weak(
+                        "Stash saves your changes (including new files), so nothing is lost. \
+                         \"Stash, check out and pop\" also re-applies them on the new branch afterwards; \
+                         if that hits conflicts, the stash is kept under STASHES.",
+                    );
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        let primary = egui::Button::new(egui::RichText::new("Stash, check out and pop").strong().color(Color32::BLACK))
+                            .fill(amber)
+                            .min_size(Vec2::new(0.0, 28.0));
+                        if ui.add(primary).clicked() {
+                            choice = 2;
+                        }
+                        if ui.add(egui::Button::new("Stash and check out").min_size(Vec2::new(0.0, 28.0))).clicked() {
+                            choice = 1;
+                        }
+                        if ui.add(egui::Button::new("Cancel").min_size(Vec2::new(0.0, 28.0))).clicked() {
+                            choice = 3;
+                        }
+                    });
+                });
+        }
+        if choice == 3 {
+            self.stash_offer = None;
+        }
+        if choice == 1 || choice == 2 {
+            if let Some(o) = self.stash_offer.take() {
+                let flag = self.blocked.clone();
+                let retry = o.retry;
+                let pop = choice == 2;
+                self.retry = None;
+                let label = if pop { "Stash, check out and pop" } else { "Stash and check out" };
+                self.run_op(ctx, label, move |p| {
+                    stash::save(p).map_err(|e| e.message().to_owned())?;
+                    match retry {
+                        Retry::Checkout(n) => branches::checkout(p, &n),
+                        Retry::CheckoutRemote(n) => branches::checkout_remote(p, &n),
+                    }
+                    .map_err(|e| note_blocked(&flag, e).message().to_owned())?;
+                    if pop {
+                        stash::pop(p, 0).map_err(|e| {
+                            format!(
+                                "Checked out, but your changes could not be re-applied: {}. They are still saved in STASHES.",
+                                e.message()
+                            )
+                        })?;
+                    }
+                    Ok::<(), String>(())
+                });
+            }
+        }
     }
 
     fn dialog_new_branch(&mut self, ctx: &egui::Context) {
@@ -426,6 +546,10 @@ impl RepoTab {
                     "Delete stash",
                     format!("Permanently delete stash {i}? Its changes will be lost."),
                 ),
+                Confirm::DeleteFile(p) => (
+                    "Delete file",
+                    format!("Delete '{p}' from your working folder? Files git doesn't track yet can't be recovered."),
+                ),
                 Confirm::DeleteTag(n) => ("Delete tag", format!("Delete local tag '{n}'?")),
                 Confirm::DeleteRemoteBranch(n) => (
                     "Delete remote branch",
@@ -476,6 +600,15 @@ impl RepoTab {
                     }
                     Some(Confirm::HardReset(id)) => {
                         self.run_op(ctx, "Hard reset", move |p| commit_ops::reset(p, id, ResetMode::Hard))
+                    }
+                    Some(Confirm::DeleteFile(rel)) => {
+                        let target = self.workdir_file(&rel);
+                        match target {
+                            Ok(abs) => self.run_op(ctx, "Delete file", move |_| {
+                                std::fs::remove_file(&abs).map_err(|e| format!("Couldn't delete the file: {e}"))
+                            }),
+                            Err(e) => self.error_dlg = Some(("Can't delete file".into(), e)),
+                        }
                     }
                     Some(Confirm::DropStash(i)) => {
                         self.run_op(ctx, "Drop stash", move |p| stash::drop(p, i))

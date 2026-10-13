@@ -1,18 +1,63 @@
 //! Branch operations: checkout, create, delete.
 
-use git2::{build::CheckoutBuilder, Branch, BranchType, Repository};
+use git2::{
+    build::CheckoutBuilder,
+    Branch, BranchType, Error, ErrorCode, Repository,
+};
 use std::path::Path;
 
 fn err(msg: impl AsRef<str>) -> git2::Error {
     git2::Error::from_str(msg.as_ref())
 }
 
+/// Check out `obj`'s tree, refusing to overwrite local modifications. When that
+/// is what stops it, the error says which files are in the way (and has
+/// [`ErrorCode::Conflict`], see [`blocked_by_local_changes`]) instead of just
+/// "1 conflict prevents checkout".
+pub(crate) fn checkout_safely(repo: &Repository, obj: &git2::Object) -> Result<(), git2::Error> {
+    let mut in_the_way: Vec<String> = Vec::new();
+    let result = {
+        let mut co = CheckoutBuilder::new();
+        co.safe().notify_on(git2::CheckoutNotificationType::CONFLICT).notify(|_, path, _, _, _| {
+            if let Some(p) = path {
+                in_the_way.push(p.display().to_string());
+            }
+            true
+        });
+        repo.checkout_tree(obj, Some(&mut co))
+    };
+    match result {
+        Err(e) if e.code() == ErrorCode::Conflict => {
+            in_the_way.sort();
+            in_the_way.dedup();
+            let list = match in_the_way.len() {
+                0 => "some files".to_owned(),
+                1..=6 => in_the_way.join(", "),
+                n => format!("{}, and {} more", in_the_way[..6].join(", "), n - 6),
+            };
+            Err(Error::new(
+                ErrorCode::Conflict,
+                e.class(),
+                format!(
+                    "Your uncommitted changes to {list} would be overwritten by this checkout. \
+                     Commit, stash or discard them first."
+                ),
+            ))
+        }
+        other => other,
+    }
+}
+
+/// Did a checkout fail only because uncommitted changes are in the way?
+pub fn blocked_by_local_changes(e: &git2::Error) -> bool {
+    e.code() == ErrorCode::Conflict
+}
+
 fn checkout_local(repo: &Repository, name: &str) -> Result<(), git2::Error> {
     crate::merge::ensure_clean_state(repo)?;
     let refname = format!("refs/heads/{name}");
     let obj = repo.revparse_single(&refname)?;
-    // Safe mode refuses to overwrite local modifications.
-    repo.checkout_tree(&obj, Some(CheckoutBuilder::new().safe()))?;
+    checkout_safely(repo, &obj)?;
     repo.set_head(&refname)
 }
 
@@ -143,7 +188,9 @@ mod tests {
         // Uncommitted edit to the same file: checking out `second` would clobber it.
         std::fs::write(p.join("a"), "my local edit").unwrap();
 
-        assert!(create_at(p, "new-branch", second, true).is_err());
+        let err = create_at(p, "new-branch", second, true).unwrap_err();
+        assert!(blocked_by_local_changes(&err));
+        assert!(err.message().contains('a') && err.message().contains("uncommitted changes"), "{}", err.message());
         assert!(repo.find_branch("new-branch", BranchType::Local).is_err(), "failed attempt cleaned up");
         assert_eq!(std::fs::read_to_string(p.join("a")).unwrap(), "my local edit", "work untouched");
     }

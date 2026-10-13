@@ -14,12 +14,14 @@ pub enum ViewMode {
     Tree,
 }
 
-/// The Path / Tree / File selector.
+/// The File / Path / Tree selector: File shows names only (the path is a tooltip),
+/// Path shows full paths, Tree groups files into folders.
 pub fn mode_toggle(ui: &mut egui::Ui, mode: &mut ViewMode) {
-    ui.selectable_value(mode, ViewMode::File, "File")
-        .on_hover_text("Show only file names; hover a file to see its path");
-    ui.selectable_value(mode, ViewMode::Path, "Path").on_hover_text("Show the full path of each file");
-    ui.selectable_value(mode, ViewMode::Tree, "Tree").on_hover_text("Group files into folders");
+    const MODES: [ViewMode; 3] = [ViewMode::File, ViewMode::Path, ViewMode::Tree];
+    let current = MODES.iter().position(|m| m == mode);
+    if let Some(i) = crate::icons::segmented(ui, &["File", "Path", "Tree"], current, true) {
+        *mode = MODES[i];
+    }
 }
 
 /// The last component of a path (`src/a/b.rs` -> `b.rs`).

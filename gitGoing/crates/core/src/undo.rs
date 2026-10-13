@@ -6,7 +6,7 @@
 //! working tree uses a safe checkout, and undoing a commit is a soft reset that
 //! keeps the committed changes staged.
 
-use git2::{build::CheckoutBuilder, BranchType, Oid, Repository};
+use git2::{BranchType, Oid, Repository};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -109,7 +109,7 @@ pub fn restore(
             }
         } else {
             // Safe mode refuses to overwrite local modifications.
-            repo.checkout_tree(commit.as_object(), Some(CheckoutBuilder::new().safe()))?;
+            crate::branches::checkout_safely(&repo, commit.as_object())?;
         }
     }
 

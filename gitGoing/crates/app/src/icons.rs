@@ -31,6 +31,11 @@ pub enum Icon {
     Gear,
     Eye,
     EyeOff,
+    Plus,
+    Minus,
+    Close,
+    Pin,
+    PinFilled,
 }
 
 /// Points along an arc of radius `r` around `c`, from angle `a0` to `a1` (radians, y down).
@@ -173,6 +178,27 @@ pub fn draw(p: &egui::Painter, c: Pos2, icon: Icon, scale: f32, color: Color32) 
                 p.line_segment([v(-6.5, 5.5), v(6.5, -5.5)], Stroke::new(1.6_f32 * s.clamp(1.0, 1.35), color));
             }
         }
+        Icon::Pin | Icon::PinFilled => {
+            // A pin: round head on a short shaft with a point, drawn at a slant.
+            let head = [v(-1.0, -6.0), v(3.2, -6.0), v(3.2, -1.5), v(5.0, 1.0), v(-3.0, 1.0), v(-1.0, -1.5)];
+            if icon == Icon::PinFilled {
+                p.add(Shape::convex_polygon(head.to_vec(), color, Stroke::NONE));
+            } else {
+                p.add(Shape::closed_line(head.to_vec(), st));
+            }
+            line(v(1.0, 1.0), v(1.0, 6.5));
+        }
+        Icon::Plus => {
+            line(v(-5.0, 0.0), v(5.0, 0.0));
+            line(v(0.0, -5.0), v(0.0, 5.0));
+        }
+        Icon::Minus => {
+            line(v(-5.0, 0.0), v(5.0, 0.0));
+        }
+        Icon::Close => {
+            line(v(-4.5, -4.5), v(4.5, 4.5));
+            line(v(-4.5, 4.5), v(4.5, -4.5));
+        }
         Icon::Gear => {
             p.circle_stroke(c, 2.6 * s, st);
             p.circle_stroke(c, 5.0 * s, st);
@@ -222,11 +248,8 @@ pub fn tool_button(ui: &mut egui::Ui, caption: &str, icon: Icon, enabled: bool) 
     resp
 }
 
-/// A coloured icon for a file's change kind (replaces the old M/A/D letters).
-pub fn change_badge(ui: &mut egui::Ui, kind: ChangeKind) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
-    let p = ui.painter_at(rect);
-    let c = rect.center();
+/// Draw the icon for a file's change kind centred on `c`; returns its name.
+pub fn paint_change(p: &egui::Painter, c: Pos2, kind: ChangeKind) -> &'static str {
     let col = crate::detail::kind_color(kind);
     let st = Stroke::new(1.4_f32, col);
     let bold = Stroke::new(1.9_f32, col);
@@ -235,7 +258,7 @@ pub fn change_badge(ui: &mut egui::Ui, kind: ChangeKind) -> Response {
         p.line_segment([v(-r, 0.0), v(r, 0.0)], st);
         p.line_segment([v(0.0, -r), v(0.0, r)], st);
     };
-    let name = match kind {
+    match kind {
         ChangeKind::Added => {
             plus(4.5, bold);
             "Added"
@@ -256,7 +279,7 @@ pub fn change_badge(ui: &mut egui::Ui, kind: ChangeKind) -> Response {
         }
         ChangeKind::Renamed => {
             p.line_segment([v(-5.0, 0.0), v(2.0, 0.0)], bold);
-            head(&p, v(6.0, 0.0), Vec2::new(1.0, 0.0), 4.5, col);
+            head(p, v(6.0, 0.0), Vec2::new(1.0, 0.0), 4.5, col);
             "Renamed"
         }
         ChangeKind::Copied => {
@@ -274,7 +297,13 @@ pub fn change_badge(ui: &mut egui::Ui, kind: ChangeKind) -> Response {
             p.circle_filled(c, 2.5, col);
             "Changed"
         }
-    };
+    }
+}
+
+/// A coloured icon for a file's change kind (replaces the old M/A/D letters).
+pub fn change_badge(ui: &mut egui::Ui, kind: ChangeKind) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
+    let name = paint_change(&ui.painter_at(rect), rect.center(), kind);
     resp.on_hover_text(name)
 }
 
@@ -372,26 +401,6 @@ pub fn segmented(ui: &mut egui::Ui, labels: &[&str], selected: Option<usize>, en
         x += w;
     }
     clicked
-}
-
-/// A compact icon-only button for list rows.
-pub fn small_icon_button(ui: &mut egui::Ui, icon: Icon, tip: &str, enabled: bool) -> Response {
-    let sense = if enabled { Sense::click() } else { Sense::hover() };
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(20.0), sense);
-    let v = ui.visuals();
-    let p = ui.painter_at(rect);
-    if enabled && resp.hovered() {
-        p.rect_filled(rect, 3.0, v.widgets.hovered.weak_bg_fill);
-    }
-    let color = if !enabled {
-        v.weak_text_color().gamma_multiply(0.5)
-    } else if resp.hovered() {
-        v.strong_text_color()
-    } else {
-        v.weak_text_color()
-    };
-    draw(&p, rect.center(), icon, 0.95, color);
-    resp.on_hover_text(tip)
 }
 
 pub enum TabAction {

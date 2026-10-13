@@ -7,10 +7,14 @@ mod conflictwin;
 mod consolewin;
 mod detail;
 mod diffview;
+mod filemenu;
+mod filerows;
 mod filetree;
 mod icons;
+mod intro;
 mod settings;
 mod sidebar;
+mod startup;
 mod syntax;
 mod timefmt;
 
@@ -34,16 +38,40 @@ fn main() -> eframe::Result {
     let initial = std::env::args_os().nth(1).map(std::path::PathBuf::from);
     // `gitgoing <repo> --resolve <file>` opens the conflict editor straight away.
     let resolve = args.iter().position(|a| a == "--resolve").and_then(|i| args.get(i + 1)).map(|s| s.to_string_lossy().into_owned());
+    // The intro plays in a borderless window of its own size, which then becomes the
+    // normal window. Whether it plays, and where the window goes afterwards, must be
+    // known before the window exists, hence the small files in `startup`.
+    startup::forget_eframe_window();
+    let intro = startup::intro_enabled() && !args.iter().any(|a| a == "--no-splash");
+    let geom = startup::load_geom();
+    let mut viewport = eframe::egui::ViewportBuilder::default()
+        .with_title("gitgoing")
+        .with_icon(assets::window_icon());
+    if intro {
+        viewport = viewport
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_inner_size(startup::SPLASH_SIZE);
+    } else if let Some(g) = &geom {
+        viewport = viewport.with_inner_size(g.size).with_maximized(g.maximized);
+        if let Some(p) = g.pos {
+            viewport = viewport.with_position(p);
+        }
+    } else {
+        viewport = viewport.with_inner_size(startup::DEFAULT_SIZE);
+    }
     let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("gitgoing")
-            .with_icon(assets::window_icon())
-            .with_inner_size([1100.0, 700.0]),
+        viewport,
+        // We save and restore the window ourselves (see `startup`), so the intro's
+        // borderless size is never remembered as the window's size.
+        persist_window: false,
+        centered: intro || geom.is_none_or(|g| g.pos.is_none()),
         ..Default::default()
     };
+    let console = args.iter().any(|a| a == "--console");
     eframe::run_native(
         "gitgoing",
         options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(cc, initial, resolve.clone(), args.iter().any(|a| a == "--console"), !args.iter().any(|a| a == "--no-splash"))))),
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, initial, resolve.clone(), console, intro, geom)))),
     )
 }

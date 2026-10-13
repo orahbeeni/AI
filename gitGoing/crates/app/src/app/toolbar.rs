@@ -25,26 +25,29 @@ impl RepoTab {
                         ui.label(egui::RichText::new(name).size(18.0).strong());
                     });
                     ui.add_space(10.0);
+                    // The branch, with what it tracks right underneath (so the toolbar
+                    // is only as wide as the branch name).
                     ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 1.0;
                         ui.small("branch");
                         let b = info.head_branch.clone().unwrap_or_else(|| "(detached HEAD)".to_owned());
-                        ui.label(egui::RichText::new(b).size(18.0).strong());
+                        let name = ui.label(egui::RichText::new(b).size(18.0).strong());
+                        if let Some(u) = &info.upstream {
+                            let sync = match (u.ahead, u.behind) {
+                                (0, 0) => String::new(),
+                                (a, 0) => format!("  ·  {a} ahead"),
+                                (0, b) => format!("  ·  {b} behind"),
+                                (a, b) => format!("  ·  {a} ahead, {b} behind"),
+                            };
+                            let text = format!("tracking {}{sync}", u.name);
+                            ui.scope(|ui| {
+                                // Never wider than the branch name; the full text is a tooltip.
+                                ui.set_max_width(name.rect.width());
+                                ui.add(egui::Label::new(egui::RichText::new(&text).size(11.5).weak()).truncate())
+                                    .on_hover_text(&text);
+                            });
+                        }
                     });
-                    if let Some(u) = &info.upstream {
-                        let sync = match (u.ahead, u.behind) {
-                            (0, 0) => String::new(),
-                            (a, 0) => format!("{a} ahead"),
-                            (0, b) => format!("{b} behind"),
-                            (a, b) => format!("{a} ahead, {b} behind"),
-                        };
-                        ui.vertical(|ui| {
-                            ui.small(" ");
-                            ui.weak(format!("tracking {}", u.name));
-                            if !sync.is_empty() {
-                                ui.weak(sync);
-                            }
-                        });
-                    }
                     ui.separator();
                 }
 

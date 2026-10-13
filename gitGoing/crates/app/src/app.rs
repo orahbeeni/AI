@@ -4,8 +4,11 @@ use crate::clonedlg;
 use crate::conflictwin::{self, ConflictEditor};
 use crate::consolewin::Console;
 use crate::settings::{Settings, SettingsWindow};
+use crate::startup::{self, WindowGeom};
 use crate::detail::{self, Detail};
+use crate::filemenu::FileRequest;
 use crate::icons::{self, Icon};
+use crate::intro::Intro;
 use crate::sidebar::{SidebarAction, Sidebar};
 use crate::timefmt;
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
@@ -20,10 +23,13 @@ use gitgoing_core::stash;
 use gitgoing_core::graph::{SegKind, PALETTE_SIZE};
 use gitgoing_core::history::{self, CommitRow, LoadEvent, RefKind, RepoInfo};
 use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 mod dialogs;
+mod filedlgs;
 mod graphview;
 mod toolbar;
 use graphview::{history_view, multi_panel};
@@ -168,6 +174,7 @@ enum Confirm {
     DeleteRemoteBranch(String),
     RemoveRemote(String),
     DeleteRemoteTag(String),
+    DeleteFile(String),
 }
 
 /// The add / edit-URL / rename remote window.
@@ -193,6 +200,19 @@ struct SquashDlg {
     plan: rebase::SquashPlan,
     /// The user acknowledged the predicted conflicts.
     confirmed: bool,
+}
+
+/// A checkout to repeat once uncommitted changes are out of the way.
+#[derive(Clone)]
+enum Retry {
+    Checkout(String),
+    CheckoutRemote(String),
+}
+
+/// Offered when a checkout was stopped by uncommitted changes.
+struct StashOffer {
+    message: String,
+    retry: Retry,
 }
 
 /// The force-push confirmation.
@@ -255,6 +275,17 @@ fn rebase_outcome(r: Result<rebase::Outcome, String>) -> Result<(), String> {
     }
 }
 
+/// The message for a merge that had nothing to do (not a failure).
+const ALREADY_UP_TO_DATE: &str = "Already up to date";
+
+/// Remember that a checkout failed because uncommitted changes were in the way.
+fn note_blocked(flag: &AtomicBool, e: gitgoing_core::GitError) -> gitgoing_core::GitError {
+    if branches::blocked_by_local_changes(&e) {
+        flag.store(true, Ordering::Relaxed);
+    }
+    e
+}
+
 fn applied(op: &str, r: Result<Applied, gitgoing_core::GitError>) -> Result<(), String> {
     match r.map_err(detail::ErrorText::text)? {
         Applied::Committed => Ok(()),
@@ -314,8 +345,22 @@ pub struct RepoTab {
     force_requested: bool,
     /// A squash/rebase plan being computed in the background.
     plan_rx: Option<Receiver<Result<PlanResult, String>>>,
+    /// Set by a checkout that failed because uncommitted changes were in the way.
+    blocked: Arc<AtomicBool>,
+    /// The checkout in flight, so it can be repeated after stashing.
+    retry: Option<Retry>,
+    stash_offer: Option<StashOffer>,
+    /// A failed operation to tell the user about in a window (the status bar is easy to miss).
+    error_dlg: Option<(String, String)>,
+    file_hist: Option<filedlgs::FileHistDlg>,
+    blame: Option<filedlgs::BlameDlg>,
+    edit: Option<filedlgs::EditDlg>,
+    /// Slow external actions (diff tool) whose failure is reported when they end.
+    file_bg: Vec<(&'static str, Receiver<Result<(), String>>)>,
     /// Branches and tags (full reference names) hidden from the graph.
     hidden: BTreeSet<String>,
+    /// Pinned local branches (full reference names), in the order they were pinned.
+    pinned: Vec<String>,
     /// The previous sidebar, whose filter and layout the next one inherits.
     carry_sidebar: Option<Sidebar>,
     conflict: Option<ConflictEditor>,
@@ -326,10 +371,11 @@ pub struct RepoTab {
 }
 
 impl RepoTab {
-    fn new(id: u64, path: PathBuf, hidden: BTreeSet<String>) -> Self {
+    fn new(id: u64, path: PathBuf, hidden: BTreeSet<String>, pinned: Vec<String>) -> Self {
         let mut app = RepoTab {
             id,
             hidden,
+            pinned,
             carry_sidebar: None,
             path: path.clone(),
             repo: None,
@@ -348,6 +394,14 @@ impl RepoTab {
             push_rejected: false,
             force_requested: false,
             plan_rx: None,
+            blocked: Arc::new(AtomicBool::new(false)),
+            retry: None,
+            stash_offer: None,
+            error_dlg: None,
+            file_hist: None,
+            blame: None,
+            edit: None,
+            file_bg: Vec::new(),
             conflict: None,
             confirm: None,
             undo: Vec::new(),
@@ -625,6 +679,23 @@ impl RepoTab {
                     let lower = e.to_lowercase();
                     self.push_rejected = self.op_label == "Push"
                         && ["rejected", "non-fast-forward", "fetch first", "stale info"].iter().any(|k| lower.contains(k));
+                    if self.blocked.swap(false, Ordering::Relaxed) && self.retry.is_some() {
+                        // Uncommitted changes are in the way: explain, and offer to stash them.
+                        let retry = self.retry.take().expect("checked above");
+                        self.stash_offer = Some(StashOffer { message: e.clone(), retry });
+                    } else if e == ALREADY_UP_TO_DATE {
+                        self.notice = Some((e, false));
+                        self.reload(ctx);
+                        return;
+                    } else {
+                        // Say so in a window: a red line in the status bar is easy to miss.
+                        let title = if e.contains(" stopped") {
+                            "Needs your attention".to_owned() // e.g. a merge that stopped on conflicts
+                        } else {
+                            format!("{} failed", self.op_label)
+                        };
+                        self.error_dlg = Some((title, e.clone()));
+                    }
                     self.notice = Some((e, true));
                 }
             }
@@ -640,16 +711,20 @@ impl RepoTab {
         self.poll(ctx);
         self.poll_op(ctx);
         self.poll_plan();
+        self.poll_files();
         self.background_updates(ctx, regained);
     }
 
     fn background_updates(&mut self, ctx: &egui::Context, regained: bool) {
         let mut reload = None;
+        let mut file_req: Option<FileRequest> = None;
         if let Some(l) = &mut self.repo {
+            file_req = file_req.or_else(|| l.detail.as_mut().and_then(|d| d.file_request.take()));
             if let Some(c) = &mut l.changes {
                 if regained {
                     c.refresh(ctx);
                 }
+                file_req = file_req.or(c.take_file_request());
                 if let Some(path) = c.take_resolve_request() {
                     match ConflictEditor::open(c.repo(), &path) {
                         Ok(ed) => self.conflict = Some(ed),
@@ -679,6 +754,9 @@ impl RepoTab {
             if let Some(d) = &mut l.detail {
                 d.poll(ctx);
             }
+        }
+        if let Some(req) = file_req {
+            self.file_action(ctx, req);
         }
         if reload.is_some() {
             self.reload(ctx);
@@ -723,7 +801,7 @@ impl RepoTab {
                 .show(ctx, |ui| {
                     if let Some(s) = &mut l.sidebar {
                         let head = l.info.as_ref().and_then(|i| i.head_branch.as_deref());
-                        branch_act = s.show(ui, &self.hidden, head);
+                        branch_act = s.show(ui, &self.hidden, &self.pinned, head);
                     }
                 });
             let rect = r.response.rect;
@@ -768,15 +846,23 @@ impl RepoTab {
 
         if self.op_rx.is_none() {
             match branch_act {
-                Some(SidebarAction::Checkout(n)) => self.run_op(ctx, "Checkout", move |p| branches::checkout(p, &n)),
+                Some(SidebarAction::Checkout(n)) => {
+                    self.retry = Some(Retry::Checkout(n.clone()));
+                    let flag = self.blocked.clone();
+                    self.run_op(ctx, "Checkout", move |p| branches::checkout(p, &n).map_err(|e| note_blocked(&flag, e)))
+                }
                 Some(SidebarAction::CheckoutRemote(n)) => {
-                    self.run_op(ctx, "Checkout", move |p| branches::checkout_remote(p, &n))
+                    self.retry = Some(Retry::CheckoutRemote(n.clone()));
+                    let flag = self.blocked.clone();
+                    self.run_op(ctx, "Checkout", move |p| {
+                        branches::checkout_remote(p, &n).map_err(|e| note_blocked(&flag, e))
+                    })
                 }
                 Some(SidebarAction::DeleteTag(n)) => self.confirm = Some(Confirm::DeleteTag(n)),
                 Some(SidebarAction::Delete(n)) => self.confirm = Some(Confirm::DeleteBranch(n)),
                 Some(SidebarAction::Merge(n)) => self.run_op(ctx, "Merge", move |p| {
                     match merge::merge(p, &n).map_err(detail::ErrorText::text)? {
-                        MergeOutcome::UpToDate => Err("Already up to date".to_owned()),
+                        MergeOutcome::UpToDate => Err(ALREADY_UP_TO_DATE.to_owned()),
                         MergeOutcome::Conflicts(n) => Err(format!(
                             "Merge stopped: {n} conflicted file(s). Resolve them in Changes, then commit (or abort the merge)."
                         )),
@@ -812,6 +898,16 @@ impl RepoTab {
                     self.set_hidden(set, ctx);
                 }
                 Some(SidebarAction::ShowAll) => self.set_hidden(BTreeSet::new(), ctx),
+                Some(SidebarAction::SetPinned(full, pin)) => {
+                    if pin {
+                        if !self.pinned.contains(&full) {
+                            self.pinned.push(full);
+                        }
+                    } else {
+                        self.pinned.retain(|p| *p != full);
+                    }
+                }
+                Some(SidebarAction::MovePinned(full, delta)) => move_in_list(&mut self.pinned, &full, delta),
                 Some(SidebarAction::AddRemote) => {
                     self.remote_dlg = Some(RemoteDlg { kind: RemoteDlgKind::Add, name: "origin".into(), text: String::new() })
                 }
@@ -953,25 +1049,40 @@ impl RepoTab {
     }
 }
 
-/// `path<TAB>ref<TAB>ref...` per line.
-fn serialise_hidden(store: &HashMap<PathBuf, BTreeSet<String>>) -> String {
+/// Per-repository lists of reference names, one `path<TAB>ref<TAB>ref...` line each.
+/// Works for any collection of names (a set of hidden refs, an ordered list of pins).
+fn serialise_lists<'a, I, N>(store: I) -> String
+where
+    I: IntoIterator<Item = (&'a PathBuf, N)>,
+    N: IntoIterator<Item = &'a String>,
+{
     store
-        .iter()
-        .filter(|(_, refs)| !refs.is_empty())
-        .map(|(p, refs)| format!("{}\t{}", p.display(), refs.iter().cloned().collect::<Vec<_>>().join("\t")))
+        .into_iter()
+        .map(|(p, names)| (p, names.into_iter().map(String::as_str).collect::<Vec<_>>()))
+        .filter(|(_, names)| !names.is_empty())
+        .map(|(p, names)| format!("{}\t{}", p.display(), names.join("\t")))
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-fn parse_hidden(text: &str) -> HashMap<PathBuf, BTreeSet<String>> {
+fn parse_lists<C: FromIterator<String> + Default + PartialEq>(text: &str) -> HashMap<PathBuf, C> {
     text.lines()
         .filter_map(|line| {
             let mut parts = line.split('\t');
             let path = PathBuf::from(parts.next()?);
-            let refs: BTreeSet<String> = parts.filter(|r| !r.is_empty()).map(str::to_owned).collect();
-            (!refs.is_empty()).then_some((path, refs))
+            let refs: C = parts.filter(|r| !r.is_empty()).map(str::to_owned).collect();
+            (refs != C::default()).then_some((path, refs))
         })
         .collect()
+}
+
+/// Move `name` up (`delta` < 0) or down (> 0) one place in `list`, if it can move.
+fn move_in_list(list: &mut [String], name: &str, delta: i32) {
+    let Some(i) = list.iter().position(|n| n == name) else { return };
+    let j = i as i64 + delta.signum() as i64;
+    if (0..list.len() as i64).contains(&j) {
+        list.swap(i, j as usize);
+    }
 }
 
 /// An absolute path without `.`/`..` or a trailing slash (unchanged if the path
@@ -1032,10 +1143,22 @@ pub struct App {
     clone_dlg: Option<clonedlg::CloneDialog>,
     /// Hidden branches/tags per repository, remembered between runs.
     hidden_store: HashMap<PathBuf, BTreeSet<String>>,
+    /// Pinned branches per repository, in pin order.
+    pinned_store: HashMap<PathBuf, Vec<String>>,
     assets: Assets,
     /// Splash screen state: shown at start until `Some(start)` + a second or so.
     splash_on: bool,
+    /// The window was last at this place; the borderless intro window moves there when it ends.
+    saved_geom: Option<WindowGeom>,
+    /// The window's current place, written out when the app saves.
+    last_geom: Option<WindowGeom>,
+    /// When the window became a normal one (until then it is the intro's borderless window).
+    normal_since: Option<f64>,
     splash_start: Option<f64>,
+    /// The intro animation, if the embedded bundle is valid, and its current frame.
+    intro: Option<Intro>,
+    intro_tex: Option<egui::TextureHandle>,
+    intro_frame: Option<usize>,
     settings: Settings,
     settings_win: SettingsWindow,
     console: Console,
@@ -1054,11 +1177,14 @@ impl App {
         resolve: Option<String>,
         console: bool,
         splash: bool,
+        saved_geom: Option<WindowGeom>,
     ) -> Self {
         let assets = Assets::load(&cc.egui_ctx);
         assets::share_mark(&cc.egui_ctx, &assets.mark);
         let storage = cc.storage;
         let get = |k: &str| storage.and_then(|s| s.get_string(k));
+        let settings = Settings::load(get);
+        startup::set_intro_enabled(settings.show_intro);
         let mut app = App {
             tabs: Vec::new(),
             active: 0,
@@ -1066,11 +1192,18 @@ impl App {
             was_focused: true,
             recent: paths_from(get("recent")),
             clone_dlg: None,
-            hidden_store: parse_hidden(&get("hidden_refs").unwrap_or_default()),
+            hidden_store: parse_lists(&get("hidden_refs").unwrap_or_default()),
+            pinned_store: parse_lists(&get("pinned_refs").unwrap_or_default()),
             assets,
             splash_on: splash,
+            saved_geom,
+            last_geom: None,
+            normal_since: None,
             splash_start: None,
-            settings: Settings::load(get),
+            intro: Intro::embedded(),
+            intro_tex: None,
+            intro_frame: None,
+            settings,
             settings_win: SettingsWindow::default(),
             console: Console::default(),
             app_error: None,
@@ -1122,7 +1255,8 @@ impl App {
         }
         self.next_id += 1;
         let hidden = self.hidden_store.get(&path).cloned().unwrap_or_default();
-        self.tabs.push(RepoTab::new(self.next_id, path, hidden));
+        let pinned = self.pinned_store.get(&path).cloned().unwrap_or_default();
+        self.tabs.push(RepoTab::new(self.next_id, path, hidden, pinned));
         self.active = self.tabs.len() - 1;
     }
 
@@ -1203,36 +1337,130 @@ impl App {
         self.new_repo(action);
     }
 
-    /// The logo, shown over everything for a moment at start-up and then faded
-    /// out. A click or key press dismisses it early.
+    /// The start-up intro: the animation (or, if it can't be played, the logo)
+    /// over everything until it ends. A click, Esc, Enter or Space skips it.
     fn splash(&mut self, ctx: &egui::Context) {
-        const HOLD: f64 = 1.1;
-        const FADE: f64 = 0.45;
+        const STILL_HOLD: f64 = 1.1;
+        const FADE: f64 = 0.4;
         if !self.splash_on {
             return;
         }
         let now = ctx.input(|i| i.time);
         let t = now - *self.splash_start.get_or_insert(now);
-        let dismissed = ctx.input(|i| {
-            i.pointer.any_click() || i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter)
+        let total = self.intro.as_ref().map_or(STILL_HOLD + FADE, |i| i.duration());
+        let keys = ctx.input(|i| {
+            i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)
         });
-        if t > HOLD + FADE || dismissed {
-            self.splash_on = false;
+        if t >= total || keys {
+            self.finish_splash(ctx);
             return;
         }
-        let alpha = if t < HOLD { 1.0 } else { 1.0 - ((t - HOLD) / FADE) as f32 };
-        let a = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
+        // Fade the whole thing out over the last moments.
+        let alpha = (((total - t) / FADE).clamp(0.0, 1.0) * 255.0) as u8;
+
+        // Decode the frame for this moment (only when it changes).
+        if let Some(intro) = &self.intro {
+            let idx = intro.frame_at(t);
+            if self.intro_frame != Some(idx) {
+                if let Some(img) = intro.decode(idx) {
+                    match &mut self.intro_tex {
+                        Some(tex) => tex.set(img, egui::TextureOptions::LINEAR),
+                        None => self.intro_tex = Some(ctx.load_texture("gitgoing-intro", img, egui::TextureOptions::LINEAR)),
+                    }
+                    self.intro_frame = Some(idx);
+                }
+            }
+        }
+
         let screen = ctx.screen_rect();
-        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("splash")));
-        painter.rect_filled(screen, 0.0, Color32::from_rgba_unmultiplied(0x12, 0x16, 0x18, a));
-        let side = (screen.width().min(screen.height()) * 0.5).clamp(160.0, 340.0);
-        painter.image(
-            self.assets.logo.id(),
-            Rect::from_center_size(screen.center(), Vec2::splat(side)),
-            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-            Color32::from_white_alpha(a),
-        );
+        let mut skip = false;
+        egui::Area::new(egui::Id::new("intro"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen.min)
+            .show(ctx, |ui| {
+                // Covers the window, so clicks don't reach what is underneath.
+                let (rect, resp) = ui.allocate_exact_size(screen.size(), Sense::click());
+                skip = resp.clicked();
+                let p = ui.painter();
+                p.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(0, 0, 0, alpha));
+                let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+                let tint = Color32::from_white_alpha(alpha);
+                match (&self.intro, &self.intro_tex) {
+                    (Some(intro), Some(tex)) => {
+                        // Fit the video inside the window, keeping its proportions.
+                        let scale = (rect.width() / intro.width as f32).min(rect.height() / intro.height as f32);
+                        let size = Vec2::new(intro.width as f32, intro.height as f32) * scale;
+                        p.image(tex.id(), Rect::from_center_size(rect.center(), size), uv, tint);
+                    }
+                    _ => {
+                        let side = (rect.width().min(rect.height()) * 0.5).clamp(160.0, 340.0);
+                        p.image(self.assets.logo.id(), Rect::from_center_size(rect.center(), Vec2::splat(side)), uv, tint);
+                    }
+                }
+                if t > 0.8 && self.intro.is_some() {
+                    p.text(
+                        rect.right_bottom() - Vec2::new(14.0, 12.0),
+                        egui::Align2::RIGHT_BOTTOM,
+                        "Click or press Esc to skip",
+                        egui::FontId::proportional(12.0),
+                        Color32::from_white_alpha(alpha / 3),
+                    );
+                }
+            });
+        if skip {
+            self.finish_splash(ctx);
+            return;
+        }
         ctx.request_repaint();
+    }
+
+    /// End the intro: free its frame, and turn the borderless intro window into the
+    /// normal one (title bar, resizable, last size and place).
+    fn finish_splash(&mut self, ctx: &egui::Context) {
+        self.splash_on = false;
+        self.intro_tex = None;
+        self.intro_frame = None;
+        let size = self.saved_geom.map_or(startup::DEFAULT_SIZE, |g| g.size);
+        let pos = self.saved_geom.and_then(|g| g.pos).unwrap_or_else(|| {
+            // Centre on the screen.
+            let monitor = ctx.input(|i| i.viewport().monitor_size).unwrap_or(Vec2::new(1440.0, 900.0));
+            [((monitor.x - size[0]) / 2.0).max(0.0), ((monitor.y - size[1]) / 2.0).max(0.0)]
+        });
+        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(size[0], size[1])));
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(Pos2::new(pos[0], pos[1])));
+        if self.saved_geom.is_some_and(|g| g.maximized) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+        }
+        self.normal_since = Some(ctx.input(|i| i.time));
+    }
+
+    /// Remember where the window is, once it is a normal window again.
+    fn track_window(&mut self, ctx: &egui::Context) {
+        if self.splash_on {
+            return;
+        }
+        let now = ctx.input(|i| i.time);
+        let since = *self.normal_since.get_or_insert(now - 10.0); // normal from the start
+        if now - since < 1.0 {
+            return; // let the intro window finish resizing
+        }
+        let (outer, inner, maximized) = ctx.input(|i| {
+            let v = i.viewport();
+            (v.outer_rect, v.inner_rect, v.maximized.unwrap_or(false))
+        });
+        if let (Some(outer), Some(inner)) = (outer, inner) {
+            if !maximized {
+                self.last_geom = Some(WindowGeom {
+                    pos: Some([outer.min.x, outer.min.y]),
+                    size: [inner.width(), inner.height()],
+                    maximized: false,
+                });
+            } else if let Some(g) = &mut self.last_geom {
+                g.maximized = true;
+            }
+        }
     }
 
     fn new_repo(&mut self, action: Option<NewRepo>) {
@@ -1301,6 +1529,7 @@ impl eframe::App for App {
             t.background(ctx, regained);
         }
         self.splash(ctx);
+        self.track_window(ctx);
         // The toolbar's Console button asks for the console via egui's data store.
         if ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::new("toggle_console"))).unwrap_or(false) {
             self.console.toggle();
@@ -1309,6 +1538,7 @@ impl eframe::App for App {
         self.tab_bar(ctx);
         if self.settings_win.show(ctx, &mut self.settings) {
             self.settings.apply(ctx);
+            startup::set_intro_enabled(self.settings.show_intro);
         }
         if let Some(d) = &mut self.clone_dlg {
             match d.show(ctx) {
@@ -1357,11 +1587,20 @@ impl eframe::App for App {
             if t.hidden.is_empty() {
                 self.hidden_store.remove(&key);
             } else {
-                self.hidden_store.insert(key, t.hidden.clone());
+                self.hidden_store.insert(key.clone(), t.hidden.clone());
+            }
+            if t.pinned.is_empty() {
+                self.pinned_store.remove(&key);
+            } else {
+                self.pinned_store.insert(key, t.pinned.clone());
             }
         }
-        storage.set_string("hidden_refs", serialise_hidden(&self.hidden_store));
+        storage.set_string("hidden_refs", serialise_lists(self.hidden_store.iter().map(|(p, s)| (p, s.iter()))));
+        storage.set_string("pinned_refs", serialise_lists(self.pinned_store.iter().map(|(p, s)| (p, s.iter()))));
         self.settings.save(|k, v| storage.set_string(k, v));
+        if let Some(g) = &self.last_geom {
+            startup::save_geom(g);
+        }
     }
 }
 
@@ -1387,13 +1626,31 @@ mod tests {
         store.insert(PathBuf::from("/a/b"), ["refs/heads/x".to_owned(), "refs/tags/v1".to_owned()].into_iter().collect());
         store.insert(PathBuf::from("/c d"), ["refs/remotes/origin/y".to_owned()].into_iter().collect());
         store.insert(PathBuf::from("/empty"), BTreeSet::new());
-        let text = serialise_hidden(&store);
-        let back = parse_hidden(&text);
+        let text = serialise_lists(store.iter().map(|(p, s)| (p, s.iter())));
+        let back: HashMap<PathBuf, BTreeSet<String>> = parse_lists(&text);
         assert_eq!(back.len(), 2, "empty sets are not stored");
         assert_eq!(back[&PathBuf::from("/a/b")].len(), 2);
         assert!(back[&PathBuf::from("/c d")].contains("refs/remotes/origin/y"));
-        assert!(parse_hidden("").is_empty());
-        assert!(parse_hidden("garbage-line-without-refs").is_empty());
+        assert!(parse_lists::<BTreeSet<String>>("").is_empty());
+        assert!(parse_lists::<BTreeSet<String>>("garbage-line-without-refs").is_empty());
+    }
+
+    #[test]
+    fn pinned_lists_keep_their_order_and_can_be_moved() {
+        let mut store: HashMap<PathBuf, Vec<String>> = HashMap::new();
+        let pins = vec!["refs/heads/zeta".to_owned(), "refs/heads/alpha".to_owned(), "refs/heads/mid".to_owned()];
+        store.insert(PathBuf::from("/repo"), pins.clone());
+        let back: HashMap<PathBuf, Vec<String>> =
+            parse_lists(&serialise_lists(store.iter().map(|(p, s)| (p, s.iter()))));
+        assert_eq!(back[&PathBuf::from("/repo")], pins, "pin order is kept, not sorted");
+
+        let mut list = pins;
+        move_in_list(&mut list, "refs/heads/mid", -1);
+        assert_eq!(list, ["refs/heads/zeta", "refs/heads/mid", "refs/heads/alpha"]);
+        move_in_list(&mut list, "refs/heads/zeta", -1); // already first
+        move_in_list(&mut list, "refs/heads/alpha", 1); // already last
+        move_in_list(&mut list, "refs/heads/missing", 1);
+        assert_eq!(list, ["refs/heads/zeta", "refs/heads/mid", "refs/heads/alpha"]);
     }
 
     #[test]
