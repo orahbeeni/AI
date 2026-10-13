@@ -22,6 +22,8 @@ pub enum SidebarAction {
     RenameRemote(String),
     RemoveRemote(String),
     FetchRemote(String),
+    /// Fetch one branch: (name, is_local).
+    FetchBranch(String, bool),
     DeleteRemoteBranch(String),
     SetUpstream(String),
     PushTag(String),
@@ -272,6 +274,10 @@ impl Sidebar {
                         r.context_menu(|ui| {
                             if ui.button("Check out as local branch").clicked() {
                                 act = Some(SidebarAction::CheckoutRemote(full.clone()));
+                                ui.close_menu();
+                            }
+                            if ui.button("Fetch latest").clicked() {
+                                act = Some(SidebarAction::FetchBranch(full.clone(), false));
                                 ui.close_menu();
                             }
                             if ui.button("Merge into current branch").clicked() {
@@ -646,6 +652,10 @@ fn local_branch_row(
     r.context_menu(|ui| {
         if ui.add_enabled(!current, egui::Button::new("Check out")).clicked() {
             *act = Some(SidebarAction::Checkout(full.to_owned()));
+            ui.close_menu();
+        }
+        if ui.button("Fetch latest").clicked() {
+            *act = Some(SidebarAction::FetchBranch(full.to_owned(), true));
             ui.close_menu();
         }
         if ui.add_enabled(!current, egui::Button::new("Merge into current branch")).clicked() {

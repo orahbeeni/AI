@@ -982,6 +982,9 @@ impl RepoTab {
                 Some(SidebarAction::FetchRemote(n)) => {
                     self.run_op(ctx, "Fetch", move |p| remotes::fetch_remote(p, &n))
                 }
+                Some(SidebarAction::FetchBranch(n, local)) => {
+                    self.run_op(ctx, "Fetch", move |p| remotes::fetch_branch(p, &n, local))
+                }
                 Some(SidebarAction::DeleteRemoteBranch(n)) => self.confirm = Some(Confirm::DeleteRemoteBranch(n)),
                 Some(SidebarAction::SetUpstream(local)) => {
                     let options = self

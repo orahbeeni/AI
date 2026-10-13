@@ -76,6 +76,35 @@ pub fn fetch_remote(repo_path: &Path, remote: &str) -> Result<(), String> {
     gitcmd::run(Some(repo_path), &["fetch", "--prune", remote]).map(|_| ())
 }
 
+/// Fetch the latest commits of one branch from its remote. `name` is a remote
+/// branch (`origin/main`) or, with `local`, a local branch whose upstream is used.
+pub fn fetch_branch(repo_path: &Path, name: &str, local: bool) -> Result<(), String> {
+    let repo = Repository::discover(repo_path).map_err(|e| e.message().to_owned())?;
+    let (remote, branch) = if local {
+        let b = repo.find_branch(name, BranchType::Local).map_err(|e| e.message().to_owned())?;
+        let up = b.upstream().map_err(|_| format!("'{name}' has no upstream branch. Set one first."))?;
+        let up_name = up.name().ok().flatten().unwrap_or_default().to_owned();
+        split_remote_branch(&repo, &up_name)?
+    } else {
+        split_remote_branch(&repo, name)?
+    };
+    gitcmd::plain_name(&remote)?;
+    gitcmd::plain_name(&branch)?;
+    let spec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
+    gitcmd::run(Some(repo_path), &["fetch", &remote, &spec]).map(|_| ())
+}
+
+/// Split `origin/feature/x` into (`origin`, `feature/x`), allowing remote names with slashes.
+fn split_remote_branch(repo: &Repository, full: &str) -> Result<(String, String), String> {
+    let remotes = repo.remotes().map_err(|e| e.message().to_owned())?;
+    remotes
+        .iter()
+        .flatten()
+        .filter_map(|r| full.strip_prefix(r).and_then(|rest| rest.strip_prefix('/')).map(|b| (r.to_owned(), b.to_owned())))
+        .max_by_key(|(r, _)| r.len())
+        .ok_or_else(|| format!("'{full}' doesn't belong to a known remote"))
+}
+
 /// Delete `branch` on `remote` (as `git push <remote> --delete <branch>`).
 pub fn delete_remote_branch(repo_path: &Path, remote: &str, branch: &str) -> Result<(), String> {
     gitcmd::plain_name(remote)?;
