@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Open Google Drive file
+Exec=@BIN@ open %f
+MimeType=application/x-gdrive-link;
+NoDisplay=true
+Icon=web-browser
