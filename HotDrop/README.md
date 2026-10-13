@@ -74,6 +74,20 @@ Silence them with `-Dhotdrop.log=false` or the agent option `quiet=true`. `-Dhot
 |---|---|---|
 | Method body, new class | yes | yes |
 | New/removed method, field or **lambda**, changed supertypes | no, reported as `[restart required]` | yes (opt-in, not yet tested on a real Hybris) |
+| Time each swap freezes the server | a few ms | **every** swap walks the heap: ~40 ms at 160 MB live, ~150 ms at 630 MB, ~0.5-0.7 s at 1.9 GB, ~1.5 s at 3.2 GB |
+
+New fields on existing Spring beans (JBR only): a field that is in the bean's XML as `<property ... ref="..."/>` or
+`value="..."`, or that is `@Autowired`/`@Resource`, is filled on the live singleton; new prototype instances are wired
+normally. Lists, maps and inner beans in XML are not filled (reported, restart to wire them). Fields start empty on objects
+that already exist and are not Spring beans.
+
+### Switching to the JetBrains Runtime (opt-in, for a session of structural changes)
+1. Install a JBR **SDK** (needs `javac`), e.g. `jbrsdk-21.x` from github.com/JetBrains/JetBrainsRuntime/releases, into
+   `~/Library/Java/JavaVirtualMachines` (macOS) or anywhere.
+2. `hotdrop install --enhanced` (adds `-XX:+AllowEnhancedClassRedefinition` next to the agent).
+3. With `JAVA_HOME` pointing at the JBR, run `ant server`: the wrapper's Java is fixed in `wrapper.conf` at that moment.
+4. Start the server. The watcher log says `enhanced redefinition ON`.
+To go back: `hotdrop install`, then `ant server` with your normal `JAVA_HOME`, then restart.
 
 ## Spring beans (`*-spring.xml`)
 HotDrop also watches the `*-spring.xml` files of your custom extensions (`resources/`, `web/webroot/WEB-INF/`, addon and

@@ -13,7 +13,7 @@ final class Install {
 
     private Install() {}
 
-    static int run(Config cfg, boolean yes, boolean remove) throws IOException {
+    static int run(Config cfg, boolean yes, boolean remove, boolean enhanced) throws IOException {
         Path hybris = cfg.hybris;
         if (hybris == null) {
             Up.Server s = Up.findServer(null);
@@ -44,7 +44,10 @@ final class Install {
         } catch (java.net.URISyntaxException e) {
             throw new IOException(e);
         }
-        String opt = "-javaagent:" + agent.toAbsolutePath().toString().replace('\\', '/');
+        String opt = "-javaagent:" + agent.toAbsolutePath().toString().replace('\\', '/')
+                // JetBrains Runtime only: lets new fields, methods and lambdas swap live, but every swap then pauses the
+                // server for a walk of the whole heap (about 0.5 s per GB in use), so it is opt-in
+                + (enhanced ? " -XX:+AllowEnhancedClassRedefinition" : "");
 
         List<String> before = Files.readAllLines(file);
         List<String> after = new ArrayList<>();

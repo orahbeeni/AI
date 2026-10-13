@@ -93,3 +93,6 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+Toolbar icons are from the [Fugue Icons](https://p.yusukekamiyamane.com/) set by Yusuke Kamiyamane,
+licensed under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) (see `assets/icons/FUGUE-LICENSE.txt`).

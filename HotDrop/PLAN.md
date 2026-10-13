@@ -79,7 +79,7 @@ Status: all of the above is implemented; only Linux has been exercised by hand s
 | Daemon: discovery of custom extensions, build settings from `advanced.properties`, warm javac, in-memory output | built, tested (also against the real 2205.6 platform jars) |
 | Scheduler: broken / held / restart-required, ABI-driven ripple, constant ripple, new classes, queued delivery for a server that connects later | built, tested end to end |
 | CLI: start, swap, attach, status, flush, pause, resume, rescan, stop, doctor | built |
-| M0 spike on a real Hybris server (O1-O6) | O1, O2, O5, O6 answered 2026-10-08 (live swap + auto-start on a real 2211-jdk21 server, 55 roots; Tomcat 10.1.57 / Spring 6.2.19; no annotation processors; javac output matches ant); O3/O4 (JBR) open |
+| M0 spike on a real Hybris server (O1-O6) | O1, O2, O5, O6 answered 2026-10-08 (live swap + auto-start on a real 2211-jdk21 server, 55 roots; Tomcat 10.1.57 / Spring 6.2.19; no annotation processors; javac output matches ant); O3 measured 2026-10-12 on a stand-in (JBR 21.0.11, 4 GB heap): with the flag on, EVERY redefinition walks the heap, ~0.3-0.5 ms per MB live (1.9 GB live: 0.45-0.74 s per swap, vs 1-7 ms without the flag); O4 (Hybris on JBR) open |
 | Strict per-extension classpath (speed), web/backoffice roots on a real Tomcat | not yet |
 | Spring layer (M4): `*-spring.xml` add / property / util-collection changes, cache clearing, MVC mapping refresh | built, tested on Spring 5.3.19 and 6.2.19 with a stand-in context; not yet on a real server (how `Registry` yields contexts, parent of web contexts) |
 | M5 extras: items/beans XML change notices, message bundle cache clearing, `doctor` development-mode check | built; message clearing tested with a stand-in context |

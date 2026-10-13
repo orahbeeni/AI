@@ -102,6 +102,7 @@ pub struct App {
     pub last_title: String,
     pub script: Option<crate::debug::Script>,
     pub snapshot_thread: Option<std::thread::JoinHandle<()>>,
+    pub icons: crate::icons::Icons,
 }
 
 impl App {
@@ -110,7 +111,9 @@ impl App {
         crate::fonts::install(&cc.egui_ctx, &settings);
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         let themes = theme::load_all(&crate::settings::config_dir());
+        let icons = crate::icons::Icons::load(&cc.egui_ctx);
         let mut app = App {
+            icons,
             settings,
             themes,
             tabs: Vec::new(),

@@ -366,6 +366,14 @@ impl App {
                 item(ui, cmds, "About RustPad", Cmd::About);
                 item(ui, cmds, "Keyboard Shortcuts", Cmd::Shortcuts);
             });
+
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let (glyph, tip) = if s.tool_bar { ("⏶", "Hide tool bar") } else { ("⏷", "Show tool bar") };
+                let r = ui.add(egui::Button::new(glyph).frame(false).min_size(Vec2::new(22.0, 18.0)));
+                if r.on_hover_text(tip).clicked() {
+                    cmds.push(Cmd::ToggleToolBar);
+                }
+            });
         });
     }
 
@@ -376,41 +384,48 @@ impl App {
         };
         let recording = self.recording;
         let wrap = self.settings.word_wrap;
+        let all_chars = self.settings.show_whitespace && self.settings.show_eol;
+        let can_play = !self.last_macro.is_empty();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
-            let mut b = |ui: &mut egui::Ui, label: &str, tip: &str, cmd: Cmd, enabled: bool, selected: bool| {
-                let r = ui.add_enabled(enabled, egui::Button::new(label).selected(selected).min_size(Vec2::new(26.0, 22.0)));
+            let icons = &self.icons;
+            let mut b = |ui: &mut egui::Ui, icon: &str, tip: &str, cmd: Cmd, enabled: bool, selected: bool| {
+                let btn = match icons.get(icon) {
+                    Some(tex) => egui::Button::image(egui::Image::new(tex).fit_to_exact_size(Vec2::splat(16.0))),
+                    None => egui::Button::new(tip),
+                };
+                let r = ui.add_enabled(enabled, btn.selected(selected).min_size(Vec2::new(28.0, 24.0)));
                 if r.on_hover_text(format!("{tip}  {}", shortcut_text(&cmd))).clicked() {
                     cmds.push(cmd);
                 }
             };
-            b(ui, "New", "New", Cmd::New, true, false);
-            b(ui, "Open", "Open", Cmd::Open, true, false);
-            b(ui, "Save", "Save", Cmd::Save, true, false);
-            b(ui, "Save All", "Save All", Cmd::SaveAll, true, false);
-            b(ui, "Close", "Close", Cmd::Close, true, false);
+            b(ui, "new", "New", Cmd::New, true, false);
+            b(ui, "open", "Open", Cmd::Open, true, false);
+            b(ui, "save", "Save", Cmd::Save, true, false);
+            b(ui, "save_all", "Save All", Cmd::SaveAll, true, false);
+            b(ui, "close", "Close", Cmd::Close, true, false);
             ui.separator();
-            b(ui, "Cut", "Cut", Cmd::Cut, true, false);
-            b(ui, "Copy", "Copy", Cmd::Copy, true, false);
-            b(ui, "Paste", "Paste", Cmd::Paste, true, false);
+            b(ui, "cut", "Cut", Cmd::Cut, true, false);
+            b(ui, "copy", "Copy", Cmd::Copy, true, false);
+            b(ui, "paste", "Paste", Cmd::Paste, true, false);
             ui.separator();
-            b(ui, "Undo", "Undo", Cmd::Undo, can_undo, false);
-            b(ui, "Redo", "Redo", Cmd::Redo, can_redo, false);
+            b(ui, "undo", "Undo", Cmd::Undo, can_undo, false);
+            b(ui, "redo", "Redo", Cmd::Redo, can_redo, false);
             ui.separator();
-            b(ui, "Find", "Find", Cmd::Find, true, false);
-            b(ui, "Replace", "Replace", Cmd::Replace, true, false);
+            b(ui, "find", "Find", Cmd::Find, true, false);
+            b(ui, "replace", "Replace", Cmd::Replace, true, false);
             ui.separator();
-            b(ui, "Zoom +", "Zoom In", Cmd::ZoomIn, true, false);
-            b(ui, "Zoom −", "Zoom Out", Cmd::ZoomOut, true, false);
-            b(ui, "Wrap", "Word Wrap", Cmd::ToggleWrap, true, wrap);
-            b(ui, "¶", "Show All Characters", Cmd::ToggleAllChars, true, self.settings.show_whitespace && self.settings.show_eol);
+            b(ui, "zoom_in", "Zoom In", Cmd::ZoomIn, true, false);
+            b(ui, "zoom_out", "Zoom Out", Cmd::ZoomOut, true, false);
+            b(ui, "wrap", "Word Wrap", Cmd::ToggleWrap, true, wrap);
+            b(ui, "all_chars", "Show All Characters", Cmd::ToggleAllChars, true, all_chars);
             ui.separator();
             if recording {
-                b(ui, "■ Stop", "Stop Recording", Cmd::MacroStop, true, true);
+                b(ui, "stop", "Stop Recording", Cmd::MacroStop, true, true);
             } else {
-                b(ui, "● Rec", "Start Recording", Cmd::MacroRecord, true, false);
+                b(ui, "rec", "Start Recording", Cmd::MacroRecord, true, false);
             }
-            b(ui, "▶ Play", "Playback", Cmd::MacroPlay, !self.last_macro.is_empty(), false);
+            b(ui, "play", "Playback", Cmd::MacroPlay, can_play, false);
         });
     }
 

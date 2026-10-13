@@ -23,6 +23,9 @@ public class IntegrationTest {
     static Path src;
     static final List<String> latencies = new ArrayList<>();
 
+    /** HOTDROP_ENHANCED=1: run the app JVM with -XX:+AllowEnhancedClassRedefinition (needs a JetBrains Runtime). */
+    static final boolean ENHANCED = "1".equals(System.getenv("HOTDROP_ENHANCED"));
+
     static final String APP = """
             import java.lang.reflect.Method;
             import java.net.URL;
@@ -61,6 +64,13 @@ public class IntegrationTest {
                 + (lambda ? "    java.util.function.Supplier<String> s = () -> \"lam\";\n" : "")
                 + "    return \"hello " + ver + " \" + Helper.PREFIX + \" \" + Helper.tag()"
                 + (extra ? " + \" \" + Extra.value()" : "") + (lambda ? " + s.get()" : "") + ";\n  }\n}\n";
+    }
+
+    static String serviceWithFieldAndMethod(String ver) {
+        return "package demo;\npublic class Service {\n  private String note;\n"
+                + "  private String bit() { return \" m\"; }\n  public String greet() {\n"
+                + "    return \"hello " + ver + " \" + Helper.PREFIX + \" \" + Helper.tag() + \" \" + Extra.value() + bit()"
+                + " + (note == null ? \" nofield\" : note);\n  }\n}\n";
     }
 
     static String helper(String prefix) {
@@ -108,7 +118,7 @@ public class IntegrationTest {
         boolean windows = System.getProperty("os.name").toLowerCase().contains("win");
         String java = Path.of(System.getProperty("java.home"), "bin", windows ? "java.exe" : "java").toString();
         String watch = System.getenv().getOrDefault("HOTDROP_WATCH", "auto");
-        Process app = start(work, appOut, "app", java, "-javaagent:" + agentJar + "=dir=" + home.resolve("agents") + "",
+        Process app = start(work, appOut, "app", java, ENHANCED ? "-XX:+AllowEnhancedClassRedefinition" : "-Dhotdrop.it=1", "-javaagent:" + agentJar + "=dir=" + home.resolve("agents") + "",
                 "-cp", appDir.toString(), "App", classes.toString(), webClasses.toString());
         Process daemon = null;
         try {
@@ -166,6 +176,7 @@ public class IntegrationTest {
             latency("constant ripple", ms);
 
             // 6. lambda added: standard JVM cannot swap it -> clear message, no damage
+            if (!ENHANCED) {
             step("6. a change the JVM cannot swap is reported, not hidden");
             before = appLines();
             Files.writeString(src.resolve("demo/Service.java"), service("v4", true, true));
@@ -175,6 +186,19 @@ public class IntegrationTest {
             check("   running JVM unharmed", appLines() == before);
             ms = edit("demo/Service.java", service("v5", true, false), appOut, "OUT hello v5 p2 tag e1", 5_000);
             check("   removing the lambda recovers", ms >= 0);
+            } else {
+            step("6. enhanced redefinition (JBR): structural changes swap live");
+            check("   agent reports enhanced redefinition", waitFor(daemonOut, "enhanced redefinition ON", 1_000) >= 0);
+            ms = edit("demo/Service.java", service("v4", true, true), appOut, "OUT hello v4 p2 tag e1lam", 5_000);
+            check("   added lambda is live", ms >= 0);
+            latency("enhanced: add lambda", ms);
+            ms = edit("demo/Service.java", serviceWithFieldAndMethod("v5"), appOut, "OUT hello v5 p2 tag e1 m nofield", 5_000);
+            check("   added field and method are live (field starts empty on the existing object)", ms >= 0);
+            latency("enhanced: add field + method", ms);
+            ms = edit("demo/Service.java", service("v6", true, false), appOut, "OUT hello v6 p2 tag e1", 5_000);
+            check("   removing them again is live too", ms >= 0);
+            check("   nothing reported as restart required", daemonOut.stream().noneMatch(l -> l.contains("[restart required]")));
+            }
 
             // 7. web root: the same class lives in two webapp loaders whose parent is the platform loader
             step("7. web class is swapped in every webapp loader");

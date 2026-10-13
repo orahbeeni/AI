@@ -10,6 +10,7 @@ mod fold;
 #[cfg(test)]
 mod fuzz_tests;
 mod hash;
+mod icons;
 mod fonts;
 mod lang;
 mod lexer;

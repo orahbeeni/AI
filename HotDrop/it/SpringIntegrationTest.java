@@ -64,7 +64,7 @@ public class SpringIntegrationTest {
                     while (true) {
                         Object g = ctx.getBean("greeter");
                         String s = String.valueOf(g.getClass().getMethod("hello").invoke(g));
-                        for (String n : new String[]{"plugin", "plugin2"}) {
+                        for (String n : new String[]{"plugin", "plugin2", "plugin3", "plugin4"}) {
                             if (ctx.containsBean(n)) {
                                 Object p = ctx.getBean(n);
                                 s += " | " + p.getClass().getMethod("hello").invoke(p);
@@ -137,6 +137,16 @@ public class SpringIntegrationTest {
                 + "  <bean id=\"kid\" class=\"demo.Plugin\"><property name=\"name\" value=\"" + name + "\"/></bean>\n</beans>\n";
     }
 
+    /** HOTDROP_ENHANCED=1: the app JVM runs with -XX:+AllowEnhancedClassRedefinition (needs a JetBrains Runtime). */
+    static final boolean ENHANCED = "1".equals(System.getenv("HOTDROP_ENHANCED"));
+
+    /** Plugin2 with a new field and setter, as when a developer adds an injected service in Hybris. */
+    static String plugin2WithHelper() {
+        return "package demo;\npublic class Plugin2 {\n  private String name;\n  private Plugin helper;\n"
+                + "  public void setName(String n) { name = n; }\n  public void setHelper(Plugin h) { helper = h; }\n"
+                + "  public String hello() { return \"PLUGIN2 \" + name + (helper == null ? \" nohelper\" : \" +\" + helper.hello()); }\n}\n";
+    }
+
     static final String PLUGIN_BEAN = "<bean id=\"plugin\" class=\"demo.Plugin\"><property name=\"name\" value=\"${plug.name}\"/></bean>";
     static final String PLUGIN2_BEAN = "<bean id=\"plugin2\" class=\"demo.Plugin2\"><property name=\"name\" value=\"${plug2.name}\"/></bean>";
 
@@ -182,7 +192,7 @@ public class SpringIntegrationTest {
 
         boolean windows = System.getProperty("os.name").toLowerCase().contains("win");
         String java = Path.of(System.getProperty("java.home"), "bin", windows ? "java.exe" : "java").toString();
-        Process app = start(work, appOut, "app", java, "-javaagent:" + agentJar + "=dir=" + home.resolve("agents"),
+        Process app = start(work, appOut, "app", java, ENHANCED ? "-XX:+AllowEnhancedClassRedefinition" : "-Dhotdrop.it=1", "-javaagent:" + agentJar + "=dir=" + home.resolve("agents"),
                 "-cp", appDir + File.pathSeparator + cp, "SApp", classes.toString(), xml.toString(), kidXml.toString(), res.resolve("localization").toString());
         Process daemon = null;
         try {
@@ -279,6 +289,37 @@ public class SpringIntegrationTest {
             Files.writeString(itemsXml, "<items><itemtypes><itemtype code=\"Demo\"/><itemtype code=\"Other\"/></itemtypes></items>\n");
             check("   daemon says restart required", waitFor(daemonOut, "[restart required] demo-items.xml", 5_000) >= 0);
             check("   server console says so", waitFor(appOut, "demo-items.xml changed - the type system changed", 3_000) >= 0);
+
+            step("14. a property change on a prototype bean that was already used applies to new instances");
+            String base = PLUGIN_BEAN + PLUGIN2_BEAN + "<bean id=\"bad\" class=\"demo.Plugin\"><property name=\"name\" value=\"fixed\"/></bean>";
+            String proto = "<bean id=\"plugin3\" class=\"demo.Plugin\" scope=\"prototype\"><property name=\"name\" value=\"NAME\"/></bean>";
+            Files.writeString(xml, xml("hello", values("a", "b"), base + proto.replace("NAME", "p1")));
+            check("   prototype bean added and used", waitFor(appOut, "| PLUGIN p1", 5_000) >= 0);
+            Thread.sleep(300);
+            ms = editXml(xml("hello", values("a", "b"), base + proto.replace("NAME", "p2")), "| PLUGIN p2");
+            check("   new instances use the new value", ms >= 0);
+            latency("xml prototype property change", ms);
+            base = base + proto.replace("NAME", "p2");
+
+            if (ENHANCED) {
+                step("15. enhanced redefinition (JBR): a new field + setter, wired from the XML");
+                String beans = base
+                        + "<bean id=\"plugin4\" class=\"demo.Plugin2\" scope=\"prototype\"><property name=\"name\" value=\"z\"/></bean>";
+                Files.writeString(xml, xml("hello", values("a", "b"), beans));
+                check("   prototype bean added", waitFor(appOut, "PLUGIN2 z", 5_000) >= 0);
+                Thread.sleep(300);
+                long e0 = System.nanoTime();
+                Files.writeString(src.resolve("demo/Plugin2.java"), plugin2WithHelper());
+                Thread.sleep(400);
+                String wired = beans.replace("<property name=\"name\" value=\"${plug2.name}\"/>",
+                                "<property name=\"name\" value=\"${plug2.name}\"/><property name=\"helper\" ref=\"plugin\"/>")
+                        .replace("<property name=\"name\" value=\"z\"/>", "<property name=\"name\" value=\"z\"/><property name=\"helper\" ref=\"plugin\"/>");
+                Files.writeString(xml, xml("hello", values("a", "b"), wired));
+                check("   existing singleton has the new field filled", waitFor(appOut, "PLUGIN2 y +PLUGIN px", 5_000) >= 0);
+                check("   new prototype instances are wired too", waitFor(appOut, "PLUGIN2 z +PLUGIN px", 5_000) >= 0);
+                latency("enhanced: new field + xml property", (System.nanoTime() - e0) / 1_000_000);
+                check("   nothing reported as restart required", daemonOut.stream().noneMatch(l -> l.contains("[restart required] demo.Plugin2")));
+            }
 
             step("13. status mentions the Spring files");
             Process st = new ProcessBuilder(java, "-jar", daemonJar.toString(), "status", "--home", home.toString())

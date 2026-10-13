@@ -27,7 +27,8 @@ public final class Main {
               start    watch sources, compile on save, hot swap into the server
               swap     compile and swap the given files once, then exit
               up       find the running Hybris, attach if needed and watch (the easy way)
-              install  add the agent to local.properties so HotDrop starts with the server (--remove undoes it, --yes skips the question)
+              install  add the agent to local.properties so HotDrop starts with the server (--remove undoes it, --yes skips the question,
+                       --enhanced also adds the JetBrains Runtime flag for live field/method/lambda changes; slower swaps)
               attach   load the agent into an already running server (no restart)
               status   show server connection, file states, timings
               flush [file]   compile now, skipping the debounce window
@@ -96,14 +97,14 @@ public final class Main {
                 case "--poll-ms" -> cfg.pollMs = Integer.parseInt(args[++i]);
                 case "--pid" -> pid = Long.parseLong(args[++i]);
                 case "--debug" -> Log.debug = true;
-                case "--yes", "--remove" -> { }
+                case "--yes", "--remove", "--enhanced" -> { }
                 default -> positional.add(args[i]);
             }
         }
         switch (cmd) {
             case "start" -> start(cfg);
             case "up" -> Up.run(cfg, rawArgs);
-            case "install" -> System.exit(Install.run(cfg, rawArgs.contains("--yes"), rawArgs.contains("--remove")));
+            case "install" -> System.exit(Install.run(cfg, rawArgs.contains("--yes"), rawArgs.contains("--remove"), rawArgs.contains("--enhanced")));
             case "swap" -> System.exit(swap(cfg, positional));
             case "attach" -> attach(cfg, pid);
             case "doctor" -> doctor(cfg);

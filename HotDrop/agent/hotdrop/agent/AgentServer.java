@@ -38,6 +38,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -281,6 +282,9 @@ final class AgentServer {
 
         Map<ClassEntry, ClassResult> results = new LinkedHashMap<>();
         boolean fallback = false;
+        // With enhanced redefinition (JBR) a class may gain fields; Spring then has to fill them on existing beans.
+        Map<Class<?>, Set<String>> fieldsBefore = new HashMap<>();
+        if (spring.active()) for (ClassDefinition d : all) fieldsBefore.put(d.getDefinitionClass(), instanceFields(d.getDefinitionClass()));
         long redefineStart = System.nanoTime();
         if (!all.isEmpty()) {
             try {
@@ -315,8 +319,14 @@ final class AgentServer {
                 if (r.status() == Wire.SWAPPED) perEntry.get(e).forEach(d -> done.add(d.getDefinitionClass()));
             });
             if (!done.isEmpty()) {
+                Map<Class<?>, Set<String>> gained = new LinkedHashMap<>();
+                for (Class<?> c : done) {
+                    Set<String> added = new LinkedHashSet<>(instanceFields(c));
+                    added.removeAll(fieldsBefore.getOrDefault(c, Set.of()));
+                    if (!added.isEmpty()) gained.put(c, added);
+                }
                 try {
-                    spring.afterSwap(done);
+                    spring.afterSwap(done, gained);
                 } catch (Throwable t) {
                     System.err.println("[HotDrop] Spring refresh failed: " + t);
                 }
@@ -350,6 +360,18 @@ final class AgentServer {
         if (m.contains("schema change")) return "a field was added or removed (" + m + ")";
         if (m.contains("hierarchy change")) return "the superclass or interfaces changed (" + m + ")";
         return m;
+    }
+
+    private static Set<String> instanceFields(Class<?> c) {
+        Set<String> names = new LinkedHashSet<>();
+        try {
+            for (java.lang.reflect.Field f : c.getDeclaredFields()) {
+                if (!java.lang.reflect.Modifier.isStatic(f.getModifiers()) && !f.isSynthetic()) names.add(f.getName());
+            }
+        } catch (Throwable t) {
+            // class not linkable: nothing to compare
+        }
+        return names;
     }
 
     private static String describe(Throwable t) {

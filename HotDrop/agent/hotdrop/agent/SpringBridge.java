@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
@@ -331,6 +332,7 @@ final class SpringBridge {
             }
             for (Object pv : pvs.values()) call(liveValues, "addPropertyValue", pv);
             call(live, "clearMetadataCache");
+            markMergedStale(live, id);
             String names = String.join(", ", ch.props());
             say.accept("Spring bean '" + id + "': " + names + " updated" + (target == null ? " (definition only, no instance yet)" : ""));
             return new BeanResult(id, Wire.BEAN_UPDATED, "set " + names + (target == null ? "; applies when the bean is created" : " on the live bean"));
@@ -416,7 +418,7 @@ final class SpringBridge {
     // ---- after class swaps ----
 
     /** Spring caches reflection and annotation metadata per class; drop it for what was just redefined, and rebuild MVC mappings. */
-    void afterSwap(List<Class<?>> swapped) {
+    void afterSwap(List<Class<?>> swapped, Map<Class<?>, Set<String>> gainedFields) {
         Set<ClassLoader> springLoaders = new LinkedHashSet<>();
         List<Object> contexts;
         synchronized (CONTEXTS) {
@@ -452,6 +454,148 @@ final class SpringBridge {
             } catch (Throwable t) {
                 // not a web context
             }
+        }
+        if (!gainedFields.isEmpty()) {
+            for (Object ctx : contexts) {
+                try {
+                    fillNewFields(ctx, gainedFields);
+                } catch (Throwable t) {
+                    say.accept("Spring: could not wire new fields in " + safeName(ctx) + ": " + rootCause(t));
+                }
+            }
+        }
+    }
+
+    // ---- new fields (enhanced redefinition) ----
+
+    /**
+     * A class gained fields (only possible with enhanced redefinition, e.g. JBR). New instances are wired by Spring as
+     * usual once its per-bean injection metadata is reset; existing singletons get just the new fields filled: annotated
+     * ones through Spring's own autowiring, XML {@code <property>} ones from the bean definition (ref or plain value).
+     * Properties that already existed are not set again.
+     */
+    private void fillNewFields(Object ctx, Map<Class<?>, Set<String>> gained) throws Exception {
+        Object bf = call(ctx, "getBeanFactory");
+        ClassLoader l = bf.getClass().getClassLoader();
+        Map<String, Class<?>> byName = new HashMap<>();
+        for (Class<?> c : gained.keySet()) byName.put(c.getName(), c);
+        Class<?> mergedPp = Class.forName("org.springframework.beans.factory.support.MergedBeanDefinitionPostProcessor", true, l);
+        List<?> processors = (List<?>) call(bf, "getBeanPostProcessors");
+        List<String> stale = new ArrayList<>();
+        for (String name : (String[]) call(bf, "getBeanDefinitionNames")) {
+            Object def;
+            try {
+                def = call(bf, "getMergedBeanDefinition", name);
+            } catch (Throwable t) {
+                continue;
+            }
+            Object className = call(def, "getBeanClassName");
+            Class<?> type = className == null ? null : byName.get(className.toString());
+            if (type == null || (Boolean) call(def, "isAbstract")) continue;
+            stale.add(name);
+            // cached @Autowired / @Resource metadata of this bean would not know the new field
+            for (Object pp : processors) {
+                if (mergedPp.isInstance(pp)) {
+                    try {
+                        call(pp, "resetBeanDefinition", name);
+                    } catch (Throwable ignored) {
+                        // older Spring without reset
+                    }
+                }
+            }
+            if (!(Boolean) call(def, "isSingleton") || !(Boolean) call(bf, "containsSingleton", name)) continue;
+            Object target = unwrap(call(bf, "getBean", name), l);
+            if (!type.isInstance(target)) continue;
+            List<String> filled = new ArrayList<>();
+            List<String> skipped = new ArrayList<>();
+            Set<String> fields = gained.get(type);
+            // annotated injection points (@Autowired, @Resource, @Value): Spring's own processors
+            call(bf, "autowireBeanProperties", target, 0, Boolean.FALSE);
+            // XML <property name="..."> for the new fields only
+            Object pvs = call(def, "getPropertyValues");
+            Object wrapper = Class.forName("org.springframework.beans.BeanWrapperImpl", true, l).getConstructor(Object.class).newInstance(target);
+            for (String field : fields) {
+                Object pv = call(pvs, "getPropertyValue", field);
+                if (pv == null) {
+                    java.lang.reflect.Field f = type.getDeclaredField(field);
+                    f.setAccessible(true);
+                    if (f.get(target) != null) filled.add(field);
+                    continue;
+                }
+                Object raw = call(pv, "getValue");
+                Object value = resolveSimple(bf, raw, l);
+                if (value == UNRESOLVED) {
+                    skipped.add(field);
+                    continue;
+                }
+                call(wrapper, "setPropertyValue", field, value);
+                filled.add(field);
+            }
+            if (!filled.isEmpty()) say.accept("Spring: wired new field(s) " + filled + " on bean '" + name + "'");
+            if (!skipped.isEmpty()) {
+                say.accept("Spring: new field(s) " + skipped + " on bean '" + name
+                        + "' use a complex XML value (list, map or inner bean); not filled - restart to wire them");
+            }
+        }
+        call(bf, "clearMetadataCache");
+        for (String name : stale) markMergedStale(bf, name);
+    }
+
+    /**
+     * clearMetadataCache() keeps the merged definition of every bean that was already created, so a prototype that has
+     * been used (an email context, a process action) would keep being built from the old definition. Mark the bean and
+     * the beans that use it as their parent as stale, so Spring merges them again on the next creation.
+     */
+    static void markMergedStale(Object bf, String id) {
+        try {
+            Method clear = null;
+            for (Class<?> c = bf.getClass(); c != null && clear == null; c = c.getSuperclass()) {
+                try {
+                    clear = c.getDeclaredMethod("clearMergedBeanDefinition", String.class);
+                } catch (NoSuchMethodException e) {
+                    // look further up
+                }
+            }
+            if (clear == null) return;
+            clear.setAccessible(true);
+            Set<String> todo = new LinkedHashSet<>(List.of(id));
+            Set<String> done = new HashSet<>();
+            while (!todo.isEmpty()) {
+                String n = todo.iterator().next();
+                todo.remove(n);
+                if (!done.add(n)) continue;
+                clear.invoke(bf, n);
+                for (String other : (String[]) call(bf, "getBeanDefinitionNames")) {
+                    Object parent = call(call(bf, "getBeanDefinition", other), "getParentName");
+                    if (n.equals(parent)) todo.add(other);
+                }
+            }
+        } catch (Throwable ignored) {
+            // older Spring: the next restart picks the change up
+        }
+    }
+
+    private static final Object UNRESOLVED = new Object();
+
+    /** A bean reference or a plain value from an XML property; anything more complex is left alone. */
+    private static Object resolveSimple(Object bf, Object raw, ClassLoader l) throws Exception {
+        if (isA(raw, "org.springframework.beans.factory.config.RuntimeBeanReference", l)) {
+            return call(bf, "getBean", call(raw, "getBeanName"));
+        }
+        if (isA(raw, "org.springframework.beans.factory.config.TypedStringValue", l)) {
+            Object v = call(raw, "getValue");
+            Object resolved = call(bf, "resolveEmbeddedValue", v);
+            return resolved;
+        }
+        if (raw instanceof String) return call(bf, "resolveEmbeddedValue", raw);
+        return UNRESOLVED;
+    }
+
+    private static String safeName(Object ctx) {
+        try {
+            return String.valueOf(call(ctx, "getDisplayName"));
+        } catch (Throwable t) {
+            return "a context";
         }
     }
 

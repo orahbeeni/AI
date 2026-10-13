@@ -36,6 +36,14 @@ polling watcher used 22% CPU idle on macOS (55 roots) -> 3.8% (hot files + rotat
 file can take up to ~1 s, later saves one tick); poller/native-watcher/worker threads no longer die silently on an
 exception; `up`/`attach` only attach to Tomcat-like JVMs (display name), not the IDE or Gradle daemons; daemon.log
 rotates at 10 MB; one-watcher check verifies the command line (pid reuse).
+JBR tier (2026-10-12): JBR 21.0.11 SDK installed at ~/Library/Java/JavaVirtualMachines/jbrsdk-21.0.11.jdk. Tests run in
+JBR mode with HOTDROP_ENHANCED=1 (IntegrationTest step 6, SpringIntegrationTest step 15): lambda, field, method swaps live.
+Agent records instance fields before a swap; SpringBridge.fillNewFields resets @Autowired metadata and fills new fields on
+singletons (annotations via autowireBeanProperties; XML ref/value for the new properties only). Found and fixed a bug that
+also hit the normal JDK: clearMetadataCache() keeps merged definitions of beans already created, so XML property changes
+on used PROTOTYPE beans were ignored; now markMergedStale() (SpringIntegrationTest step 14, shown to fail without it).
+Measured: the JBR flag makes EVERY swap pause for a heap walk (~0.3-0.5 ms per MB live), so it is opt-in via
+`hotdrop install --enhanced` + `ant server` with JAVA_HOME=JBR. Not yet run on the real server (O4).
 Notes: debug start uses tomcat.debugjavaoptions INSTEAD of tomcat.javaoptions. Remaining
 PLAN open questions: O2-O6, strict per-extension classpath, JBR tier. Never run the real server's items.xml build issues
 past HotDrop - it does not touch items.xml.
