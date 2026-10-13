@@ -1428,6 +1428,11 @@ impl App {
         });
         ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(true));
+        // winit on Wayland implements "not resizable" as min size == max size == the
+        // current size, and overwrites its stored hints doing so; turning resizable
+        // back on only re-applies those, leaving the window pinned to the splash size.
+        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(Vec2::ZERO));
+        ctx.send_viewport_cmd(egui::ViewportCommand::MaxInnerSize(Vec2::INFINITY));
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(size[0], size[1])));
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(Pos2::new(pos[0], pos[1])));
         if self.saved_geom.is_some_and(|g| g.maximized) {
