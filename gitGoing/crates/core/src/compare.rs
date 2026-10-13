@@ -33,6 +33,22 @@ pub fn changed_files(repo_path: &Path, base: &str, other: &str) -> Result<Vec<Ch
     Ok(out)
 }
 
+/// Every local and remote branch as `(full ref name, short name)`, sorted by short name.
+pub fn branch_refs(repo_path: &Path) -> Result<Vec<(String, String)>, git2::Error> {
+    let repo = Repository::discover(repo_path)?;
+    let mut out = Vec::new();
+    for r in repo.references()? {
+        let r = r?;
+        let (Some(full), Some(short)) = (r.name(), r.shorthand()) else { continue };
+        let local = full.starts_with("refs/heads/");
+        if (local || full.starts_with("refs/remotes/")) && !full.ends_with("/HEAD") {
+            out.push((full.to_owned(), short.to_owned()));
+        }
+    }
+    out.sort_by(|a, b| a.1.cmp(&b.1));
+    Ok(out)
+}
+
 /// Split a comma separated list of partial file names. Blank entries are dropped.
 pub fn parse_terms(input: &str) -> Vec<String> {
     input.split(',').map(|t| t.trim().to_lowercase()).filter(|t| !t.is_empty()).collect()

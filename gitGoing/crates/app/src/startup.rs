@@ -63,6 +63,20 @@ pub fn save_geom(g: &WindowGeom) {
     }
 }
 
+/// Saved lists of partial file names for the compare window: `(name, terms)`.
+/// One list per line, `name<TAB>terms`.
+pub fn load_term_lists() -> Vec<(String, String)> {
+    let Some(text) = dir().and_then(|d| std::fs::read_to_string(d.join("compare_lists.txt")).ok()) else { return Vec::new() };
+    text.lines().filter_map(|l| l.split_once('\t')).map(|(n, t)| (n.to_owned(), t.to_owned())).collect()
+}
+
+pub fn save_term_lists(lists: &[(String, String)]) {
+    if let Some(d) = dir() {
+        let text: String = lists.iter().map(|(n, t)| format!("{n}\t{t}\n")).collect();
+        let _ = std::fs::write(d.join("compare_lists.txt"), text);
+    }
+}
+
 /// `text` without eframe's saved `"window"` entry.
 ///
 /// eframe restores the window's last size from its storage whether or not we ask
