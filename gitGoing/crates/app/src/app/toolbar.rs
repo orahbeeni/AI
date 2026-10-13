@@ -183,6 +183,10 @@ impl RepoTab {
     pub(super) fn status_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal(|ui| {
+                // The logo, tiny, at the left of the status bar.
+                if let Some(mark) = crate::assets::mark(ctx) {
+                    ui.add(egui::Image::new(&mark).fit_to_exact_size(Vec2::splat(16.0))).on_hover_text("gitgoing");
+                }
                 if let Some((n, is_err)) = &self.notice {
                     if *is_err {
                         ui.colored_label(Color32::LIGHT_RED, n.lines().last().unwrap_or(n)).on_hover_text(n);

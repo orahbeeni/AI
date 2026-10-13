@@ -1,3 +1,4 @@
+use crate::assets::{self, Assets};
 use crate::changes::{self, Changes};
 use crate::clonedlg;
 use crate::conflictwin::{self, ConflictEditor};
@@ -958,6 +959,10 @@ pub struct App {
     recent: Vec<PathBuf>,
     widths: PanelWidths,
     clone_dlg: Option<clonedlg::CloneDialog>,
+    assets: Assets,
+    /// Splash screen state: shown at start until `Some(start)` + a second or so.
+    splash_on: bool,
+    splash_start: Option<f64>,
     settings: Settings,
     settings_win: SettingsWindow,
     console: Console,
@@ -970,7 +975,15 @@ fn paths_from(s: Option<String>) -> Vec<PathBuf> {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>, resolve: Option<String>, console: bool) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        initial: Option<PathBuf>,
+        resolve: Option<String>,
+        console: bool,
+        splash: bool,
+    ) -> Self {
+        let assets = Assets::load(&cc.egui_ctx);
+        assets::share_mark(&cc.egui_ctx, &assets.mark);
         let storage = cc.storage;
         let get = |k: &str| storage.and_then(|s| s.get_string(k));
         let mut app = App {
@@ -980,6 +993,9 @@ impl App {
             was_focused: true,
             recent: paths_from(get("recent")),
             clone_dlg: None,
+            assets,
+            splash_on: splash,
+            splash_start: None,
             settings: Settings::load(get),
             settings_win: SettingsWindow::default(),
             console: Console::default(),
@@ -1112,6 +1128,38 @@ impl App {
         self.new_repo(action);
     }
 
+    /// The logo, shown over everything for a moment at start-up and then faded
+    /// out. A click or key press dismisses it early.
+    fn splash(&mut self, ctx: &egui::Context) {
+        const HOLD: f64 = 1.1;
+        const FADE: f64 = 0.45;
+        if !self.splash_on {
+            return;
+        }
+        let now = ctx.input(|i| i.time);
+        let t = now - *self.splash_start.get_or_insert(now);
+        let dismissed = ctx.input(|i| {
+            i.pointer.any_click() || i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter)
+        });
+        if t > HOLD + FADE || dismissed {
+            self.splash_on = false;
+            return;
+        }
+        let alpha = if t < HOLD { 1.0 } else { 1.0 - ((t - HOLD) / FADE) as f32 };
+        let a = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
+        let screen = ctx.screen_rect();
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("splash")));
+        painter.rect_filled(screen, 0.0, Color32::from_rgba_unmultiplied(0x12, 0x16, 0x18, a));
+        let side = (screen.width().min(screen.height()) * 0.5).clamp(160.0, 340.0);
+        painter.image(
+            self.assets.logo.id(),
+            Rect::from_center_size(screen.center(), Vec2::splat(side)),
+            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+            Color32::from_white_alpha(a),
+        );
+        ctx.request_repaint();
+    }
+
     fn new_repo(&mut self, action: Option<NewRepo>) {
         match action {
             Some(NewRepo::Open) => {
@@ -1138,7 +1186,7 @@ impl App {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.add_space(40.0);
             ui.vertical_centered(|ui| {
-                ui.heading("gitgoing");
+                ui.add(egui::Image::new(&self.assets.logo).fit_to_exact_size(Vec2::splat(190.0)));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.button("Open a repository…").clicked() {
@@ -1177,6 +1225,7 @@ impl eframe::App for App {
         for t in &mut self.tabs {
             t.background(ctx, regained);
         }
+        self.splash(ctx);
         // The toolbar's Console button asks for the console via egui's data store.
         if ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::new("toggle_console"))).unwrap_or(false) {
             self.console.toggle();

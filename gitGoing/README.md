@@ -32,7 +32,10 @@ helpers and SSH setup work as usual. Passwords and SSH passphrases are asked for
 prompt window (the app registers itself as git's askpass helper).
 
 Command-line extras: `--resolve <file>` opens the conflict editor on a conflicted file;
-`--console` opens the command console at start.
+`--console` opens the command console at start; `--no-splash` skips the start-up logo.
+
+The logo and application icon live in `crates/app/assets/` (full logo, the snail-only app icon, and a
+transparent snail mark for tiny sizes) and are embedded in the executable.
 
 ## Trying things out
 

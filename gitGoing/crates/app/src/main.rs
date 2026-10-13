@@ -1,4 +1,5 @@
 mod app;
+mod assets;
 mod askpass;
 mod changes;
 mod clonedlg;
@@ -36,12 +37,13 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("gitgoing")
+            .with_icon(assets::window_icon())
             .with_inner_size([1100.0, 700.0]),
         ..Default::default()
     };
     eframe::run_native(
         "gitgoing",
         options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(cc, initial, resolve.clone(), args.iter().any(|a| a == "--console"))))),
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, initial, resolve.clone(), args.iter().any(|a| a == "--console"), !args.iter().any(|a| a == "--no-splash"))))),
     )
 }
