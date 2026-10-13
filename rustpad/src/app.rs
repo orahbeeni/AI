@@ -76,6 +76,10 @@ pub struct App {
     pub recording: bool,
     pub macro_buf: Vec<Cmd>,
     pub last_macro: Vec<Cmd>,
+    /// Native web view overlaying the editor area while an `html_view` tab is active.
+    pub webview: Option<wry::WebView>,
+    pub webview_rect: Option<egui::Rect>,
+    pub webview_url: String,
     pub playing: bool,
     pub closed: Vec<Closed>,
     pub clipboard: Option<arboard::Clipboard>,
@@ -136,6 +140,9 @@ impl App {
             recording: false,
             macro_buf: Vec::new(),
             last_macro: Vec::new(),
+            webview: None,
+            webview_rect: None,
+            webview_url: String::new(),
             playing: false,
             closed: Vec::new(),
             clipboard: arboard::Clipboard::new().ok(),
@@ -988,6 +995,16 @@ impl App {
                 let steps = self.last_macro.clone();
                 self.play_macro(ctx, &steps, 1);
             }
+            Cmd::OpenUtils => {
+                if cfg!(any(target_os = "macos", target_os = "windows")) {
+                    if self.open_path(Path::new(UTILS_HTML)) {
+                        let i = self.active;
+                        self.tabs[i].html_view = true;
+                    }
+                } else {
+                    open_with_default(UTILS_HTML);
+                }
+            }
             Cmd::MacroRunMultiple => self.dialogs.macro_run_open = true,
             Cmd::MacroSave => {
                 if !self.last_macro.is_empty() {
@@ -1618,6 +1635,9 @@ pub fn reveal_in_file_manager(path: &Path) {
         let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
     }
 }
+
+/// Page opened (rendered, in the default browser) by the toolbar "Utils" button.
+const UTILS_HTML: &str = "/Users/omar/Documents/private/dev/AI/utils/utils.html";
 
 pub fn open_with_default(target: &str) {
     #[cfg(target_os = "windows")]

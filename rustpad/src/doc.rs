@@ -222,6 +222,8 @@ pub struct Doc {
     pub lang: LangId,
     pub version: u64,
     pub read_only: bool,
+    /// Tab shows the file rendered in an embedded web view instead of the text editor.
+    pub html_view: bool,
     pub overwrite: bool,
     pub opts: EditOpts,
     pub bookmarks: BTreeSet<usize>,
@@ -309,6 +311,7 @@ impl Doc {
             lang: lang::PLAIN,
             version: 1,
             read_only: false,
+            html_view: false,
             overwrite: false,
             opts: EditOpts::default(),
             bookmarks: BTreeSet::new(),

@@ -166,6 +166,7 @@ pub enum Cmd {
     MacroRunMultiple,
     MacroSave,
     MacroPlayNamed(usize),
+    OpenUtils,
     // ---- misc
     Preferences,
     About,
@@ -325,6 +326,7 @@ impl Cmd {
             ToggleFold => "Fold: Toggle Current",
             MacroRecord => "Macro: Start / Stop Recording",
             MacroPlay => "Macro: Playback",
+            OpenUtils => "Tools: Open Utils in Browser",
             Run => "Run: Run...",
             About => "Help: About",
             Preferences => "Settings: Preferences",

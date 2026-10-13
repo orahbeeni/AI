@@ -426,6 +426,7 @@ impl App {
                 b(ui, "rec", "Start Recording", Cmd::MacroRecord, true, false);
             }
             b(ui, "play", "Playback", Cmd::MacroPlay, can_play, false);
+            b(ui, "utils", "Utils", Cmd::OpenUtils, true, false);
         });
     }
 

@@ -34,6 +34,7 @@ sha2 = "0.11.0"
 unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
 walkdir = "2.5.0"
+wry = "0.57.0"
 
 # An editor is unusable unoptimised: keep plain `cargo run` fast too.
 [profile.dev]
