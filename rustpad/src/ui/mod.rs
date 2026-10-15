@@ -124,7 +124,7 @@ impl eframe::App for App {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
         }
         self.ui_inner(ui);
-        self.sync_webview(frame, ui.ctx().pixels_per_point());
+        self.sync_webview(frame, &ui.ctx().clone());
         if let Some(th) = std::env::var("RP_TRACE").ok().and_then(|v| v.parse::<f64>().ok().or(Some(25.0))) {
             let ms = started.elapsed().as_secs_f64() * 1000.0;
             if ms > th {
@@ -146,8 +146,14 @@ impl eframe::App for App {
 
 impl App {
     /// Show the web view over the editor area when an HTML view tab is active, hide it otherwise.
-    fn sync_webview(&mut self, frame: &eframe::Frame, _ppp: f32) {
-        let Some(rect) = self.webview_rect else {
+    fn sync_webview(&mut self, frame: &eframe::Frame, frame_ctx: &egui::Context) {
+        // The native web view paints above all egui content, so hide it while a menu,
+        // popup or dialog is open; otherwise those would render behind the page.
+        let ctx = frame_ctx;
+        let overlay = ctx.memory(|m| {
+                m.areas().visible_layer_ids().into_iter().any(|l| matches!(l.order, egui::Order::Middle | egui::Order::Foreground))
+            });
+        let Some(rect) = self.webview_rect.filter(|_| !overlay) else {
             if let Some(w) = &self.webview {
                 let _ = w.set_visible(false);
             }

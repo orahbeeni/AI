@@ -23,6 +23,8 @@ struct SessionDoc {
     eol: String,
     modified: bool,
     bookmarks: Vec<usize>,
+    #[serde(default)]
+    html_view: bool,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -92,6 +94,7 @@ pub fn save(app: &mut App, wait: bool) {
             eol: eol_name(d.eol).to_string(),
             modified: d.is_modified(),
             bookmarks: d.bookmarks.iter().copied().collect(),
+            html_view: d.html_view,
         });
     }
     session.active = session.active.min(session.docs.len().saturating_sub(1));
@@ -172,6 +175,7 @@ pub fn restore(app: &mut App) {
         let p = sd.caret.min(d.len_chars());
         d.set_caret(p);
         d.scroll_row = sd.scroll_row;
+        d.html_view = sd.html_view;
         d.bookmarks = sd.bookmarks.iter().copied().filter(|l| *l < d.len_lines()).collect();
         app.apply_doc_opts(&mut d);
         app.tabs.push(d);
