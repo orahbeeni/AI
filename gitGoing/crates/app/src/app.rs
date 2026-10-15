@@ -24,7 +24,7 @@ use gitgoing_core::remotes;
 use gitgoing_core::stash;
 use gitgoing_core::graph::{SegKind, PALETTE_SIZE};
 use gitgoing_core::history::{self, CommitRow, LoadEvent, RefKind, RepoInfo};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::path::PathBuf;
@@ -193,6 +193,13 @@ enum RemoteDlgKind {
     Add,
     EditUrl,
     Rename,
+}
+
+/// The window to add or edit a branch's local comment.
+struct CommentDlg {
+    /// Short branch name.
+    branch: String,
+    text: String,
 }
 
 /// The "squash commits" window: the commits and the message for the result.
@@ -370,6 +377,9 @@ pub struct RepoTab {
     hidden: BTreeSet<String>,
     /// Pinned local branches (full reference names), in the order they were pinned.
     pinned: Vec<String>,
+    /// Local comments on branches (full reference name -> text).
+    comments: BTreeMap<String, String>,
+    comment_dlg: Option<CommentDlg>,
     /// The previous sidebar, whose filter and layout the next one inherits.
     carry_sidebar: Option<Sidebar>,
     conflict: Option<ConflictEditor>,
@@ -381,11 +391,13 @@ pub struct RepoTab {
 }
 
 impl RepoTab {
-    fn new(id: u64, path: PathBuf, hidden: BTreeSet<String>, pinned: Vec<String>) -> Self {
+    fn new(id: u64, path: PathBuf, hidden: BTreeSet<String>, pinned: Vec<String>, comments: BTreeMap<String, String>) -> Self {
         let mut app = RepoTab {
             id,
             hidden,
             pinned,
+            comments,
+            comment_dlg: None,
             carry_sidebar: None,
             path: path.clone(),
             repo: None,
@@ -872,7 +884,7 @@ impl RepoTab {
                 .show(ctx, |ui| {
                     if let Some(s) = &mut l.sidebar {
                         let head = l.info.as_ref().and_then(|i| i.head_branch.as_deref());
-                        branch_act = s.show(ui, &self.hidden, &self.pinned, head);
+                        branch_act = s.show(ui, &self.hidden, &self.pinned, &self.comments, head);
                     }
                 });
             let rect = r.response.rect;
@@ -987,6 +999,11 @@ impl RepoTab {
                     }
                 }
                 Some(SidebarAction::MovePinned(full, delta)) => move_in_list(&mut self.pinned, &full, delta),
+                Some(SidebarAction::ReorderPinned(from, to)) => reorder_in_list(&mut self.pinned, &from, &to),
+                Some(SidebarAction::EditComment(branch)) => {
+                    let text = self.comments.get(&format!("refs/heads/{branch}")).cloned().unwrap_or_default();
+                    self.comment_dlg = Some(CommentDlg { branch, text });
+                }
                 Some(SidebarAction::AddRemote) => {
                     self.remote_dlg = Some(RemoteDlg { kind: RemoteDlgKind::Add, name: "origin".into(), text: String::new() })
                 }
@@ -1009,6 +1026,14 @@ impl RepoTab {
                 }
                 Some(SidebarAction::FetchBranch(n, local)) => {
                     self.run_op(ctx, "Fetch", move |p| remotes::fetch_branch(p, &n, local))
+                }
+                Some(SidebarAction::PullBranch(n)) => {
+                    let head = self.repo.as_ref().and_then(|l| l.info.as_ref()).and_then(|i| i.head_branch.clone());
+                    if head.as_deref() == Some(n.as_str()) {
+                        self.start_pull(ctx, settings.pull_mode);
+                    } else {
+                        self.run_op(ctx, "Pull", move |p| remotes::pull_other_branch(p, &n));
+                    }
                 }
                 Some(SidebarAction::DeleteRemoteBranch(n)) => self.confirm = Some(Confirm::DeleteRemoteBranch(n)),
                 Some(SidebarAction::SetUpstream(local)) => {
@@ -1175,6 +1200,50 @@ fn move_in_list(list: &mut [String], name: &str, delta: i32) {
     }
 }
 
+/// Move `name` to the place of `target` in `list`: below it if it came from above, else above it.
+fn reorder_in_list(list: &mut Vec<String>, name: &str, target: &str) {
+    let (Some(i), Some(j)) = (list.iter().position(|n| n == name), list.iter().position(|n| n == target)) else { return };
+    let item = list.remove(i);
+    list.insert(j, item);
+}
+
+/// Per-repository branch comments, one `path<TAB>ref<TAB>comment` line each; the
+/// comment has `\`, newlines and tabs escaped.
+fn serialise_comments(store: &HashMap<PathBuf, BTreeMap<String, String>>) -> String {
+    let mut lines = Vec::new();
+    for (p, map) in store {
+        for (r, c) in map {
+            let esc = c.replace('\\', "\\\\").replace('\n', "\\n").replace('\r', "").replace('\t', "\\t");
+            lines.push(format!("{}\t{r}\t{esc}", p.display()));
+        }
+    }
+    lines.join("\n")
+}
+
+fn parse_comments(text: &str) -> HashMap<PathBuf, BTreeMap<String, String>> {
+    let mut out: HashMap<PathBuf, BTreeMap<String, String>> = HashMap::new();
+    for line in text.lines() {
+        let mut parts = line.splitn(3, '\t');
+        let (Some(p), Some(r), Some(c)) = (parts.next(), parts.next(), parts.next()) else { continue };
+        let mut un = String::new();
+        let mut chars = c.chars();
+        while let Some(ch) = chars.next() {
+            if ch != '\\' {
+                un.push(ch);
+                continue;
+            }
+            match chars.next() {
+                Some('n') => un.push('\n'),
+                Some('t') => un.push('\t'),
+                Some(o) => un.push(o),
+                None => {}
+            }
+        }
+        out.entry(PathBuf::from(p)).or_default().insert(r.to_owned(), un);
+    }
+    out
+}
+
 /// An absolute path without `.`/`..` or a trailing slash (unchanged if the path
 /// does not exist).
 fn normalise(path: &std::path::Path) -> PathBuf {
@@ -1235,6 +1304,8 @@ pub struct App {
     hidden_store: HashMap<PathBuf, BTreeSet<String>>,
     /// Pinned branches per repository, in pin order.
     pinned_store: HashMap<PathBuf, Vec<String>>,
+    /// Branch comments per repository.
+    comments_store: HashMap<PathBuf, BTreeMap<String, String>>,
     assets: Assets,
     /// Splash screen state: shown at start until `Some(start)` + a second or so.
     splash_on: bool,
@@ -1284,6 +1355,7 @@ impl App {
             clone_dlg: None,
             hidden_store: parse_lists(&get("hidden_refs").unwrap_or_default()),
             pinned_store: parse_lists(&get("pinned_refs").unwrap_or_default()),
+            comments_store: parse_comments(&get("branch_comments").unwrap_or_default()),
             assets,
             splash_on: splash,
             saved_geom,
@@ -1346,7 +1418,8 @@ impl App {
         self.next_id += 1;
         let hidden = self.hidden_store.get(&path).cloned().unwrap_or_default();
         let pinned = self.pinned_store.get(&path).cloned().unwrap_or_default();
-        self.tabs.push(RepoTab::new(self.next_id, path, hidden, pinned));
+        let comments = self.comments_store.get(&path).cloned().unwrap_or_default();
+        self.tabs.push(RepoTab::new(self.next_id, path, hidden, pinned, comments));
         self.active = self.tabs.len() - 1;
     }
 
@@ -1687,10 +1760,16 @@ impl eframe::App for App {
             if t.pinned.is_empty() {
                 self.pinned_store.remove(&key);
             } else {
-                self.pinned_store.insert(key, t.pinned.clone());
+                self.pinned_store.insert(key.clone(), t.pinned.clone());
+            }
+            if t.comments.is_empty() {
+                self.comments_store.remove(&key);
+            } else {
+                self.comments_store.insert(key, t.comments.clone());
             }
         }
         storage.set_string("hidden_refs", serialise_lists(self.hidden_store.iter().map(|(p, s)| (p, s.iter()))));
+        storage.set_string("branch_comments", serialise_comments(&self.comments_store));
         storage.set_string("pinned_refs", serialise_lists(self.pinned_store.iter().map(|(p, s)| (p, s.iter()))));
         self.settings.save(|k, v| storage.set_string(k, v));
         if let Some(g) = &self.last_geom {
@@ -1746,6 +1825,24 @@ mod tests {
         move_in_list(&mut list, "refs/heads/alpha", 1); // already last
         move_in_list(&mut list, "refs/heads/missing", 1);
         assert_eq!(list, ["refs/heads/zeta", "refs/heads/mid", "refs/heads/alpha"]);
+    }
+
+    #[test]
+    fn pins_reorder_by_drag_and_comments_round_trip() {
+        let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let mut l = names(&["a", "b", "c"]);
+        reorder_in_list(&mut l, "a", "c"); // dragged down: lands after c
+        assert_eq!(l, names(&["b", "c", "a"]));
+        reorder_in_list(&mut l, "a", "b"); // dragged up: lands before b
+        assert_eq!(l, names(&["a", "b", "c"]));
+        reorder_in_list(&mut l, "a", "missing");
+        assert_eq!(l, names(&["a", "b", "c"]));
+
+        let mut store = HashMap::new();
+        let mut m = BTreeMap::new();
+        m.insert("refs/heads/x".to_owned(), "line one\n\ttabbed \\ back\\n".to_owned());
+        store.insert(PathBuf::from("/repo"), m);
+        assert_eq!(parse_comments(&serialise_comments(&store)), store);
     }
 
     #[test]

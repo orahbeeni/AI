@@ -24,6 +24,8 @@ pub enum SidebarAction {
     FetchRemote(String),
     /// Fetch one branch: (name, is_local).
     FetchBranch(String, bool),
+    /// Pull this local branch alone (short name), checked out or not.
+    PullBranch(String),
     DeleteRemoteBranch(String),
     SetUpstream(String),
     PushTag(String),
@@ -32,6 +34,10 @@ pub enum SidebarAction {
     SetPinned(String, bool),
     /// Move a pinned branch up (-1) or down (+1) in the pinned list.
     MovePinned(String, i32),
+    /// Drag a pinned branch onto another: move the first (full reference name) to the second's place.
+    ReorderPinned(String, String),
+    /// Add or edit the local comment of a local branch (short name).
+    EditComment(String),
     /// Hide (or show) these branches/tags (full reference names) in the graph.
     SetHidden(Vec<String>, bool),
     /// Show only this branch or tag (full reference name).
@@ -58,6 +64,8 @@ pub struct Sidebar {
     /// Scroll the local list to the current branch on the next frame.
     locate: bool,
     stashes: Vec<StashEntry>,
+    /// Local branch -> number of files it would get from a pull.
+    unpulled: BTreeMap<String, (usize, usize)>,
     /// Local, remote, tags, stashes, pinned.
     sections: [SectionState; 5],
 }
@@ -76,7 +84,11 @@ impl Default for SectionState {
 
 impl Sidebar {
     pub fn from_info(info: &RepoInfo) -> Self {
-        let mut s = Sidebar { stashes: info.stashes.clone(), ..Default::default() };
+        let mut s = Sidebar {
+            stashes: info.stashes.clone(),
+            unpulled: info.unpulled.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+            ..Default::default()
+        };
         for r in &info.remotes {
             // Show remotes even before they have any branches.
             s.remotes.entry(r.name.clone()).or_default();
@@ -120,6 +132,7 @@ impl Sidebar {
         ui: &mut egui::Ui,
         hidden: &BTreeSet<String>,
         pinned: &[String],
+        comments: &BTreeMap<String, String>,
         head: Option<&str>,
     ) -> Option<SidebarAction> {
         let mut act = None;
@@ -157,7 +170,7 @@ impl Sidebar {
 
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             let force_open = !q.is_empty();
-            let bc = BranchCtx { hidden, pinned, head_full: head_full.as_deref() };
+            let bc = BranchCtx { hidden, pinned, comments, head_full: head_full.as_deref(), unpulled: &self.unpulled };
 
             // PINNED: the branches the user keeps an eye on, in the order they were pinned.
             let pinned_rows: Vec<_> = pinned
@@ -168,14 +181,22 @@ impl Sidebar {
                 })
                 .filter(|(n, _, _)| hit(n))
                 .collect();
-            section(ui, "PINNED", pinned_rows.len(), pinned.len(), HeaderButton::None, &mut self.sections[4], |ui| {
-                if pinned.is_empty() {
+            // The checked-out branch gets an honorary pin, even if it isn't pinned.
+            let honorary = self
+                .local
+                .iter()
+                .find(|(n, current, _)| *current && !pinned.contains(&format!("refs/heads/{n}")) && hit(n));
+            section(ui, "PINNED", pinned_rows.len() + honorary.is_some() as usize, pinned.len(), HeaderButton::None, &mut self.sections[4], |ui| {
+                if let Some((name, current, oid)) = honorary {
+                    local_branch_row(ui, &bc, &mut act, 0, name, name, *current, *oid, false, None, true);
+                }
+                if pinned.is_empty() && honorary.is_none() {
                     ui.add_space(2.0);
                     ui.weak("  Hover a branch in LOCAL and click its pin to keep it here.");
                 }
                 let n = pinned_rows.len();
                 for (i, (name, current, oid)) in pinned_rows.iter().enumerate() {
-                    local_branch_row(ui, &bc, &mut act, 0, name, name, *current, *oid, false, Some((i, n)));
+                    local_branch_row(ui, &bc, &mut act, 0, name, name, *current, *oid, false, Some((i, n)), false);
                 }
             });
 
@@ -195,7 +216,7 @@ impl Sidebar {
                 let is_hidden = |i: usize| !local[i].1 && hidden.contains(&format!("refs/heads/{}", local[i].0));
                 tree(ui, "local", &nodes, 0, "", force_open, &is_hidden, &mut toggles, &mut |ui, i, name, depth| {
                     let (full, current, oid) = local[i];
-                    local_branch_row(ui, &bc, &mut act, depth, name, full, *current, *oid, locate, None);
+                    local_branch_row(ui, &bc, &mut act, depth, name, full, *current, *oid, locate, None, false);
                 });
                 for (ids, hide) in toggles {
                     act = Some(SidebarAction::SetHidden(ids.iter().map(|&i| format!("refs/heads/{}", local[i].0)).collect(), hide));
@@ -506,7 +527,7 @@ fn row_eye(
     current: bool,
     eye: Option<bool>,
 ) -> (Response, bool) {
-    let (resp, clicks) = row_full(ui, depth, icon, text, current, eye, None);
+    let (resp, clicks) = row_full(ui, depth, icon, text, &[], current, eye, None, false);
     (resp, clicks.eye)
 }
 
@@ -521,16 +542,20 @@ struct RowClicks {
 /// branch from the graph; `Some(true)` = hidden) and a pin (`Some(true)` = pinned).
 /// The eye shows on hover and always when hidden; the pin shows on hover and
 /// always when pinned.
+#[allow(clippy::too_many_arguments)]
 fn row_full(
     ui: &mut egui::Ui,
     depth: usize,
     icon: Icon,
     text: &str,
+    badge: &[(usize, bool)],
     current: bool,
     eye: Option<bool>,
     pin: Option<bool>,
+    drag: bool,
 ) -> (Response, RowClicks) {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_H), Sense::click());
+    let sense = if drag { Sense::click_and_drag() } else { Sense::click() };
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_H), sense);
     let p = ui.painter_at(rect);
     let visuals = ui.visuals();
     if current {
@@ -599,6 +624,36 @@ fn row_full(
             }
         }
     }
+    // Push/pull counts sit at the right edge, left of the buttons. The arrows are
+    // drawn rather than typed: not every font has them (they show as squares).
+    if !badge.is_empty() {
+        let mut x = right + 10.0;
+        for &(n, up) in badge.iter().rev() {
+            let col = visuals.weak_text_color();
+            // A solid block arrow as one mesh: head and stem share vertices and the same
+            // (non-feathered) edges, so they cannot drift apart. Snapped to whole pixels.
+            let ppp = ui.ctx().pixels_per_point();
+            let snap = |v: f32| (v * ppp).round() / ppp;
+            let (ax, ay, d) = (snap(x - 4.0), snap(cy), if up { -1.0_f32 } else { 1.0 });
+            let w = snap(3.5).max(1.0 / ppp);
+            let sw = snap(1.0).max(1.0 / ppp);
+            let (tip, neck, tail) = (snap(4.5), snap(0.5), snap(4.5));
+            let mut m = egui::Mesh::default();
+            let mut v = |dx: f32, dy: f32| {
+                m.colored_vertex(Pos2::new(ax + dx, ay + d * dy), col);
+                m.vertices.len() as u32 - 1
+            };
+            let (apex, hl, hr) = (v(0.0, tip), v(-w, 0.0), v(w, 0.0));
+            let (sl0, sr0, sl1, sr1) = (v(-sw, neck), v(sw, neck), v(-sw, -tail), v(sw, -tail));
+            m.add_triangle(apex, hl, hr);
+            m.add_triangle(sl0, sr0, sr1);
+            m.add_triangle(sl0, sr1, sl1);
+            p.add(egui::Shape::mesh(m));
+            let r = p.text(Pos2::new(x - 10.0, cy), egui::Align2::RIGHT_CENTER, n.to_string(), font.clone(), col);
+            x = r.left() - 6.0;
+        }
+        text_clip.max.x = text_clip.max.x.min(x);
+    }
     // Names are cut off at the right edge (before the buttons), never wrapped.
     ui.painter_at(text_clip).text(Pos2::new(text_x, cy), egui::Align2::LEFT_CENTER, text, font, color);
     (resp, clicks)
@@ -608,7 +663,11 @@ fn row_full(
 struct BranchCtx<'a> {
     hidden: &'a BTreeSet<String>,
     pinned: &'a [String],
+    /// Local comments by full reference name.
+    comments: &'a BTreeMap<String, String>,
     head_full: Option<&'a str>,
+    /// (commits to push, files to pull) per local branch, by short name.
+    unpulled: &'a BTreeMap<String, (usize, usize)>,
 }
 
 /// One local branch row, used by both the PINNED and LOCAL sections.
@@ -625,12 +684,23 @@ fn local_branch_row(
     oid: Oid,
     locate: bool,
     slot: Option<(usize, usize)>,
+    honorary: bool,
 ) {
     let full_ref = format!("refs/heads/{full}");
     let hid = bc.hidden.contains(&full_ref);
     let is_pinned = bc.pinned.contains(&full_ref);
     let _ = bc.head_full;
-    let (r, clicks) = row_full(ui, depth, Icon::Branch, label, current, (!current).then_some(hid), Some(is_pinned));
+    // (count, is_push): commits to push first, then files to pull.
+    let mut badge: Vec<(usize, bool)> = Vec::new();
+    if let Some(&(ahead, files)) = bc.unpulled.get(full) {
+        if ahead > 0 {
+            badge.push((ahead, true));
+        }
+        if files > 0 {
+            badge.push((files, false));
+        }
+    }
+    let (r, clicks) = row_full(ui, depth, Icon::Branch, label, &badge, current, (!current).then_some(hid), Some(is_pinned || honorary), slot.is_some());
     if clicks.eye {
         *act = Some(SidebarAction::SetHidden(vec![full_ref], !hid));
         return;
@@ -639,7 +709,28 @@ fn local_branch_row(
         *act = Some(SidebarAction::SetPinned(full_ref, !is_pinned));
         return;
     }
-    let r = r.on_hover_text("Click to show in the graph; double-click to check out");
+    if slot.is_some() {
+        pin_drag(ui, &r, &full_ref, slot.map_or(0, |(i, _)| i), act);
+    }
+    let comment = bc.comments.get(&full_ref).filter(|c| !c.trim().is_empty());
+    let r = r.on_hover_ui(|ui| {
+        ui.strong(full);
+        ui.label("Click to show in the graph; double-click to check out");
+        if let Some(&(ahead, files)) = bc.unpulled.get(full) {
+            if ahead > 0 {
+                ui.label(format!("{ahead} commit(s) not pushed yet"));
+            }
+            if files > 0 {
+                ui.label(format!("{files} file(s) changed upstream, not pulled yet"));
+            }
+        }
+        if let Some(c) = comment {
+            ui.separator();
+            ui.set_max_width(320.0);
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+            ui.label(c.as_str());
+        }
+    });
     if current && locate {
         r.scroll_to_me(Some(egui::Align::Center));
     }
@@ -656,6 +747,10 @@ fn local_branch_row(
         }
         if ui.button("Fetch latest").clicked() {
             *act = Some(SidebarAction::FetchBranch(full.to_owned(), true));
+            ui.close_menu();
+        }
+        if ui.button("Pull this branch").clicked() {
+            *act = Some(SidebarAction::PullBranch(full.to_owned()));
             ui.close_menu();
         }
         if ui.add_enabled(!current, egui::Button::new("Merge into current branch")).clicked() {
@@ -679,6 +774,10 @@ fn local_branch_row(
             ui.close_menu();
         }
         ui.separator();
+        if ui.button(if comment.is_some() { "Edit comment…" } else { "Add comment…" }).clicked() {
+            *act = Some(SidebarAction::EditComment(full.to_owned()));
+            ui.close_menu();
+        }
         if ui.button(if is_pinned { "Unpin" } else { "Pin to the top" }).clicked() {
             *act = Some(SidebarAction::SetPinned(format!("refs/heads/{full}"), !is_pinned));
             ui.close_menu();
@@ -696,6 +795,44 @@ fn local_branch_row(
         ui.separator();
         visibility_menu(ui, act, &format!("refs/heads/{full}"), hid, current);
     });
+}
+
+/// Drag-and-drop reordering of a PINNED row: the row being dragged remembers the
+/// row under the pointer (kept in egui memory across frames), shows an insertion
+/// line there, and reports the move when released.
+fn pin_drag(ui: &mut egui::Ui, r: &Response, full_ref: &str, index: usize, act: &mut Option<SidebarAction>) {
+    let ctx = ui.ctx().clone();
+    let target_id = egui::Id::new("pinned_drag_target");
+    let src_id = egui::Id::new("pinned_drag_source");
+    let src: Option<(String, usize)> = ctx.data(|d| d.get_temp(src_id));
+    if r.drag_started() {
+        ctx.data_mut(|d| {
+            d.insert_temp(src_id, (full_ref.to_owned(), index));
+            d.remove::<String>(target_id);
+        });
+    }
+    if r.dragged() {
+        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+    if let Some((_, src_index)) = src.filter(|(s, _)| s != full_ref) {
+        // Another row is being dragged: is the pointer over this one?
+        if ctx.pointer_latest_pos().is_some_and(|p| r.rect.contains(p)) {
+            ctx.data_mut(|d| d.insert_temp(target_id, full_ref.to_owned()));
+            // Dropping below the source puts it after this row, above puts it before.
+            let y = if src_index < index { r.rect.bottom() } else { r.rect.top() };
+            ui.painter().hline(r.rect.x_range(), y, egui::Stroke::new(2.0_f32, Color32::from_rgb(0xe5, 0xc0, 0x7b)));
+        }
+    }
+    if r.drag_stopped() {
+        let target: Option<String> = ctx.data(|d| d.get_temp(target_id));
+        ctx.data_mut(|d| {
+            d.remove::<(String, usize)>(src_id);
+            d.remove::<String>(target_id);
+        });
+        if let Some(t) = target.filter(|t| t != full_ref) {
+            *act = Some(SidebarAction::ReorderPinned(full_ref.to_owned(), t));
+        }
+    }
 }
 
 /// The visibility entries of a branch/tag context menu.

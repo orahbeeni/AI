@@ -69,6 +69,38 @@ pub struct RepoInfo {
     pub remotes: Vec<crate::remotes::RemoteInfo>,
     pub stashes: Vec<crate::stash::StashEntry>,
     pub refs: HashMap<Oid, Vec<RefLabel>>,
+    /// Local branch (short name) -> (commits to push, files changed by upstream
+    /// commits it doesn't have yet). Only branches with something to push or pull appear.
+    pub unpulled: HashMap<String, (usize, usize)>,
+}
+
+/// For every local branch with an upstream: the commits ahead, and how many
+/// files the unpulled commits touch (merge base tree vs. upstream tree).
+fn unpulled_files(repo: &Repository) -> HashMap<String, (usize, usize)> {
+    let mut out = HashMap::new();
+    let Ok(branches) = repo.branches(Some(git2::BranchType::Local)) else { return out };
+    for (b, _) in branches.flatten() {
+        let Ok(Some(name)) = b.name().map(|n| n.map(str::to_owned)) else { continue };
+        let Ok(up) = b.upstream() else { continue };
+        let (Some(local), Some(remote)) = (b.get().target(), up.get().target()) else { continue };
+        let Ok((ahead, behind)) = repo.graph_ahead_behind(local, remote) else { continue };
+        if ahead == 0 && behind == 0 {
+            continue;
+        }
+        let mut files = 0;
+        if behind > 0 {
+            if let Ok(base) = repo.merge_base(local, remote) {
+                let tree = |oid| repo.find_commit(oid).and_then(|c| c.tree());
+                if let (Ok(a), Ok(z)) = (tree(base), tree(remote)) {
+                    if let Ok(d) = repo.diff_tree_to_tree(Some(&a), Some(&z), None) {
+                        files = d.deltas().len();
+                    }
+                }
+            }
+        }
+        out.insert(name, (ahead, files));
+    }
+    out
 }
 
 pub enum LoadEvent {
@@ -200,7 +232,8 @@ fn collect_info(repo: &mut Repository) -> Result<RepoInfo, git2::Error> {
     let stashes = crate::stash::list(repo);
     let head_oid = repo.head().ok().and_then(|h| h.target());
     let remotes = crate::remotes::list(repo);
-    Ok(RepoInfo { path, head_branch, upstream, head_oid, remotes, stashes, refs })
+    let unpulled = unpulled_files(repo);
+    Ok(RepoInfo { path, head_branch, upstream, head_oid, remotes, stashes, refs, unpulled })
 }
 
 #[cfg(test)]

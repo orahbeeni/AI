@@ -14,6 +14,7 @@ impl RepoTab {
         self.dialog_squash(ctx);
         self.dialog_rebase(ctx);
         self.dialog_remote(ctx);
+        self.dialog_comment(ctx);
         self.dialog_upstream(ctx);
         self.dialog_confirm(ctx);
         self.file_windows(ctx);
@@ -456,6 +457,43 @@ impl RepoTab {
                 let from = d.from;
                 self.run_op(ctx, "Rebase", move |p| rebase_outcome(rebase::start_interactive(p, from, &items)));
             }
+        }
+    }
+
+    fn dialog_comment(&mut self, ctx: &egui::Context) {
+        // Add / edit a branch's local comment.
+        let mut save = false;
+        let mut close = false;
+        if let Some(d) = &mut self.comment_dlg {
+            egui::Window::new(format!("Comment on {}", d.branch))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.set_width(420.0);
+                    ui.weak("Kept on this computer only; shown when you hover the branch.");
+                    ui.add(egui::TextEdit::multiline(&mut d.text).desired_rows(5).desired_width(f32::INFINITY)).request_focus();
+                    ui.horizontal(|ui| {
+                        if ui.button("Save").clicked() {
+                            save = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+        }
+        if save {
+            if let Some(d) = self.comment_dlg.take() {
+                let key = format!("refs/heads/{}", d.branch);
+                if d.text.trim().is_empty() {
+                    self.comments.remove(&key);
+                } else {
+                    self.comments.insert(key, d.text.trim().to_owned());
+                }
+            }
+        } else if close {
+            self.comment_dlg = None;
         }
     }
 

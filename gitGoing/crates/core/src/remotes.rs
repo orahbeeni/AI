@@ -94,6 +94,28 @@ pub fn fetch_branch(repo_path: &Path, name: &str, local: bool) -> Result<(), Str
     gitcmd::run(Some(repo_path), &["fetch", &remote, &spec]).map(|_| ())
 }
 
+/// Bring local branch `name` up to its upstream without checking it out: fetch the
+/// upstream branch straight into it. Git only allows this as a fast-forward, so a
+/// branch that has diverged is refused and left untouched.
+pub fn pull_other_branch(repo_path: &Path, name: &str) -> Result<(), String> {
+    let repo = Repository::discover(repo_path).map_err(|e| e.message().to_owned())?;
+    let b = repo.find_branch(name, BranchType::Local).map_err(|e| e.message().to_owned())?;
+    let up = b.upstream().map_err(|_| format!("'{name}' has no upstream branch. Set one first."))?;
+    let up_name = up.name().ok().flatten().unwrap_or_default().to_owned();
+    let (remote, branch) = split_remote_branch(&repo, &up_name)?;
+    gitcmd::plain_name(&remote)?;
+    gitcmd::plain_name(&branch)?;
+    gitcmd::plain_name(name)?;
+    let spec = format!("refs/heads/{branch}:refs/heads/{name}");
+    gitcmd::run(Some(repo_path), &["fetch", &remote, &spec]).map(|_| ()).map_err(|e| {
+        if e.to_lowercase().contains("non-fast-forward") || e.contains("rejected") {
+            format!("'{name}' has diverged from {up_name}, so it can't be fast-forwarded. Check it out and pull to merge or rebase.")
+        } else {
+            e
+        }
+    })
+}
+
 /// Split `origin/feature/x` into (`origin`, `feature/x`), allowing remote names with slashes.
 fn split_remote_branch(repo: &Repository, full: &str) -> Result<(String, String), String> {
     let remotes = repo.remotes().map_err(|e| e.message().to_owned())?;

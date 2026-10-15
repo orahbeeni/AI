@@ -96,10 +96,15 @@ pub fn checkout_remote(repo_path: &Path, full_name: &str) -> Result<(), git2::Er
     checkout_local(&repo, local)
 }
 
+/// Trim a branch name and replace inner whitespace with underscores.
+fn sanitize_name(name: &str) -> String {
+    name.trim().chars().map(|c| if c.is_whitespace() { '_' } else { c }).collect()
+}
+
 /// Create a branch at HEAD and check it out.
 pub fn create_and_checkout(repo_path: &Path, name: &str) -> Result<(), git2::Error> {
-    crate::gitlog::equiv(repo_path, format!("git checkout -b {}", crate::gitlog::quote(name.trim())));
-    let name = name.trim();
+    let name = &sanitize_name(name);
+    crate::gitlog::equiv(repo_path, format!("git checkout -b {}", crate::gitlog::quote(name)));
     if !Branch::name_is_valid(name)? {
         return Err(err(format!("'{name}' is not a valid branch name")));
     }
@@ -115,8 +120,8 @@ pub fn create_and_checkout(repo_path: &Path, name: &str) -> Result<(), git2::Err
 
 /// Create a branch at an arbitrary commit, optionally checking it out.
 pub fn create_at(repo_path: &Path, name: &str, id: git2::Oid, checkout: bool) -> Result<(), git2::Error> {
-    crate::gitlog::equiv(repo_path, format!("git branch {} {}{}", crate::gitlog::quote(name.trim()), id, if checkout { " && git checkout " } else { "" }));
-    let name = name.trim();
+    let name = &sanitize_name(name);
+    crate::gitlog::equiv(repo_path, format!("git branch {} {}{}", crate::gitlog::quote(name), id, if checkout { " && git checkout " } else { "" }));
     if !Branch::name_is_valid(name)? {
         return Err(err(format!("'{name}' is not a valid branch name")));
     }

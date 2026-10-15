@@ -26,6 +26,7 @@ impl Default for DiffOpts {
             selected: HashSet::new(),
             current_hunk: 0,
             scroll_to_hunk: None,
+            text_sel: None,
         }
     }
 }
@@ -42,6 +43,38 @@ pub struct DiffOpts {
     pub selected: HashSet<(u32, u32)>,
     current_hunk: usize,
     scroll_to_hunk: Option<usize>,
+    /// Text highlighted by dragging, to copy.
+    text_sel: Option<TextSel>,
+}
+
+/// A drag-selected span of code text. Positions are (row, character column);
+/// `side` is the half in side-by-side view (0 in unified view).
+struct TextSel {
+    title: String,
+    side: usize,
+    anchor: (usize, usize),
+    cursor: (usize, usize),
+    dragging: bool,
+}
+
+impl TextSel {
+    fn ordered(&self) -> ((usize, usize), (usize, usize)) {
+        if self.anchor <= self.cursor { (self.anchor, self.cursor) } else { (self.cursor, self.anchor) }
+    }
+
+    /// The selected character range of a row's text, if any.
+    fn range(&self, title: &str, row: usize, side: usize, len: usize) -> Option<(usize, usize)> {
+        if self.title != title || self.side != side {
+            return None;
+        }
+        let (a, b) = self.ordered();
+        if row < a.0 || row > b.0 {
+            return None;
+        }
+        let start = if row == a.0 { a.1 } else { 0 }.min(len);
+        let end = if row == b.0 { b.1 } else { len }.min(len);
+        (end > start).then_some((start, end))
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -373,6 +406,34 @@ fn body(
         }
         line_ids.push((l.hunk, within.saturating_sub(1)));
     }
+    let split = opts.split;
+    let code_x = |left: f32, side: usize| if split { left + side as f32 * half_w + half_gutter } else { left + text_x };
+    // The diff line shown in a row's half, if it has selectable text.
+    let cell_of = |row: usize, side: usize| -> Option<usize> {
+        let k = if split { rows.get(row)?[side] } else { (row < lines.len() && side == 0).then_some(row) }?;
+        (lines[k].kind != LineKind::Hunk).then_some(k)
+    };
+    let pos_at = |pp: Pos2, side: usize, origin: (f32, f32)| -> (usize, usize) {
+        let row = (((pp.y - origin.1) / row_h).floor().max(0.0) as usize).min(n_rows.saturating_sub(1));
+        let col = ((pp.x - code_x(origin.0, side)) / cw).round().max(0.0) as usize;
+        (row, col)
+    };
+    let selected_text = |t: &TextSel| -> String {
+        let (a, b) = t.ordered();
+        let mut out = Vec::new();
+        for row in a.0..=b.0 {
+            let Some(k) = cell_of(row, t.side) else { continue };
+            let text = &lines[k].text;
+            let len = text.chars().count();
+            let start = if row == a.0 { a.1 } else { 0 }.min(len);
+            let end = if row == b.0 { b.1 } else { len }.min(len);
+            if end >= start {
+                out.push(text.chars().skip(start).take(end - start).collect::<String>());
+            }
+        }
+        out.join("\n")
+    };
+    let text_hi = Color32::from_rgba_unmultiplied(0x4e, 0xa8, 0xde, 110);
     let toggle = |sel: &mut HashSet<(u32, u32)>, idx: usize| {
         if matches!(lines[idx].kind, LineKind::Add | LineKind::Del) && !sel.remove(&line_ids[idx]) {
             sel.insert(line_ids[idx]);
@@ -382,12 +443,17 @@ fn body(
 
     let mut clicked = None;
     let mut discard = None;
+    let mut origin: Option<(f32, f32)> = None;
+    if opts.text_sel.as_ref().is_some_and(|t| t.title != title) {
+        opts.text_sel = None;
+    }
     area.show_rows(ui, row_h, total, |ui, range| {
         ui.spacing_mut().item_spacing.y = 0.0;
         let visible = ui.clip_rect();
         for i in range {
-            let sense = if selectable { Sense::click() } else { Sense::hover() };
-            let (rect, row_resp) = ui.allocate_exact_size(Vec2::new(width, row_h), sense);
+            let (rect, row_resp) = ui.allocate_exact_size(Vec2::new(width, row_h), Sense::click_and_drag());
+            let row_origin = (rect.left(), rect.top() - i as f32 * row_h);
+            origin = Some(row_origin);
             let p = ui.painter_at(rect);
             let cy = rect.center().y;
             if i >= n_rows {
@@ -440,6 +506,31 @@ fn body(
                 continue;
             }
 
+            let side_at = |x: f32| (split && x >= rect.left() + half_w) as usize;
+            if row_resp.drag_started() {
+                if let Some(pp) = ui.input(|inp| inp.pointer.press_origin()) {
+                    let side = side_at(pp.x);
+                    let at = pos_at(pp, side, row_origin);
+                    opts.text_sel = Some(TextSel { title: title.to_owned(), side, anchor: at, cursor: at, dragging: true });
+                }
+            }
+            if row_resp.hovered() {
+                if let Some(pp) = row_resp.hover_pos() {
+                    if pp.x >= code_x(rect.left(), side_at(pp.x)) - 6.0 {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                    }
+                }
+            }
+            if row_resp.clicked() {
+                opts.text_sel = None;
+            }
+            row_resp.context_menu(|ui| {
+                let text = opts.text_sel.as_ref().map(&selected_text).unwrap_or_default();
+                if ui.add_enabled(!text.is_empty(), egui::Button::new("Copy")).clicked() {
+                    ui.ctx().copy_text(text);
+                    ui.close_menu();
+                }
+            });
             if selectable && row_resp.clicked() {
                 let left_side = row_resp
                     .interact_pointer_pos()
@@ -475,6 +566,10 @@ fn body(
                     if is_sel(k) {
                         hp.rect_filled(r, 0.0, selection);
                     }
+                    if let Some((a, b)) = opts.text_sel.as_ref().and_then(|t| t.range(title, i, if left { 0 } else { 1 }, l.text.chars().count())) {
+                        let x = r.left() + half_gutter;
+                        hp.rect_filled(Rect::from_min_max(Pos2::new(x + a as f32 * cw, r.top()), Pos2::new(x + b as f32 * cw, r.bottom())), 0.0, text_hi);
+                    }
                     let n = if left { l.old_no } else { l.new_no };
                     hp.text(Pos2::new(r.left() + 12.0 + num_w, cy), egui::Align2::RIGHT_CENTER, num(n), font.clone(), fg.gamma_multiply(0.8));
                     hp.vline(r.left() + half_gutter - 6.0, r.y_range(), Stroke::new(1.0_f32, line_col));
@@ -494,6 +589,10 @@ fn body(
                 }
                 if is_sel(i) {
                     p.rect_filled(rect, 0.0, selection);
+                }
+                if let Some((a, b)) = opts.text_sel.as_ref().and_then(|t| t.range(title, i, 0, l.text.chars().count())) {
+                    let x = rect.left() + text_x;
+                    p.rect_filled(Rect::from_min_max(Pos2::new(x + a as f32 * cw, rect.top()), Pos2::new(x + b as f32 * cw, rect.bottom())), 0.0, text_hi);
                 }
                 if selectable && matches!(l.kind, LineKind::Add | LineKind::Del) {
                     // Check box showing whether the line is selected for line staging.
@@ -527,7 +626,33 @@ fn body(
                 code(&p, rect, x0 + text_x, i);
             }
         }
+        // Extend the text selection while dragging, scrolling when the pointer leaves the view.
+        if let Some(t) = opts.text_sel.as_mut().filter(|t| t.dragging) {
+            let (down, pos) = ui.input(|inp| (inp.pointer.primary_down(), inp.pointer.latest_pos()));
+            if down {
+                if let (Some(pp), Some(o)) = (pos, origin) {
+                    t.cursor = pos_at(pp, t.side, o);
+                    if pp.y < visible.top() {
+                        ui.scroll_with_delta(Vec2::new(0.0, (visible.top() - pp.y).min(60.0) * 0.5));
+                    } else if pp.y > visible.bottom() {
+                        ui.scroll_with_delta(Vec2::new(0.0, -(pp.y - visible.bottom()).min(60.0) * 0.5));
+                    }
+                }
+                ui.ctx().request_repaint();
+            } else {
+                t.dragging = false;
+            }
+        }
     });
+    // Copy the highlighted text.
+    if let Some(t) = &opts.text_sel {
+        if ui.input(|inp| inp.events.iter().any(|e| matches!(e, egui::Event::Copy))) {
+            let text = selected_text(t);
+            if !text.is_empty() {
+                ui.ctx().copy_text(text);
+            }
+        }
+    }
     (clicked, discard)
 }
 
