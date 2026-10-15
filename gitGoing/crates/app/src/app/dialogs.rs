@@ -44,11 +44,12 @@ impl RepoTab {
         }
     }
 
-    /// A checkout was stopped by uncommitted changes: say so, and offer to stash them.
+    /// A checkout or pull was stopped by uncommitted changes: say so, and offer to stash them.
     fn dialog_stash_offer(&mut self, ctx: &egui::Context) {
         // 0 = nothing, 1 = stash + checkout, 2 = stash + checkout + pop, 3 = cancel
         let mut choice = 0;
         if let Some(o) = &self.stash_offer {
+            let (verb, after) = if matches!(o.retry, Retry::Pull(_)) { ("pull", "pulling") } else { ("check out", "checking out") };
             let amber = Color32::from_rgb(0xf5, 0xa6, 0x23);
             // Dim everything behind the dialog and swallow clicks on it.
             let screen = ctx.screen_rect();
@@ -83,20 +84,20 @@ impl RepoTab {
                     ui.add_space(10.0);
                     ui.label(&o.message);
                     ui.add_space(8.0);
-                    ui.weak(
+                    ui.weak(format!(
                         "Stash saves your changes (including new files), so nothing is lost. \
-                         \"Stash, check out and pop\" also re-applies them on the new branch afterwards; \
+                         \"Stash, {verb} and pop\" also re-applies them after {after}; \
                          if that hits conflicts, the stash is kept under STASHES.",
-                    );
+                    ));
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
-                        let primary = egui::Button::new(egui::RichText::new("Stash, check out and pop").strong().color(Color32::BLACK))
+                        let primary = egui::Button::new(egui::RichText::new(format!("Stash, {verb} and pop")).strong().color(Color32::BLACK))
                             .fill(amber)
                             .min_size(Vec2::new(0.0, 28.0));
                         if ui.add(primary).clicked() {
                             choice = 2;
                         }
-                        if ui.add(egui::Button::new("Stash and check out").min_size(Vec2::new(0.0, 28.0))).clicked() {
+                        if ui.add(egui::Button::new(format!("Stash and {verb}")).min_size(Vec2::new(0.0, 28.0))).clicked() {
                             choice = 1;
                         }
                         if ui.add(egui::Button::new("Cancel").min_size(Vec2::new(0.0, 28.0))).clicked() {
@@ -114,18 +115,29 @@ impl RepoTab {
                 let retry = o.retry;
                 let pop = choice == 2;
                 self.retry = None;
-                let label = if pop { "Stash, check out and pop" } else { "Stash and check out" };
+                let pulling = matches!(retry, Retry::Pull(_));
+                let label = match (pulling, pop) {
+                    (true, true) => "Stash, pull and pop",
+                    (true, false) => "Stash and pull",
+                    (false, true) => "Stash, check out and pop",
+                    (false, false) => "Stash and check out",
+                };
+                let done = if pulling { "Pulled" } else { "Checked out" };
                 self.run_op(ctx, label, move |p| {
                     stash::save(p).map_err(|e| e.message().to_owned())?;
-                    match retry {
-                        Retry::Checkout(n) => branches::checkout(p, &n),
-                        Retry::CheckoutRemote(n) => branches::checkout_remote(p, &n),
-                    }
-                    .map_err(|e| note_blocked(&flag, e).message().to_owned())?;
+                    let r = match retry {
+                        Retry::Checkout(n) => branches::checkout(p, &n).map_err(|e| note_blocked(&flag, e).message().to_owned()),
+                        Retry::CheckoutRemote(n) => {
+                            branches::checkout_remote(p, &n).map_err(|e| note_blocked(&flag, e).message().to_owned())
+                        }
+                        Retry::Pull(mode) => remote::pull_with(p, mode),
+                    };
+                    // The stash is already saved, so say where the changes went.
+                    r.map_err(|e| format!("{e} Your changes are saved in STASHES."))?;
                     if pop {
                         stash::pop(p, 0).map_err(|e| {
                             format!(
-                                "Checked out, but your changes could not be re-applied: {}. They are still saved in STASHES.",
+                                "{done}, but your changes could not be re-applied: {}. They are still saved in STASHES.",
                                 e.message()
                             )
                         })?;

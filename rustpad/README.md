@@ -54,6 +54,41 @@ Requires a recent stable Rust toolchain. No system libraries are needed to build
 Windows or macOS. On Linux, X11 or Wayland is needed at run time; native file dialogs use
 the XDG desktop portal (install `xdg-desktop-portal-gtk` / `-kde` if dialogs do not appear).
 
+## Install
+
+Build a release first (`cargo build --release`), then:
+
+### macOS
+
+```sh
+# Option 1: binary on your PATH (~/.cargo/bin/rustpad)
+cargo install --path .
+
+# Option 2: a double-clickable RustPad.app
+cargo install cargo-bundle
+cargo bundle --release
+cp -R target/release/bundle/osx/RustPad.app /Applications/
+```
+
+If Gatekeeper blocks the unsigned app, right-click it and choose Open, or run
+`xattr -dr com.apple.quarantine /Applications/RustPad.app`.
+
+### Linux
+
+```sh
+cargo install --path .
+install -Dm644 packaging/rustpad.desktop ~/.local/share/applications/rustpad.desktop
+install -Dm644 packaging/rustpad.svg ~/.local/share/icons/hicolor/scalable/apps/rustpad.svg
+```
+
+### Windows
+
+```sh
+cargo install --path .   # installs to %USERPROFILE%\.cargo\bin\rustpad.exe
+```
+
+Or copy `target\release\rustpad.exe` anywhere on your `PATH`.
+
 Configuration lives in the platform config directory (`~/.config/rustpad` on Linux,
 `~/Library/Application Support/rustpad` on macOS, `%APPDATA%\rustpad` on Windows):
 `config.json`, `shortcuts.json`, `session.json`, `backup/` and `themes/`.

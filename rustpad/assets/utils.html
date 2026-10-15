@@ -63,6 +63,11 @@
   .shades div { flex:1; height:34px; border-radius:6px; border:1px solid var(--border); cursor:pointer; }
   input[type=text].wide { flex:1; min-width:200px; font-family:ui-monospace,Menlo,Consolas,monospace; }
   input[type=color] { width:44px; height:34px; padding:0; border:1px solid var(--border); border-radius:6px; background:none; cursor:pointer; }
+  .explain { font-size:19px; font-weight:600; line-height:1.4; min-height:27px; margin-bottom:6px; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fill, minmax(130px, 1fr)); gap:10px; margin-top:12px; }
+  .stat { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:8px 12px; }
+  .stat b { display:block; font-size:19px; }
+  .stat span { color:var(--muted); font-size:13px; }
 </style>
 </head>
 <body>
@@ -78,6 +83,8 @@
     <button role="tab" data-tab="rx" aria-selected="false">Regex</button>
     <button role="tab" data-tab="color" aria-selected="false">Colour</button>
     <button role="tab" data-tab="fake" aria-selected="false">Fake data</button>
+    <button role="tab" data-tab="cron" aria-selected="false">Cron</button>
+    <button role="tab" data-tab="text" aria-selected="false">Text</button>
   </nav>
 
   <!-- ================= TAB 1: GENERATORS ================= -->
@@ -361,6 +368,90 @@
         <button class="secondary" data-copy="lrOut">Copy</button>
       </div>
       <textarea id="lrOut" readonly spellcheck="false" style="min-height:200px"></textarea>
+    </section>
+  </div>
+
+  <!-- ================= TAB 10: CRON ================= -->
+  <div class="panel" id="tab-cron" role="tabpanel" hidden>
+    <section>
+      <div class="row">
+        <input type="text" class="wide" id="cronIn" value="*/15 9-17 * * 1-5" placeholder="e.g. 0 9 * * 1-5   or   @daily" spellcheck="false" autocomplete="off">
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="cronSec"> Leading seconds field (6 fields)</label>
+        <label>Time zone <select id="cronTz"><option value="local">Local</option><option value="utc">UTC</option></select></label>
+        <label>Show next <input type="number" id="cronN" min="1" max="50" value="10"> runs</label>
+      </div>
+      <div class="row" id="cronPresets"></div>
+      <div class="hint">Supports <code>*</code> <code>,</code> <code>-</code> <code>/</code>, month and day names, and <code>@hourly</code> / <code>@daily</code> / <code>@weekly</code> / <code>@monthly</code> / <code>@yearly</code>. Quartz extras (<code>L</code> <code>W</code> <code>#</code> <code>?</code>) are not supported.</div>
+    </section>
+    <section>
+      <div class="explain" id="cronText"></div>
+      <div class="row">
+        <button class="secondary" id="cronCopy" hidden>Copy description</button>
+        <span class="status" id="cronStatus"></span>
+      </div>
+      <table class="kv"><thead><tr><th>Field</th><th>Value</th><th>Runs at</th></tr></thead><tbody id="cronFields"></tbody></table>
+    </section>
+    <section>
+      <h2>Next runs</h2>
+      <div class="hint" id="cronTzNote" style="margin-bottom:8px"></div>
+      <table class="kv"><tbody id="cronList"></tbody></table>
+    </section>
+  </div>
+
+  <!-- ================= TAB 11: TEXT ================= -->
+  <div class="panel" id="tab-text" role="tabpanel" hidden>
+    <section>
+      <h2>Input</h2>
+      <textarea id="txIn" spellcheck="false" style="min-height:200px" placeholder="Paste text here — one item per line works best for the line tools"></textarea>
+      <div class="stats" id="txStats"></div>
+    </section>
+    <section>
+      <h2>Line tools</h2>
+      <div class="row">
+        <label><input type="checkbox" id="txIgnoreCase"> Ignore case (sort, duplicates, count)</label>
+        <label>Separator <input type="text" id="txSep" value=", " style="width:90px" spellcheck="false"></label>
+        <span class="hint">Use <code>\n</code> or <code>\t</code> for newline / tab.</span>
+      </div>
+      <div class="row">
+        <button class="secondary" data-lineop="sortAsc">Sort A→Z</button>
+        <button class="secondary" data-lineop="sortDesc">Sort Z→A</button>
+        <button class="secondary" data-lineop="sortNat">Sort natural (2 &lt; 10)</button>
+        <button class="secondary" data-lineop="sortLen">Sort by length</button>
+        <button class="secondary" data-lineop="reverse">Reverse</button>
+        <button class="secondary" data-lineop="shuffle">Shuffle</button>
+      </div>
+      <div class="row">
+        <button class="secondary" data-lineop="dedupe">Remove duplicates</button>
+        <button class="secondary" data-lineop="count">Count occurrences</button>
+        <button class="secondary" data-lineop="trim">Trim lines</button>
+        <button class="secondary" data-lineop="noEmpty">Remove empty lines</button>
+        <button class="secondary" data-lineop="join">Join with separator</button>
+        <button class="secondary" data-lineop="split">Split on separator</button>
+      </div>
+    </section>
+    <section>
+      <h2>Find &amp; replace</h2>
+      <div class="row">
+        <input type="text" class="wide" id="txFind" placeholder="Find" spellcheck="false">
+        <input type="text" class="wide" id="txRepl" placeholder="Replace with" spellcheck="false">
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="txRx"> Regex</label>
+        <label><input type="checkbox" id="txMatchCase"> Match case</label>
+        <button id="txReplace">Replace all</button>
+        <span class="hint">In regex mode <code>^</code>/<code>$</code> match per line and the replacement can use <code>$1</code> or <code>$&lt;name&gt;</code>.</span>
+      </div>
+    </section>
+    <section>
+      <h2>Result</h2>
+      <div class="row">
+        <button class="secondary" data-copy="txOut">Copy result</button>
+        <button class="secondary" id="txMove">Result → input</button>
+        <span class="status" id="txStatus"></span>
+      </div>
+      <textarea id="txOut" readonly spellcheck="false" style="min-height:200px"></textarea>
     </section>
   </div>
 </main>
@@ -956,7 +1047,261 @@ function genLorem() {
 }
 $('lrGo').onclick = genLorem;
 ['lrCount', 'lrUnit', 'lrStart'].forEach(id => $(id).onchange = genLorem);
-genFake(); genLorem(); renderColor();
+/* =====================================================
+   TAB 10: cron
+   ===================================================== */
+const MONTH_NAMES = 'January February March April May June July August September October November December'.split(' ');
+const DAY_NAMES = 'Sunday Monday Tuesday Wednesday Thursday Friday Saturday'.split(' ');
+const CRON_FIELDS = [
+  { key: 'second', label: 'Second', min: 0, max: 59, top: 59, size: 60 },
+  { key: 'minute', label: 'Minute', min: 0, max: 59, top: 59, size: 60 },
+  { key: 'hour', label: 'Hour', min: 0, max: 23, top: 23, size: 24 },
+  { key: 'dom', label: 'Day of month', min: 1, max: 31, top: 31, size: 31 },
+  { key: 'month', label: 'Month', min: 1, max: 12, top: 12, size: 12, names: MONTH_NAMES.map(n => n.slice(0, 3).toUpperCase()), nameBase: 1 },
+  { key: 'dow', label: 'Day of week', min: 0, max: 7, top: 6, size: 7, names: DAY_NAMES.map(n => n.slice(0, 3).toUpperCase()), nameBase: 0 }   // 0 and 7 are both Sunday
+];
+const CRON_MACROS = { '@yearly': '0 0 1 1 *', '@annually': '0 0 1 1 *', '@monthly': '0 0 1 * *', '@weekly': '0 0 * * 0', '@daily': '0 0 * * *', '@midnight': '0 0 * * *', '@hourly': '0 * * * *' };
+const CRON_PRESETS = [['Every minute', '* * * * *'], ['Every 5 min', '*/5 * * * *'], ['Hourly', '0 * * * *'], ['Daily 09:00', '0 9 * * *'], ['Weekdays 09:00', '0 9 * * 1-5'], ['Monthly', '0 0 1 * *'], ['Yearly', '0 0 1 1 *']];
+
+function parseCronField(text, f) {
+  const bad = msg => new Error(`${f.label}: ${msg}`);
+  const num = s => {
+    let v;
+    if (/^\d+$/.test(s)) v = +s;
+    else { const i = f.names ? f.names.indexOf(s.toUpperCase()) : -1; if (i < 0) throw bad(`“${s}” is not a valid value`); v = i + f.nameBase; }
+    if (v < f.min || v > f.max) throw bad(`${s} is out of range (${f.min}–${f.max})`);
+    return v;
+  };
+  const set = new Set();
+  for (const part of text.split(',')) {
+    const [range, step, extra] = part.split('/');
+    if (!range || extra !== undefined || step === '') throw bad(`“${part}” is not valid`);
+    if (step !== undefined && !/^[1-9]\d*$/.test(step)) throw bad(`step “${step}” must be a positive number`);
+    let lo, hi;
+    if (range === '*') [lo, hi] = [f.min, f.top];
+    else if (range.includes('-')) {
+      const ends = range.split('-');
+      if (ends.length !== 2) throw bad(`“${range}” is not a valid range`);
+      [lo, hi] = ends.map(num);
+      if (lo > hi) throw bad(`range ${range} runs backwards`);
+    } else { lo = num(range); hi = step === undefined ? lo : f.top; }
+    for (let v = lo; v <= hi; v += step === undefined ? 1 : +step) set.add(f.key === 'dow' && v === 7 ? 0 : v);
+  }
+  if (!set.size) throw bad(`“${text}” matches nothing`);
+  return { set: [...set].sort((a, b) => a - b), text, star: text.startsWith('*') };   // star: Vixie cron treats a leading * as "unrestricted" for the day-OR rule
+}
+function parseCron(src, withSec) {
+  src = src.trim().replace(/\s+/g, ' ');
+  if (!src) return null;
+  let parts;
+  if (src[0] === '@') {
+    const m = CRON_MACROS[src.toLowerCase()];
+    if (!m) throw new Error(src.toLowerCase() === '@reboot' ? '@reboot runs once at startup — there is no schedule to explain.' : `Unknown macro ${src}.`);
+    parts = (withSec ? '0 ' + m : m).split(' ');
+  } else parts = src.split(' ');
+  const fields = CRON_FIELDS.slice(withSec ? 0 : 1);
+  if (parts.length !== fields.length)
+    throw new Error(`Expected ${fields.length} fields (${fields.map(f => f.label.toLowerCase()).join(', ')}) but found ${parts.length}.` + (parts.length === 6 && !withSec ? ' Tick “Leading seconds field” for 6-field expressions.' : ''));
+  const c = { second: { set: [0], text: '0', star: false } };
+  fields.forEach((f, i) => c[f.key] = parseCronField(parts[i], f));
+  return c;
+}
+
+// ----- plain-English description -----
+const isAll = (c, k) => c[k].set.length === CRON_FIELDS.find(f => f.key === k).size;
+const pad2 = n => String(n).padStart(2, '0');
+const andList = a => a.length < 2 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
+// [1,2,3,5] -> ["1 through 3", "5"]; runs shorter than three stay individual
+function collapseRuns(vals, fmt = String) {
+  const out = []; let i = 0;
+  while (i < vals.length) {
+    let j = i; while (j + 1 < vals.length && vals[j + 1] === vals[j] + 1) j++;
+    if (j - i >= 2) out.push(`${fmt(vals[i])} through ${fmt(vals[j])}`);
+    else for (let k = i; k <= j; k++) out.push(fmt(vals[k]));
+    i = j + 1;
+  }
+  return out;
+}
+function cronStep(text, unit) {
+  const m = text.match(/^(\*|\d+|\d+-\d+)\/(\d+)$/); if (!m) return null;
+  const n = +m[2], base = m[1];
+  let s = n === 1 ? `every ${unit}` : `every ${n} ${unit}s`;
+  if (base.includes('-')) s += ` from ${base.replace('-', ' through ')}`;
+  else if (base !== '*') s += ` from ${base}`;
+  return s;
+}
+function cronTime(c, withSec) {
+  const { second: s, minute: m, hour: h } = c;
+  const secOn = withSec && !(s.set.length === 1 && s.set[0] === 0);
+  const hAll = isAll(c, 'hour'), mAll = isAll(c, 'minute'), sAll = isAll(c, 'second');
+  if (!hAll && !mAll && !sAll && h.set.length * m.set.length * s.set.length <= 6) {   // few enough to list as clock times
+    const times = [];
+    for (const hh of h.set) for (const mm of m.set) for (const ss of s.set) times.push(`${pad2(hh)}:${pad2(mm)}` + (secOn ? ':' + pad2(ss) : ''));
+    return { text: 'At ' + andList(times), exact: true };
+  }
+  const part = (x, k, unit) => isAll(c, k) ? `every ${unit}` : (cronStep(x.text, unit) || `at ${unit}${x.set.length > 1 ? 's' : ''} ${andList(collapseRuns(x.set))}`);
+  let rest;
+  if (hAll) {
+    if (mAll) rest = 'every minute';
+    else if (cronStep(m.text, 'minute')) rest = cronStep(m.text, 'minute');
+    else if (m.set.length === 1 && m.set[0] === 0) rest = 'every hour, on the hour';
+    else rest = part(m, 'minute', 'minute') + ' past every hour';
+  } else {
+    const mp = part(m, 'minute', 'minute');
+    const contiguous = !h.text.includes('/') && h.set[h.set.length - 1] - h.set[0] + 1 === h.set.length;
+    if (contiguous) rest = `${mp} between ${pad2(h.set[0])}:00 and ${pad2(h.set[h.set.length - 1])}:59`;
+    else if (cronStep(h.text, 'hour')) rest = `${mp}, ${cronStep(h.text, 'hour')}`;
+    else rest = `${mp} during ${h.set.length > 1 ? 'hours' : 'hour'} ${andList(collapseRuns(h.set))}`;
+  }
+  let text = rest;
+  if (secOn) {
+    const sp = part(s, 'second', 'second');
+    text = hAll && mAll ? (sp.startsWith('at') ? sp + ' of every minute' : sp) : `${sp}, ${rest}`;
+  }
+  return { text: text[0].toUpperCase() + text.slice(1), exact: false };
+}
+function cronDate(c) {
+  const { dom, dow } = c, domAll = isAll(c, 'dom'), dowAll = isAll(c, 'dow');
+  const everyDay = !dom.star && !dow.star && (domAll || dowAll);   // OR rule + one side matching everything
+  const domP = domAll ? '' : cronStep(dom.text, 'day') ? cronStep(dom.text, 'day') + ' of the month' : `on day ${andList(collapseRuns(dom.set))} of the month`;
+  const dowP = dowAll ? '' : 'on ' + andList(collapseRuns(dow.set, v => DAY_NAMES[v]));
+  const days = everyDay ? '' : domP && dowP ? domP + (dom.star || dow.star ? ' and ' : ', or ') + dowP : domP || dowP;
+  const months = isAll(c, 'month') ? '' : 'in ' + andList(collapseRuns(c.month.set, v => MONTH_NAMES[v - 1]));
+  return [days, months].filter(Boolean);
+}
+function explainCron(c, withSec) {
+  const t = cronTime(c, withSec), d = cronDate(c);
+  return t.text + (d.length ? ', ' + d.join(', ') : t.exact ? ' every day' : '');
+}
+
+// ----- next runs: walk day by day, then expand hour × minute × second inside matching days -----
+function cronDayOk(c, D, W) {
+  const a = c.dom.set.includes(D), b = c.dow.set.includes(W);
+  return c.dom.star || c.dow.star ? a && b : a || b;   // both restricted -> either may match
+}
+function cronNextRuns(c, utc, count) {
+  const now = new Date(), nowMs = now.getTime(), out = [];
+  const [y0, m0, d0] = utc ? [now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()] : [now.getFullYear(), now.getMonth(), now.getDate()];
+  for (let i = 0; i < 366 * 9 && out.length < count; i++) {   // 9 years reaches a 29 Feb schedule across a skipped leap year
+    const day = utc ? new Date(Date.UTC(y0, m0, d0 + i)) : new Date(y0, m0, d0 + i);
+    const [Y, M, D, W] = utc ? [day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), day.getUTCDay()] : [day.getFullYear(), day.getMonth() + 1, day.getDate(), day.getDay()];
+    if (!c.month.set.includes(M) || !cronDayOk(c, D, W)) continue;
+    for (const h of c.hour.set) for (const mi of c.minute.set) for (const s of c.second.set) {
+      if (out.length >= count) break;
+      const t = utc ? Date.UTC(Y, M - 1, D, h, mi, s) : new Date(Y, M - 1, D, h, mi, s).getTime();
+      if (t <= nowMs) continue;
+      if (!utc) { const x = new Date(t); if (x.getHours() !== h || x.getMinutes() !== mi) continue; }   // wall-clock time skipped by a DST jump
+      out.push(t);
+    }
+  }
+  return out;
+}
+
+function renderCron() {
+  const withSec = $('cronSec').checked, utc = $('cronTz').value === 'utc';
+  const fl = $('cronFields'), rl = $('cronList');
+  fl.textContent = ''; rl.textContent = ''; $('cronText').textContent = ''; $('cronCopy').hidden = true;
+  let c;
+  try { c = parseCron($('cronIn').value, withSec); } catch (e) { return setStatus('cronStatus', e.message, 'err'); }
+  if (!c) return setStatus('cronStatus');
+  $('cronText').textContent = explainCron(c, withSec);
+  $('cronCopy').hidden = false;
+  const addRow = (tb, cells, mono) => { const tr = tb.insertRow(); cells.forEach((v, i) => { const td = tr.insertCell(); td.textContent = v; if (mono && mono[i]) td.className = 'mono'; }); };
+  for (const f of CRON_FIELDS.slice(withSec ? 0 : 1)) {
+    const fmt = f.key === 'month' ? v => MONTH_NAMES[v - 1].slice(0, 3) : f.key === 'dow' ? v => DAY_NAMES[v].slice(0, 3) : String;
+    const vals = c[f.key].set.map(fmt);
+    addRow(fl, [f.label, c[f.key].text, vals.length > 24 ? vals.slice(0, 24).join(', ') + ` … (${vals.length} values)` : vals.join(', ')], [0, 1, 1]);
+  }
+  setStatus('cronStatus', !c.dom.star && !c.dow.star && !isAll(c, 'dom') && !isAll(c, 'dow') ? 'Day-of-month and day-of-week are both set, so cron runs when either one matches.' : '');
+  $('cronTzNote').textContent = utc ? 'Times shown in UTC (servers commonly run cron in UTC).' : 'Times shown in your local time zone (' + Intl.DateTimeFormat().resolvedOptions().timeZone + ').';
+  const n = Math.min(50, Math.max(1, +$('cronN').value || 10));
+  const runs = cronNextRuns(c, utc, n);
+  if (!runs.length) return setStatus('cronStatus', 'No matching date in the next 9 years — this schedule may never run (e.g. 30 February).', 'err');
+  const fmt = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: withSec ? '2-digit' : undefined, hourCycle: 'h23', timeZone: utc ? 'UTC' : undefined });
+  runs.forEach((t, i) => addRow(rl, [i + 1, fmt.format(t), relTime(t)], [0, 1, 0]));
+}
+$('cronIn').oninput = $('cronSec').onchange = $('cronTz').onchange = $('cronN').oninput = renderCron;
+$('cronCopy').onclick = e => copyText($('cronText').textContent, e.target);
+for (const [label, expr] of CRON_PRESETS) {
+  const b = document.createElement('button'); b.className = 'secondary'; b.textContent = label; b.title = expr;
+  b.onclick = () => { $('cronIn').value = expr; $('cronSec').checked = false; renderCron(); };
+  $('cronPresets').append(b);
+}
+
+/* =====================================================
+   TAB 11: text stats, line tools, find & replace
+   ===================================================== */
+const segmenter = Intl.Segmenter ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+const countChars = t => segmenter && t.length < 1e6 ? [...segmenter.segment(t)].length : [...t].length;   // graphemes, so an emoji counts once
+const textLines = t => t === '' ? [] : t.replace(/\r?\n$/, '').split(/\r?\n/);
+function renderStats() {
+  const t = $('txIn').value, lines = textLines(t), words = (t.match(/\S+/g) || []).length;
+  const secs = Math.round(words / 230 * 60);
+  const stats = [
+    ['Characters', countChars(t)], ['Without whitespace', countChars(t.replace(/\s/g, ''))], ['Words', words],
+    ['Lines', lines.length], ['Non-empty lines', lines.filter(l => l.trim()).length],
+    ['Paragraphs', t.split(/\n\s*\n/).filter(p => p.trim()).length],
+    ['Sentences (approx.)', t.split(/[.!?]+(?:\s|$)/).filter(s => s.trim()).length],
+    ['UTF-8 bytes', new TextEncoder().encode(t).length],
+    ['Reading time', secs < 60 ? secs + ' sec' : Math.round(secs / 60) + ' min']
+  ];
+  const box = $('txStats'); box.textContent = '';
+  for (const [k, v] of stats) {
+    const d = document.createElement('div'); d.className = 'stat';
+    const b = document.createElement('b'), s = document.createElement('span');
+    b.textContent = typeof v === 'number' ? v.toLocaleString() : v; s.textContent = k;
+    d.append(b, s); box.append(d);
+  }
+}
+$('txIn').oninput = renderStats;
+
+const unescSep = s => s.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+const LINE_OPS = {
+  sortAsc: (L, o) => [...L].sort(o.cmp),
+  sortDesc: (L, o) => [...L].sort((a, b) => o.cmp(b, a)),
+  sortNat: (L, o) => [...L].sort((a, b) => o.cmp(a, b, true)),
+  sortLen: L => [...L].sort((a, b) => a.length - b.length),
+  reverse: L => [...L].reverse(),
+  shuffle: L => { const a = [...L]; for (let i = a.length - 1; i > 0; i--) { const j = randInt(i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; },
+  dedupe: (L, o) => { const seen = new Set(); return L.filter(l => { const k = o.key(l); if (seen.has(k)) return false; seen.add(k); return true; }); },
+  count: (L, o) => {
+    const m = new Map();
+    for (const l of L) { const k = o.key(l), e = m.get(k); if (e) e.n++; else m.set(k, { n: 1, line: l }); }
+    return [...m.values()].sort((a, b) => b.n - a.n).map(e => e.n + '\t' + e.line);   // stable: ties keep first-seen order
+  },
+  trim: L => L.map(l => l.trim()),
+  noEmpty: L => L.filter(l => l.trim() !== ''),
+  join: (L, o) => [L.join(o.sep)],
+  split: (L, o) => L.join('\n').split(o.sep)
+};
+document.querySelectorAll('[data-lineop]').forEach(b => b.onclick = () => {
+  const t = $('txIn').value;
+  if (!t) return setStatus('txStatus', 'Enter some text first.', 'err');
+  const ic = $('txIgnoreCase').checked, sep = unescSep($('txSep').value);
+  if (b.dataset.lineop === 'split' && !sep) return setStatus('txStatus', 'Separator is empty.', 'err');
+  const o = {
+    sep,
+    key: l => ic ? l.toLowerCase() : l,
+    cmp: (a, b, numeric) => a.localeCompare(b, undefined, { numeric: !!numeric, sensitivity: ic ? 'accent' : 'variant' })
+  };
+  const before = textLines(t), after = LINE_OPS[b.dataset.lineop](before, o);
+  $('txOut').value = after.join('\n');
+  setStatus('txStatus', `${before.length.toLocaleString()} → ${after.length.toLocaleString()} line${after.length === 1 ? '' : 's'}`, 'ok');
+});
+
+$('txReplace').onclick = () => {
+  const t = $('txIn').value, find = $('txFind').value, rx = $('txRx').checked;
+  if (!find) return setStatus('txStatus', 'Enter something to find.', 'err');
+  let re;
+  try { re = new RegExp(rx ? find : find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g' + (rx ? 'm' : '') + ($('txMatchCase').checked ? '' : 'i')); }
+  catch (e) { return setStatus('txStatus', 'Invalid regex: ' + e.message, 'err'); }
+  const n = [...t.matchAll(re)].length, repl = $('txRepl').value;
+  $('txOut').value = rx ? t.replace(re, repl) : t.replace(re, () => repl);   // plain mode: replacement is literal, no $& expansion
+  setStatus('txStatus', n ? `${n.toLocaleString()} replacement${n === 1 ? '' : 's'}` : 'No matches.', n ? 'ok' : '');
+};
+$('txMove').onclick = () => { if ($('txOut').value) { $('txIn').value = $('txOut').value; $('txOut').value = ''; setStatus('txStatus'); renderStats(); } };
+
+genFake(); genLorem(); renderColor(); renderCron(); renderStats();
 </script>
 </body>
 </html>

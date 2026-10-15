@@ -20,7 +20,80 @@ expected to work (all dependencies are cross-platform) but have not been run yet
   lines in any order, editable result
 - Tabs for several repositories, clone and init, settings, a console showing the git commands used
 
-## Build and run
+## Build and install
+
+You need a recent stable [Rust toolchain](https://rustup.rs) (install it with `rustup`) and `git` on
+your PATH. libgit2 is vendored and compiled from source, so a C compiler is needed as well. The
+result is a single self-contained executable, `target/release/gitgoing`.
+
+Get the code and build it the same way on every OS:
+
+```
+git clone <this repository> gitgoing
+cd gitgoing
+cargo build --release -p gitgoing
+```
+
+Then follow the steps for your system. Only macOS has been tested so far; the Linux and
+Windows steps are what the dependencies require but have not been run yet.
+
+### macOS
+
+```
+xcode-select --install     # C compiler and git, if you don't have them yet
+./mac_bundle.sh --install  # builds target/macos/gitgoing.app and copies it into /Applications
+```
+
+After that gitgoing is in Launchpad and Spotlight, with its icon. Without `--install` the script only
+builds `target/macos/gitgoing.app`; drag it into Applications yourself. `--no-build` reuses an existing
+release build. To remove the app, delete it from Applications.
+
+The bundle is signed ad hoc, which is enough to run it on the Mac that built it. If you copy it to another
+Mac, Gatekeeper will block it at first: right-click the app and choose Open once.
+
+If you only want the command-line program, build as above and
+`sudo install -m 755 target/release/gitgoing /usr/local/bin/gitgoing`, then run `gitgoing /path/to/repo`.
+
+### Linux
+
+Install a C toolchain, `pkg-config` and git, plus the usual windowing libraries.
+
+```
+# Debian / Ubuntu
+sudo apt install build-essential pkg-config git libgl1 libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgtk-3-dev
+# Fedora
+sudo dnf install gcc make pkgconf-pkg-config git mesa-libGL-devel libxkbcommon-devel wayland-devel libX11-devel libXcursor-devel libXrandr-devel libXi-devel gtk3-devel
+# Arch
+sudo pacman -S --needed base-devel git mesa libxkbcommon wayland libx11 libxcursor libxrandr libxi gtk3
+```
+
+(`gtk3` is used by the file dialogs.) Then build, and install by either of:
+
+```
+sudo install -m 755 target/release/gitgoing /usr/local/bin/gitgoing   # any distro
+./deb_build.sh && sudo dpkg -i target/deb/gitgoing_*.deb              # Debian / Ubuntu package
+```
+
+`deb_build.sh` also installs the icon and a desktop entry, so the app shows up in your launcher.
+`./deb_build.sh --no-build` reuses an existing release build. To remove it: `sudo apt remove gitgoing`.
+
+### Windows
+
+1. Install [Git for Windows](https://git-scm.com/download/win) and make sure `git` works from a terminal.
+2. Install [Rustup](https://rustup.rs) and, when asked, the **Visual Studio C++ Build Tools**
+   (the "Desktop development with C++" workload). Use the default `x86_64-pc-windows-msvc` toolchain.
+3. In PowerShell or the "x64 Native Tools" prompt, from the project folder:
+
+```
+cargo build --release -p gitgoing
+```
+
+The program is `target\release\gitgoing.exe`. Copy it anywhere you like (for example
+`C:\Tools\`) and add that folder to your PATH, or create a shortcut to it. Passwords and passphrases
+are requested through the app's own prompt window; if that doesn't work on your setup, use a
+credential manager such as Git Credential Manager (included with Git for Windows).
+
+### Run and test
 
 ```
 cargo run --release -- /path/to/repo          # or run it without a path and use the + menu

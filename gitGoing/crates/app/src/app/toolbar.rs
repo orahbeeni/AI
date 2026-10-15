@@ -74,7 +74,7 @@ impl RepoTab {
                     out.remote = Some(("Fetch", Box::new(remote::fetch)));
                 }
                 if icons::tool_button(ui, "Pull", Icon::Pull, can).on_hover_text(pull_mode.label()).clicked() {
-                    out.remote = Some(("Pull", Box::new(move |p| remote::pull_with(p, pull_mode))));
+                    out.pull = Some(pull_mode);
                 }
                 // Drop-down next to Pull to choose how to integrate for this one pull.
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -84,7 +84,7 @@ impl RepoTab {
                     |ui| {
                         for mode in PullMode::ALL {
                             if ui.add_enabled(can, egui::Button::new(mode.label())).clicked() {
-                                out.remote = Some(("Pull", Box::new(move |p| remote::pull_with(p, mode))));
+                                out.pull = Some(mode);
                                 ui.close_menu();
                             }
                         }

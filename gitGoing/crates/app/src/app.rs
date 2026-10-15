@@ -209,9 +209,10 @@ struct SquashDlg {
 enum Retry {
     Checkout(String),
     CheckoutRemote(String),
+    Pull(PullMode),
 }
 
-/// Offered when a checkout was stopped by uncommitted changes.
+/// Offered when a checkout or pull was stopped by uncommitted changes.
 struct StashOffer {
     message: String,
     retry: Retry,
@@ -309,6 +310,8 @@ enum Pending {
 struct ToolbarOut {
     open: Option<PathBuf>,
     remote: Option<RemoteOp>,
+    /// Start a pull with this mode.
+    pull: Option<PullMode>,
     stash: Option<StashOp>,
     undo: bool,
     redo: bool,
@@ -565,6 +568,25 @@ impl RepoTab {
         }));
     }
 
+    /// Pull; if uncommitted changes block it, offer to stash them first.
+    fn start_pull(&mut self, ctx: &egui::Context, mode: PullMode) {
+        if self.op_rx.is_some() {
+            self.notice = Some((format!("Wait for '{}' to finish first.", self.op_label), true));
+            return;
+        }
+        self.retry = Some(Retry::Pull(mode));
+        self.blocked.store(false, Ordering::Relaxed);
+        let flag = self.blocked.clone();
+        self.run_op(ctx, "Pull", move |p| {
+            remote::pull_with(p, mode).map_err(|e| {
+                if remote::blocked_by_local_changes(&e) {
+                    flag.store(true, Ordering::Relaxed);
+                }
+                e
+            })
+        });
+    }
+
     /// Open the force-push confirmation for the current branch.
     fn open_force_push(&mut self) {
         let info = self.repo.as_ref().and_then(|l| l.info.as_ref());
@@ -817,6 +839,9 @@ impl RepoTab {
         let (to_open, mut stash_op) = (tb.open, tb.stash);
         if let Some((label, f)) = tb.remote {
             self.run_op(ctx, label, f);
+        }
+        if let Some(mode) = tb.pull {
+            self.start_pull(ctx, mode);
         }
         if tb.force_push {
             self.open_force_push();

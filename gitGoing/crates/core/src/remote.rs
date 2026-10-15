@@ -57,6 +57,14 @@ impl PullMode {
     }
 }
 
+/// Did a pull fail only because uncommitted changes are in the way?
+pub fn blocked_by_local_changes(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    m.contains("commit or stash your changes")
+        || m.contains("would be overwritten by merge")
+        || m.contains("please commit your changes or stash them")
+}
+
 pub fn pull_with(repo_path: &Path, mode: PullMode) -> Result<(), String> {
     match mode {
         PullMode::Merge => pull(repo_path),
@@ -199,6 +207,34 @@ mod tests {
 
     fn gitcmd_run(path: &Path, args: &[&str]) {
         crate::gitcmd::run(Some(path), args).unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+    }
+
+    #[test]
+    fn dirty_tree_pull_is_recognised_as_blocked() {
+        if crate::gitcmd::run(None, &["--version"]).is_err() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let bare = tmp.path().join("origin.git");
+        Repository::init_bare(&bare).unwrap();
+        let a_path = tmp.path().join("a");
+        let a = Repository::init(&a_path).unwrap();
+        a.remote("origin", bare.to_str().unwrap()).unwrap();
+        commit(&a, "one");
+        push(&a_path).unwrap();
+        let b_path = tmp.path().join("b");
+        Repository::clone(bare.to_str().unwrap(), &b_path).unwrap();
+        commit(&a, "two");
+        std::fs::write(a_path.join("one"), "changed upstream").unwrap();
+        gitcmd_run(&a_path, &["commit", "-qam", "edit one"]);
+        push(&a_path).unwrap();
+
+        std::fs::write(b_path.join("one"), "local edit").unwrap();
+        for mode in [PullMode::Merge, PullMode::FastForwardOnly] {
+            let e = pull_with(&b_path, mode).unwrap_err();
+            assert!(blocked_by_local_changes(&e), "{mode:?}: {e}");
+        }
+        assert!(!blocked_by_local_changes("Pull stopped: 2 conflicted file(s)."));
     }
 
     #[test]
