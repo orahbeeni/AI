@@ -3,6 +3,7 @@
 use crate::diffview::{self, DiffOpts};
 use crate::filemenu::{self, FileRequest};
 use crate::filerows;
+use crate::icons;
 use crate::filetree::{self, ViewMode};
 use crate::timefmt;
 use eframe::egui::{self, Color32, Pos2, RichText, Sense};
@@ -144,21 +145,28 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, d: &mut Detail) -> bool {
         Some(Ok(c)) => {
             ui.horizontal(|ui| {
                 hash_link(ui, &short(c.id), &c.id.to_string());
-                if ui.small_button("Close").clicked() {
-                    close = true;
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if icons::icon_button(ui, icons::Icon::Close, false, "Close", true).clicked() {
+                        close = true;
+                    }
+                });
             });
-            ui.strong(format!("{} <{}>", c.author, c.email));
-            ui.weak(timefmt::absolute(c.time, c.offset_minutes));
-            if !c.parents.is_empty() {
-                ui.horizontal_wrapped(|ui| {
-                    ui.weak("parents:");
+            ui.add_space(2.0);
+            ui.label(RichText::new(&c.author).strong());
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.weak(&c.email);
+                ui.weak("·");
+                ui.weak(timefmt::absolute(c.time, c.offset_minutes));
+                if !c.parents.is_empty() {
+                    ui.weak("·");
+                    ui.weak(if c.parents.len() == 1 { "parent" } else { "parents" });
                     for p in &c.parents {
                         hash_link(ui, &short(*p), &p.to_string());
                     }
-                });
-            }
-            ui.add_space(4.0);
+                }
+            });
+            ui.add_space(8.0);
             message_with_hashes(ui, &c.message);
             ui.separator();
             filerows::section_header(ui, "Changed files", c.files.len(), None, None, None);
