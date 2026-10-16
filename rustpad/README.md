@@ -56,30 +56,44 @@ the XDG desktop portal (install `xdg-desktop-portal-gtk` / `-kde` if dialogs do 
 
 ## Install
 
-Build a release first (`cargo build --release`), then:
+Build and install in one step with the scripts in the project folder.
 
 ### macOS
 
 ```sh
-# Option 1: binary on your PATH (~/.cargo/bin/rustpad)
-cargo install --path .
-
-# Option 2: a double-clickable RustPad.app
-cargo install cargo-bundle
-cargo bundle --release
-cp -R target/release/bundle/osx/RustPad.app /Applications/
+./mac_bundle.sh --install   # builds target/macos/RustPad.app and copies it into /Applications
 ```
 
-If Gatekeeper blocks the unsigned app, right-click it and choose Open, or run
+RustPad then shows up in Launchpad and Spotlight with its icon. Without `--install` the script only builds
+`target/macos/RustPad.app`; drag it into Applications yourself. `--no-build` reuses an existing release
+build. To remove the app, delete it from Applications.
+
+The bundle is signed ad hoc, which is enough to run it on the Mac that built it. If you copy it to another
+Mac, Gatekeeper will block it at first: right-click the app and choose Open, or run
 `xattr -dr com.apple.quarantine /Applications/RustPad.app`.
+
+For just the command-line program: `cargo install --path .` (installs `~/.cargo/bin/rustpad`).
 
 ### Linux
 
+Building needs a C toolchain and the GTK / WebKitGTK development files (Debian / Ubuntu shown):
+
 ```sh
-cargo install --path .
-install -Dm644 packaging/rustpad.desktop ~/.local/share/applications/rustpad.desktop
-install -Dm644 packaging/rustpad.svg ~/.local/share/icons/hicolor/scalable/apps/rustpad.svg
+sudo apt install build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
 ```
+
+Then either build a Debian / Ubuntu package, or install by hand:
+
+```sh
+./deb_build.sh && sudo dpkg -i target/deb/rustpad_*.deb    # Debian / Ubuntu package
+
+cargo install --path .                                       # any distro
+install -Dm644 packaging/rustpad.desktop ~/.local/share/applications/rustpad.desktop
+install -Dm644 packaging/rustpad.png ~/.local/share/icons/hicolor/512x512/apps/rustpad.png
+```
+
+`deb_build.sh` installs the binary, icons and desktop entry, so RustPad appears in your launcher.
+`./deb_build.sh --no-build` reuses an existing release build. To remove it: `sudo apt remove rustpad`.
 
 ### Windows
 
@@ -87,7 +101,7 @@ install -Dm644 packaging/rustpad.svg ~/.local/share/icons/hicolor/scalable/apps/
 cargo install --path .   # installs to %USERPROFILE%\.cargo\bin\rustpad.exe
 ```
 
-Or copy `target\release\rustpad.exe` anywhere on your `PATH`.
+Or copy `target\release\rustpad.exe` (after `cargo build --release`) anywhere on your `PATH`.
 
 Configuration lives in the platform config directory (`~/.config/rustpad` on Linux,
 `~/Library/Application Support/rustpad` on macOS, `%APPDATA%\rustpad` on Windows):

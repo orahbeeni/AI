@@ -12,7 +12,7 @@ categories = ["text-editors"]
 name = "RustPad"
 identifier = "dev.rustpad.editor"
 short_description = "Cross-platform source code editor"
-icon = ["packaging/rustpad.svg"]
+icon = ["packaging/rustpad.png"]
 
 [dependencies]
 arboard = "3.6.1"
