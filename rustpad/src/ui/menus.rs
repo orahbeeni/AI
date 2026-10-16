@@ -439,7 +439,7 @@ impl App {
         let active = self.active;
         let view2 = if self.split { Some(self.view2) } else { None };
         let font = egui::FontId::proportional(13.0);
-        let strip_bg = if theme.dark { Color32::from_rgb(0x23, 0x25, 0x29) } else { Color32::from_rgb(0xdd, 0xdd, 0xdd) };
+        let strip_bg = if theme.dark { Color32::from_rgb(0x16, 0x17, 0x1a) } else { Color32::from_rgb(0xb4, 0xb4, 0xb4) };
         let h = 26.0;
         let (strip, strip_resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::click());
         if strip_resp.double_clicked() {
@@ -449,7 +449,7 @@ impl App {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(strip).layout(Layout::left_to_right(Align::Min)));
         egui::ScrollArea::horizontal().id_salt("tabscroll").auto_shrink([false, false]).scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(&mut child, |ui| {
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 1.0;
+                ui.spacing_mut().item_spacing.x = 2.0;
                 for i in 0..n {
                     let (name, modified, read_only, id) = {
                         let d = &self.tabs[i];
@@ -462,14 +462,18 @@ impl App {
                     let bg = if is_active {
                         theme.bg.c()
                     } else if resp.hovered() {
-                        if theme.dark { Color32::from_rgb(0x34, 0x37, 0x3d) } else { Color32::from_rgb(0xe8, 0xe8, 0xe8) }
+                        if theme.dark { Color32::from_rgb(0x4a, 0x4e, 0x56) } else { Color32::from_rgb(0xf0, 0xf0, 0xf0) }
                     } else if theme.dark {
-                        Color32::from_rgb(0x2b, 0x2d, 0x31)
+                        Color32::from_rgb(0x38, 0x3b, 0x41)
                     } else {
-                        Color32::from_rgb(0xcc, 0xcc, 0xcc)
+                        Color32::from_rgb(0xd6, 0xd6, 0xd6)
                     };
                     let p = ui.painter();
                     p.rect_filled(rect, 0.0, bg);
+                    if !is_active {
+                        let edge = if theme.dark { Color32::from_gray(0x55) } else { Color32::from_gray(0x9a) };
+                        p.rect_stroke(rect, 0.0, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
+                    }
                     if is_active {
                         p.rect_filled(Rect::from_min_size(rect.min, Vec2::new(w, 3.0)), 0.0, Color32::from_rgb(0xff, 0x8c, 0x00));
                     } else if Some(i) == view2 {
@@ -480,7 +484,7 @@ impl App {
                     let icon_col = if modified { Color32::from_rgb(0xe0, 0x30, 0x30) } else if read_only { Color32::from_rgb(0x90, 0x90, 0x90) } else { Color32::from_rgb(0x30, 0x70, 0xe0) };
                     p.rect_filled(Rect::from_center_size(icon_c, Vec2::new(9.0, 9.0)), 2.0, icon_col);
                     p.rect_filled(Rect::from_center_size(Pos2::new(icon_c.x, icon_c.y - 2.0), Vec2::new(5.0, 3.0)), 0.0, Color32::from_white_alpha(200));
-                    let fg = if theme.dark { Color32::from_gray(if is_active { 235 } else { 170 }) } else { Color32::from_gray(if is_active { 20 } else { 70 }) };
+                    let fg = if theme.dark { Color32::from_gray(if is_active { 255 } else { 205 }) } else { Color32::from_gray(if is_active { 0 } else { 50 }) };
                     p.text(Pos2::new(rect.left() + 24.0, rect.center().y), egui::Align2::LEFT_CENTER, &name, font.clone(), fg);
                     // close button
                     let close_rect = Rect::from_center_size(Pos2::new(rect.right() - 13.0, rect.center().y), Vec2::splat(16.0));
