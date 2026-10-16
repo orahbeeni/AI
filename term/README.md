@@ -15,6 +15,7 @@ cargo run --release -- ~/projects   # start in a folder
 cargo run --release -- -l hybris    # open the saved layout "hybris"
 cargo run --release -- -l hybris -r # …and run its auto-run commands
 ./mac_bundle.sh --install           # build /Applications/Term.app
+./deb_build.sh                      # build target/deb/term_<version>_<arch>.deb (Debian/Ubuntu)
 ```
 
 ## Copying from a live log
