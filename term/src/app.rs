@@ -509,6 +509,20 @@ impl App {
             self.dlg.find = None;
             return;
         }
+        if self.s.plain_copy_paste && !cfg!(target_os = "macos") && m.ctrl && !m.shift && !m.alt {
+            match key {
+                // With nothing selected Ctrl+C still reaches the shell as an interrupt.
+                Key::C if self.take_selection_copy() => return,
+                Key::V => {
+                    match paste {
+                        Some(text) => self.paste_text(&text),
+                        None => self.do_action("paste"),
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
         if let Some(action) = self.combos.iter().find(|(_, c)| c.matches(key, m)).map(|(a, _)| a.clone()) {
             match (action.as_str(), paste) {
                 ("paste", Some(text)) => self.paste_text(&text),
@@ -584,6 +598,24 @@ impl App {
         if let Some(t) = text.filter(|t| !t.is_empty()) {
             self.set_clipboard(&t, false);
         }
+    }
+
+    /// Copies the focused terminal's selection and clears it, so a second Ctrl+C interrupts.
+    /// Returns false when there was nothing selected.
+    fn take_selection_copy(&mut self) -> bool {
+        let Some(p) = self.focused().and_then(|id| self.panes.get(&id)) else { return false };
+        let text = {
+            let mut t = p.term.lock();
+            let text = t.selection_to_string().filter(|s| !s.is_empty());
+            if text.is_some() {
+                t.selection = None;
+            }
+            text
+        };
+        let Some(text) = text else { return false };
+        p.set_hold(false);
+        self.set_clipboard(&text, false);
+        true
     }
 
     // ----- actions --------------------------------------------------------------------------

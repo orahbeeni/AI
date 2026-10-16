@@ -68,7 +68,9 @@ Example: a "hybris" layout with one terminal in `hybris/bin/platform` and the au
 | Saved commands, save layout, layouts | `Ctrl+Shift+R`, `Ctrl+Shift+S`, `Ctrl+Shift+L` |
 | Font size | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` |
 
-Every binding can be changed in **Preferences → Keybindings**.
+Every binding can be changed in **Preferences → Keybindings**. On Linux / Windows, **Preferences →
+Selection & clipboard → Ctrl+C copies and Ctrl+V pastes** adds the Shift-less shortcuts: `Ctrl+C`
+copies while text is selected (and clears the selection) and otherwise still interrupts.
 
 ## Customising
 

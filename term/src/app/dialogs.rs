@@ -338,6 +338,12 @@ impl App {
                         .on_hover_text("Makes it possible to select and copy from a fast-moving log, e.g. a server's console.");
                     ui.checkbox(&mut d.copy_on_select, "Copy selected text automatically when the mouse button is released");
                     ui.checkbox(&mut d.middle_click_paste, "Middle-click pastes");
+                    if !cfg!(target_os = "macos") {
+                        ui.checkbox(&mut d.plain_copy_paste, "Ctrl+C copies and Ctrl+V pastes (no Shift)").on_hover_text(
+                            "Ctrl+C copies while text is selected and otherwise interrupts the program as usual. \
+                             Ctrl+V pastes instead of being sent to the program (quoted-insert).",
+                        );
+                    }
                     ui.checkbox(&mut d.right_click_menu, "Right-click opens a menu (otherwise it pastes)");
                     ui.add_space(8.0);
                     ui.heading("Behaviour");

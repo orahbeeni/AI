@@ -424,6 +424,8 @@ pub struct Settings {
     /// Freeze the view while a selection exists so live output cannot move the text being copied.
     pub lock_on_select: bool,
     pub middle_click_paste: bool,
+    /// Ctrl+C copies (while text is selected) and Ctrl+V pastes, without Shift. Not used on macOS.
+    pub plain_copy_paste: bool,
     pub right_click_menu: bool,
     pub bold_is_bright: bool,
     pub faux_bold: bool,
@@ -465,6 +467,7 @@ impl Default for Settings {
             copy_on_select: true,
             lock_on_select: true,
             middle_click_paste: true,
+            plain_copy_paste: false,
             right_click_menu: true,
             bold_is_bright: true,
             faux_bold: true,
