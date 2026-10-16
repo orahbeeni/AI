@@ -1,0 +1,37 @@
+[package]
+name = "term"
+version = "0.1.0"
+edition = "2024"
+description = "A fast cross-platform split-pane terminal"
+license = "MIT"
+
+[dependencies]
+alacritty_terminal = "0.26"
+arboard = "3.6.1"
+dirs = "7"
+eframe = "0.36.2"
+png = "0.18.1"
+portable-pty = "0.9"
+rfd = "0.17.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target."cfg(unix)".dependencies]
+libc = "0.2"
+
+# A terminal is unusable unoptimised: keep plain `cargo run` fast too.
+[profile.dev]
+opt-level = 2
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true
+
+[dev-dependencies]
+egui_kittest = { version = "0.36.2", features = ["eframe", "wgpu", "snapshot"] }

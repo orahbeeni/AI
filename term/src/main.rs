@@ -1,0 +1,71 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
+mod app;
+mod config;
+mod cwd;
+mod fonts;
+mod input;
+mod layout;
+mod pane;
+mod session;
+#[cfg(test)]
+mod tests;
+mod transfer;
+mod view;
+
+use eframe::egui;
+
+fn usage() -> ! {
+    println!(
+        "term {}\n\nUsage: term [options] [DIR]\n\n  -l, --layout NAME   open a saved layout\n  -r, --run           also run the layout's auto-run commands\n      --fresh         ignore the last session and start with one terminal\n  -h, --help          show this help",
+        env!("CARGO_PKG_VERSION")
+    );
+    std::process::exit(0)
+}
+
+pub struct Args {
+    pub layout: Option<String>,
+    pub run: bool,
+    pub fresh: bool,
+    pub dir: Option<std::path::PathBuf>,
+}
+
+fn parse_args() -> Args {
+    let mut a = Args { layout: None, run: false, fresh: false, dir: None };
+    let mut it = std::env::args().skip(1);
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "-h" | "--help" => usage(),
+            "-l" | "--layout" => a.layout = it.next(),
+            "-r" | "--run" => a.run = true,
+            "--fresh" => a.fresh = true,
+            // macOS passes this when launched from Finder.
+            s if s.starts_with("-psn_") => {}
+            s => a.dir = Some(std::path::PathBuf::from(s)),
+        }
+    }
+    a
+}
+
+/// The app icon (Dock, taskbar, window), embedded in the binary.
+fn icon() -> egui::IconData {
+    let decoder = png::Decoder::new(std::io::Cursor::new(include_bytes!("../assets/icon.png").as_slice()));
+    let mut reader = decoder.read_info().expect("embedded icon is a valid PNG");
+    let mut buf = vec![0; reader.output_buffer_size().expect("icon size")];
+    let info = reader.next_frame(&mut buf).expect("embedded icon decodes");
+    buf.truncate(info.buffer_size());
+    egui::IconData { rgba: buf, width: info.width, height: info.height }
+}
+
+fn main() -> eframe::Result {
+    let args = parse_args();
+    let size = session::load_session().and_then(|s| s.window_size).unwrap_or([1000.0, 640.0]);
+    let viewport = egui::ViewportBuilder::default()
+        .with_inner_size(size)
+        .with_min_inner_size([320.0, 200.0])
+        .with_title("term")
+        .with_app_id("term")
+        .with_icon(icon());
+    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    eframe::run_native("term", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, args)))))
+}
