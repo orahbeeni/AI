@@ -1,0 +1,444 @@
+{
+  "format": "term-settings",
+  "version": 1,
+  "settings": {
+    "shell": "",
+    "shell_args": [],
+    "font_path": "",
+    "font_size": 13.0,
+    "line_height": 1.0,
+    "padding": 10.0,
+    "theme": {
+      "name": "Graphite",
+      "foreground": "#a9a9a9",
+      "background": "#212121",
+      "cursor": "#a9a9a9",
+      "cursor_text": "#212121",
+      "selection_bg": "#404040",
+      "selection_fg": "#d0d0d0",
+      "accent": "#6a7b97",
+      "palette": [
+        "#2b2b2b",
+        "#a0524f",
+        "#697545",
+        "#a08a4f",
+        "#5a7194",
+        "#84607f",
+        "#5f8a87",
+        "#a9a9a9",
+        "#606060",
+        "#c26a66",
+        "#85935a",
+        "#c4a865",
+        "#7590b8",
+        "#a37c9e",
+        "#7aa8a4",
+        "#d0d0d0"
+      ]
+    },
+    "cursor_shape": "Block",
+    "cursor_blink": false,
+    "scrollback_lines": 20000,
+    "copy_on_select": true,
+    "lock_on_select": true,
+    "middle_click_paste": true,
+    "right_click_menu": true,
+    "bold_is_bright": true,
+    "faux_bold": true,
+    "show_titlebars": true,
+    "always_show_tabs": true,
+    "tab_title": "Layout",
+    "scroll_on_keystroke": true,
+    "option_as_meta": false,
+    "word_separators": ",│`|:\"' ()[]{}<>\t",
+    "divider_width": 5.0,
+    "inactive_dim": 0.0,
+    "restore_session": true,
+    "run_commands_on_restore": false,
+    "startup_layout": "",
+    "startup_picker": true,
+    "launcher_run": true,
+    "confirm_quit": false,
+    "keybindings": {
+      "broadcast": [
+        "Ctrl+Shift+B",
+        "Cmd+Shift+B"
+      ],
+      "clear": [
+        "Ctrl+Shift+G",
+        "Cmd+K"
+      ],
+      "close_pane": [
+        "Ctrl+Shift+W",
+        "Cmd+W"
+      ],
+      "close_tab": [
+        "Cmd+Shift+W"
+      ],
+      "commands": [
+        "Ctrl+Shift+R",
+        "Cmd+Shift+R"
+      ],
+      "copy": [
+        "Ctrl+Shift+C",
+        "Cmd+C"
+      ],
+      "equalize": [
+        "Ctrl+Shift+Equals"
+      ],
+      "find": [
+        "Ctrl+Shift+F",
+        "Cmd+F"
+      ],
+      "focus_down": [
+        "Alt+Down",
+        "Cmd+Alt+Down"
+      ],
+      "focus_left": [
+        "Alt+Left",
+        "Cmd+Alt+Left"
+      ],
+      "focus_right": [
+        "Alt+Right",
+        "Cmd+Alt+Right"
+      ],
+      "focus_up": [
+        "Alt+Up",
+        "Cmd+Alt+Up"
+      ],
+      "font_bigger": [
+        "Ctrl+Plus",
+        "Ctrl+Equals",
+        "Cmd+Plus",
+        "Cmd+Equals"
+      ],
+      "font_reset": [
+        "Ctrl+0",
+        "Cmd+0"
+      ],
+      "font_smaller": [
+        "Ctrl+Minus",
+        "Cmd+Minus"
+      ],
+      "fullscreen": [
+        "F11",
+        "Cmd+Ctrl+F"
+      ],
+      "layouts": [
+        "Ctrl+Shift+L",
+        "Cmd+Shift+L"
+      ],
+      "new_tab": [
+        "Ctrl+Shift+T",
+        "Cmd+T"
+      ],
+      "next_pane": [
+        "Ctrl+Shift+N",
+        "Ctrl+Tab",
+        "Cmd+CloseBracket"
+      ],
+      "next_tab": [
+        "Ctrl+PageDown",
+        "Cmd+Shift+CloseBracket"
+      ],
+      "paste": [
+        "Ctrl+Shift+V",
+        "Shift+Insert",
+        "Cmd+V"
+      ],
+      "preferences": [
+        "Ctrl+Shift+Comma",
+        "Cmd+Comma"
+      ],
+      "prev_pane": [
+        "Ctrl+Shift+P",
+        "Ctrl+Shift+Tab",
+        "Cmd+OpenBracket"
+      ],
+      "prev_tab": [
+        "Ctrl+PageUp",
+        "Cmd+Shift+OpenBracket"
+      ],
+      "quit": [
+        "Ctrl+Shift+Q",
+        "Cmd+Q"
+      ],
+      "resize_down": [
+        "Ctrl+Shift+Down",
+        "Cmd+Ctrl+Down"
+      ],
+      "resize_left": [
+        "Ctrl+Shift+Left",
+        "Cmd+Ctrl+Left"
+      ],
+      "resize_right": [
+        "Ctrl+Shift+Right",
+        "Cmd+Ctrl+Right"
+      ],
+      "resize_up": [
+        "Ctrl+Shift+Up",
+        "Cmd+Ctrl+Up"
+      ],
+      "save_layout": [
+        "Ctrl+Shift+S",
+        "Cmd+Shift+S"
+      ],
+      "scroll_bottom": [
+        "Shift+End",
+        "Cmd+End"
+      ],
+      "scroll_lock": [
+        "Ctrl+Shift+Space",
+        "Cmd+Shift+Space"
+      ],
+      "scroll_page_down": [
+        "Shift+PageDown"
+      ],
+      "scroll_page_up": [
+        "Shift+PageUp"
+      ],
+      "scroll_top": [
+        "Shift+Home",
+        "Cmd+Home"
+      ],
+      "select_all": [
+        "Ctrl+Shift+A",
+        "Cmd+A"
+      ],
+      "split_horizontal": [
+        "Ctrl+Shift+O",
+        "Cmd+Shift+D"
+      ],
+      "split_vertical": [
+        "Ctrl+Shift+E",
+        "Cmd+D"
+      ],
+      "zoom": [
+        "Ctrl+Shift+X",
+        "Cmd+Shift+Enter"
+      ]
+    }
+  },
+  "layouts": [
+    {
+      "name": "Apps",
+      "tabs": [
+        {
+          "title": null,
+          "root": {
+            "Split": {
+              "dir": "Col",
+              "ratio": 0.5,
+              "a": {
+                "Split": {
+                  "dir": "Col",
+                  "ratio": 0.5,
+                  "a": {
+                    "Leaf": {
+                      "cwd": "/Users/omar/Documents/private/dev/AI/rustpad",
+                      "name": null,
+                      "commands": [
+                        {
+                          "command": "./mac_bundle.sh --install",
+                          "auto_run": false
+                        },
+                        {
+                          "command": "cargo run --release",
+                          "auto_run": false
+                        }
+                      ]
+                    }
+                  },
+                  "b": {
+                    "Leaf": {
+                      "cwd": "/Users/omar/Documents/private/dev/AI/term",
+                      "name": null,
+                      "commands": [
+                        {
+                          "command": "./mac_bundle.sh --install",
+                          "auto_run": false
+                        },
+                        {
+                          "command": "cargo run --release",
+                          "auto_run": false
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              "b": {
+                "Leaf": {
+                  "cwd": "/Users/omar/Documents/private/dev/AI/gitGoing",
+                  "name": null,
+                  "commands": [
+                    {
+                      "command": "./mac_bundle.sh --install",
+                      "auto_run": false
+                    },
+                    {
+                      "command": "cargo run --release",
+                      "auto_run": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "focused": 0,
+          "layout": "Apps"
+        }
+      ],
+      "active_tab": 0,
+      "window_size": [
+        1158.0,
+        812.0
+      ]
+    },
+    {
+      "name": "CLOUD dev",
+      "tabs": [
+        {
+          "title": null,
+          "root": {
+            "Split": {
+              "dir": "Col",
+              "ratio": 0.34765625,
+              "a": {
+                "Leaf": {
+                  "cwd": "/Users/omar/work/cloud_/core-customize",
+                  "name": null,
+                  "commands": [
+                    {
+                      "command": "clear && ./start-jbr.sh",
+                      "auto_run": false
+                    },
+                    {
+                      "command": "clear && ./gradlew yclean yall",
+                      "auto_run": false
+                    },
+                    {
+                      "command": "clear && ./gradlew yclean yall && clear && ./start-jbr.sh",
+                      "auto_run": false
+                    }
+                  ]
+                }
+              },
+              "b": {
+                "Split": {
+                  "dir": "Col",
+                  "ratio": 0.5,
+                  "a": {
+                    "Leaf": {
+                      "cwd": "/Users/omar/work/cloud/core-customize",
+                      "name": null,
+                      "commands": [
+                        {
+                          "command": " ./gradlew --stop && ps aux | grep hybris | grep -v grep | awk '{print $2}' | xargs kill -9",
+                          "auto_run": false
+                        }
+                      ]
+                    }
+                  },
+                  "b": {
+                    "Leaf": {
+                      "cwd": "/Users/omar/work/cloud_/js-storefront/apps/shoprite-lib-workspace",
+                      "name": null,
+                      "commands": [
+                        {
+                          "command": "npm run tra",
+                          "auto_run": false
+                        },
+                        {
+                          "command": "npm run cfs",
+                          "auto_run": false
+                        },
+                        {
+                          "command": "npm run cas",
+                          "auto_run": false
+                        },
+                        {
+                          "command": "npm run obp",
+                          "auto_run": false
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "focused": 2,
+          "layout": null
+        }
+      ],
+      "active_tab": 0,
+      "window_size": [
+        1000.0,
+        770.0
+      ]
+    },
+    {
+      "name": "Rebase",
+      "tabs": [
+        {
+          "title": null,
+          "root": {
+            "Leaf": {
+              "cwd": "/Users/omar/work/cloud_",
+              "name": null,
+              "commands": [
+                {
+                  "command": "git log --oneline -7",
+                  "auto_run": false
+                },
+                {
+                  "command": "git rebase -i HEAD~7",
+                  "auto_run": false
+                },
+                {
+                  "command": "git push --force",
+                  "auto_run": false
+                }
+              ]
+            }
+          },
+          "focused": 0,
+          "layout": null
+        }
+      ],
+      "active_tab": 0,
+      "window_size": [
+        1000.0,
+        640.0
+      ]
+    },
+    {
+      "name": "Video",
+      "tabs": [
+        {
+          "title": null,
+          "root": {
+            "Leaf": {
+              "cwd": "/Users/omar/work/cloud_",
+              "name": null,
+              "commands": [
+                {
+                  "command": "ffmpeg -i i.mov -c copy -movflags +faststart o.mp4",
+                  "auto_run": false
+                }
+              ]
+            }
+          },
+          "focused": 0,
+          "layout": null
+        }
+      ],
+      "active_tab": 0,
+      "window_size": [
+        1000.0,
+        640.0
+      ]
+    }
+  ]
+}
