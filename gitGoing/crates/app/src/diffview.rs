@@ -480,7 +480,17 @@ fn body(
             if let Some(hi) = cells[0].filter(|&k| lines[k].kind == LineKind::Hunk) {
                 let l = &lines[hi];
                 p.hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0_f32, line_col));
-                p.text(Pos2::new(rect.left() + 12.0, cy), egui::Align2::LEFT_CENTER, &*l.text, font.clone(), fg.gamma_multiply(0.8));
+                // The text stops short of the buttons pinned to the visible right edge.
+                let labels: &[&str] = match hunk_btn {
+                    Some(HunkBtn::Stage) => &["Stage Hunk", "Discard Hunk"],
+                    Some(HunkBtn::Unstage) => &["Unstage Hunk"],
+                    None => &[],
+                };
+                let buttons_w: f32 = labels.iter().map(|t| cw * (t.len() as f32 + 2.0) + 8.0).sum();
+                let text_end = if labels.is_empty() { rect.right() } else { visible.right() - 18.0 - buttons_w - 4.0 };
+                let mut clip = p.clip_rect();
+                clip.max.x = clip.max.x.min(text_end);
+                p.with_clip_rect(clip).text(Pos2::new(rect.left() + 12.0, cy), egui::Align2::LEFT_CENTER, &*l.text, font.clone(), fg.gamma_multiply(0.8));
                 if let Some(kind) = hunk_btn {
                     // Buttons are pinned to the visible right edge so they stay
                     // reachable when scrolled sideways.
