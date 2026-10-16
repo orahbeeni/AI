@@ -12,6 +12,7 @@ use gitgoing_core::merge::{self, Side};
 use gitgoing_core::rebase;
 use gitgoing_core::status::{self, StatusEntry, WorkStatus};
 use gitgoing_core::undo::{self, UndoEntry};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 pub struct Changes {
@@ -46,6 +47,12 @@ pub struct Changes {
     split: f32,
     /// Show files as a directory tree instead of a flat path list.
     mode: ViewMode,
+    /// Files picked with shift/ctrl+click, all from one list (`multi_staged`), to
+    /// stage or unstage together. Empty when only `selected` is in play.
+    multi: HashSet<String>,
+    multi_staged: bool,
+    /// Where a shift+click range starts.
+    anchor: Option<String>,
 }
 
 enum OpDone {
@@ -82,6 +89,9 @@ impl Changes {
             staged_open: true,
             split: 0.6,
             mode: ViewMode::default(),
+            multi: HashSet::new(),
+            multi_staged: false,
+            anchor: None,
         };
         c.refresh(ctx);
         c
@@ -156,6 +166,8 @@ impl Changes {
             if let Ok(r) = rx.try_recv() {
                 self.status_rx = None;
                 if let Ok(s) = &r {
+                    let list = if self.multi_staged { &s.staged } else { &s.unstaged };
+                    self.multi.retain(|p| list.iter().any(|e| e.path == *p));
                     let exists = |sel: &(String, bool)| {
                         let list = if sel.1 { &s.staged } else { &s.unstaged };
                         list.iter().any(|e| e.path == sel.0)
@@ -240,9 +252,17 @@ enum Act {
     Abort,
     ConfirmAbort(bool),
     Select(String, bool),
+    /// Shift/ctrl+click: extend or toggle the multi-selection.
+    Pick(String, bool, Pick),
     Stage(Vec<String>),
     Unstage(Vec<String>),
     Commit,
+}
+
+#[derive(Clone, Copy)]
+enum Pick {
+    Range,
+    Toggle,
 }
 
 /// Right-hand panel content. Returns `true` if the user closed it.
@@ -420,12 +440,19 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, c: &mut Changes) -> bool {
                 let body_total = (ui.available_height() - 2.0 * HEADER_H - if both { DIVIDER_H } else { 0.0 }).max(0.0);
                 let (h_unstaged, h_staged) = section_heights(body_total, c.unstaged_open, c.staged_open, c.split);
 
+                let none = HashSet::new();
+                let (m_un, m_st) = if c.multi_staged { (&none, &c.multi) } else { (&c.multi, &none) };
+                // The files "Stage selected" acts on: the picked ones, else the one selected file.
+                let one = |staged: bool| -> HashSet<String> {
+                    sel.iter().filter(|(_, st)| *st == staged).map(|(p, _)| p.clone()).collect()
+                };
+                let (p_un, p_st) = (if m_un.is_empty() { one(false) } else { m_un.clone() }, if m_st.is_empty() { one(true) } else { m_st.clone() });
                 let list = FileList { title: "Unstaged", entries: &s.unstaged, staged: false };
-                if section_head(ui, &list, Some(c.unstaged_open), busy, &mut act) {
+                if section_head(ui, &list, &p_un, Some(c.unstaged_open), busy, &mut act) {
                     c.unstaged_open = !c.unstaged_open;
                 }
                 if c.unstaged_open {
-                    list_body(ui, h_unstaged, list, sel, busy, mode, &mut act);
+                    list_body(ui, h_unstaged, list, sel, m_un, busy, mode, &mut act);
                 }
 
                 if both {
@@ -447,11 +474,11 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, c: &mut Changes) -> bool {
                 }
 
                 let list = FileList { title: "Staged", entries: &s.staged, staged: true };
-                if section_head(ui, &list, Some(c.staged_open), busy, &mut act) {
+                if section_head(ui, &list, &p_st, Some(c.staged_open), busy, &mut act) {
                     c.staged_open = !c.staged_open;
                 }
                 if c.staged_open {
-                    list_body(ui, h_staged, list, sel, busy, mode, &mut act);
+                    list_body(ui, h_staged, list, sel, m_st, busy, mode, &mut act);
                 }
             }
         }
@@ -460,6 +487,52 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, c: &mut Changes) -> bool {
     match act {
         Some(Act::Select(p, staged)) => {
             // Line picks belong to one file's diff.
+            if c.selected.as_ref() != Some(&(p.clone(), staged)) {
+                c.opts.selected.clear();
+            }
+            c.multi.clear();
+            c.anchor = Some(p.clone());
+            c.selected = Some((p, staged));
+            c.diff_open = true;
+            c.diff = None;
+            c.load_diff(ctx);
+        }
+        Some(Act::Pick(p, staged, how)) => {
+            // Conflicted files are resolved one by one, so they are never part of a pick.
+            let order: Vec<String> = match &c.status {
+                Some(Ok(s)) => {
+                    let list = if staged { &s.staged } else { &s.unstaged };
+                    list.iter().filter(|e| e.kind != ChangeKind::Conflicted).map(|e| e.path.clone()).collect()
+                }
+                _ => Vec::new(),
+            };
+            let current = c.selected.as_ref().filter(|(_, st)| *st == staged).map(|(f, _)| f.clone());
+            if c.multi_staged != staged {
+                c.multi.clear();
+                c.anchor = None;
+            }
+            c.multi_staged = staged;
+            if c.multi.is_empty() {
+                if let Some(cur) = current.filter(|f| order.contains(f)) {
+                    c.anchor.get_or_insert_with(|| cur.clone());
+                    c.multi.insert(cur);
+                }
+            }
+            match how {
+                Pick::Range => {
+                    let anchor = c.anchor.clone().unwrap_or_else(|| p.clone());
+                    let (a, b) = (order.iter().position(|x| *x == anchor), order.iter().position(|x| *x == p));
+                    if let (Some(a), Some(b)) = (a, b) {
+                        c.multi = order[a.min(b)..=a.max(b)].iter().cloned().collect();
+                    }
+                }
+                Pick::Toggle => {
+                    if !c.multi.remove(&p) && order.contains(&p) {
+                        c.multi.insert(p.clone());
+                    }
+                    c.anchor = Some(p.clone());
+                }
+            }
             if c.selected.as_ref() != Some(&(p.clone(), staged)) {
                 c.opts.selected.clear();
             }
@@ -485,8 +558,14 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, c: &mut Changes) -> bool {
         Some(Act::Resolve(p, side)) => {
             c.run_op(ctx, move |r| merge::resolve(r, &p, side).map(|_| OpDone::Staged))
         }
-        Some(Act::Stage(paths)) => c.run_op(ctx, move |r| status::stage(r, &paths).map(|_| OpDone::Staged)),
-        Some(Act::Unstage(paths)) => c.run_op(ctx, move |r| status::unstage(r, &paths).map(|_| OpDone::Staged)),
+        Some(Act::Stage(paths)) => {
+            c.multi.clear();
+            c.run_op(ctx, move |r| status::stage(r, &paths).map(|_| OpDone::Staged));
+        }
+        Some(Act::Unstage(paths)) => {
+            c.multi.clear();
+            c.run_op(ctx, move |r| status::unstage(r, &paths).map(|_| OpDone::Staged));
+        }
         Some(Act::Commit) => {
             let msg = match c.description.trim() {
                 "" => c.summary.trim().to_owned(),
@@ -636,8 +715,20 @@ fn section_heights(total: f32, unstaged_open: bool, staged_open: bool, split: f3
 
 /// A section's heading (pinned above its list). Returns true if the heading was
 /// clicked to expand or collapse the section.
-fn section_head(ui: &mut egui::Ui, list: &FileList, open: Option<bool>, busy: bool, act: &mut Option<Act>) -> bool {
+fn section_head(
+    ui: &mut egui::Ui,
+    list: &FileList,
+    multi: &HashSet<String>,
+    open: Option<bool>,
+    busy: bool,
+    act: &mut Option<Act>,
+) -> bool {
     let FileList { title, entries, staged } = *list;
+    let picked: Vec<String> = entries
+        .iter()
+        .filter(|e| e.kind != ChangeKind::Conflicted && multi.contains(&e.path))
+        .map(|e| e.path.clone())
+        .collect();
     let any_discardable = entries.iter().any(|e| e.kind != ChangeKind::Conflicted);
     let clicks = filerows::section_header(
         ui,
@@ -645,11 +736,16 @@ fn section_head(ui: &mut egui::Ui, list: &FileList, open: Option<bool>, busy: bo
         entries.len(),
         open,
         Some((if staged { "Unstage all" } else { "Stage all" }, !busy && !entries.is_empty())),
+        // Shown while any file of this list is selected.
+        (!picked.is_empty()).then_some((if staged { "Unstage selected" } else { "Stage selected" }, !busy)),
         (!staged).then_some((icons::Icon::Trash, "Discard all unstaged changes", !busy && any_discardable)),
     );
     if clicks.text {
         let all = entries.iter().map(|e| e.path.clone()).collect();
         *act = Some(if staged { Act::Unstage(all) } else { Act::Stage(all) });
+    }
+    if clicks.extra {
+        *act = Some(if staged { Act::Unstage(picked) } else { Act::Stage(picked) });
     }
     if clicks.icon {
         *act = Some(Act::DiscardAll);
@@ -663,6 +759,7 @@ fn list_body(
     height: f32,
     list: FileList,
     selected: &Option<(String, bool)>,
+    multi: &HashSet<String>,
     busy: bool,
     mode: ViewMode,
     act: &mut Option<Act>,
@@ -671,7 +768,7 @@ fn list_body(
         egui::ScrollArea::vertical()
             .id_salt(("changes_list", list.staged))
             .auto_shrink(false)
-            .show(ui, |ui| file_rows(ui, list, selected, busy, mode, act));
+            .show(ui, |ui| file_rows(ui, list, selected, multi, busy, mode, act));
     });
 }
 
@@ -679,6 +776,7 @@ fn file_rows(
     ui: &mut egui::Ui,
     list: FileList,
     selected: &Option<(String, bool)>,
+    multi: &HashSet<String>,
     busy: bool,
     mode: ViewMode,
     act: &mut Option<Act>,
@@ -695,7 +793,17 @@ fn file_rows(
 
     let warn = Color32::from_rgb(0xe5, 0xc0, 0x7b);
     let mut row = |ui: &mut egui::Ui, e: &StatusEntry, name: &str| {
-        let sel = selected.as_ref().is_some_and(|(p, s)| *p == e.path && *s == staged);
+        let in_multi = multi.len() > 1 && multi.contains(&e.path);
+        let sel = selected.as_ref().is_some_and(|(p, s)| *p == e.path && *s == staged) || in_multi;
+        // Stage / unstage acts on every picked file when this row is one of them.
+        let targets = || -> Vec<String> {
+            if in_multi {
+                entries.iter().filter(|x| multi.contains(&x.path)).map(|x| x.path.clone()).collect()
+            } else {
+                vec![e.path.clone()]
+            }
+        };
+        let many = if in_multi { format!(" {} selected files", multi.len()) } else { String::new() };
         let conflicted = e.kind == ChangeKind::Conflicted;
         let salt = format!("{}|{staged}", e.path);
         let (idle, active) = if conflicted { (96.0, 96.0) } else if staged { (8.0, 40.0) } else { (8.0, 66.0) };
@@ -707,14 +815,15 @@ fn file_rows(
                 return;
             }
         } else {
+            let (stage_tip, unstage_tip) = (format!("Stage{many}"), format!("Unstage{many}"));
             let buttons: Vec<(icons::Icon, &str, bool)> = if staged {
-                vec![(icons::Icon::Minus, "Unstage", !busy)]
+                vec![(icons::Icon::Minus, unstage_tip.as_str(), !busy)]
             } else {
-                vec![(icons::Icon::Plus, "Stage", !busy), (icons::Icon::Trash, "Discard changes…", !busy)]
+                vec![(icons::Icon::Plus, stage_tip.as_str(), !busy), (icons::Icon::Trash, "Discard changes…", !busy)]
             };
             match filerows::hover_buttons(ui, &r, sel, &salt, &buttons) {
                 Some(0) => {
-                    let p = vec![e.path.clone()];
+                    let p = targets();
                     *act = Some(if staged { Act::Unstage(p) } else { Act::Stage(p) });
                     return;
                 }
@@ -727,7 +836,14 @@ fn file_rows(
         }
 
         if r.resp.clicked() {
-            *act = Some(Act::Select(e.path.clone(), staged));
+            let m = ui.input(|i| i.modifiers);
+            *act = Some(if m.shift {
+                Act::Pick(e.path.clone(), staged, Pick::Range)
+            } else if m.command {
+                Act::Pick(e.path.clone(), staged, Pick::Toggle)
+            } else {
+                Act::Select(e.path.clone(), staged)
+            });
         }
         if r.resp.double_clicked() && conflicted {
             *act = Some(Act::OpenResolver(e.path.clone()));
@@ -751,9 +867,9 @@ fn file_rows(
                     ui.close_menu();
                 }
             } else {
-                let label = if staged { "Unstage" } else { "Stage" };
+                let label = format!("{}{many}", if staged { "Unstage" } else { "Stage" });
                 if ui.add_enabled(!busy, egui::Button::new(label)).clicked() {
-                    let p = vec![e.path.clone()];
+                    let p = targets();
                     *act = Some(if staged { Act::Unstage(p) } else { Act::Stage(p) });
                     ui.close_menu();
                 }

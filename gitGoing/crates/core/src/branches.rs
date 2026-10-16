@@ -162,7 +162,11 @@ mod tests {
         repo.commit(Some("HEAD"), &sig, &sig, "c", &tree, &[]).unwrap();
         let first = repo.head().unwrap().shorthand().unwrap().to_owned();
 
-        assert!(create_and_checkout(p, "bad name").is_err());
+        assert!(create_and_checkout(p, "bad..name").is_err());
+        create_and_checkout(p, " my new\tbranch ").unwrap();
+        assert_eq!(repo.head().unwrap().shorthand(), Some("my_new_branch"), "whitespace becomes underscores");
+        checkout(p, &first).unwrap();
+        delete(p, "my_new_branch").unwrap();
         create_and_checkout(p, "feature").unwrap();
         assert_eq!(repo.head().unwrap().shorthand(), Some("feature"));
         assert!(delete(p, "feature").is_err(), "checked-out branch");

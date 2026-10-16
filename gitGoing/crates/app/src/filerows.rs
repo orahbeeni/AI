@@ -106,6 +106,8 @@ pub struct HeaderClicks {
     /// The header itself (to expand or collapse the section).
     pub toggle: bool,
     pub text: bool,
+    /// The extra action left of the text action.
+    pub extra: bool,
     pub icon: bool,
 }
 
@@ -118,6 +120,7 @@ pub fn section_header(
     count: usize,
     open: Option<bool>,
     text_action: Option<(&str, bool)>,
+    extra_action: Option<(&str, bool)>,
     icon_action: Option<(Icon, &str, bool)>,
 ) -> HeaderClicks {
     let sense = if open.is_some() { Sense::click() } else { Sense::hover() };
@@ -192,6 +195,28 @@ pub fn section_header(
         }
         p.galley(Pos2::new(a_rect.left() + 7.0, cy - g.size().y / 2.0), g, col);
         text_clicked = r.clicked() && enabled;
+        right = a_rect.left() - 2.0;
     }
-    HeaderClicks { toggle: base.clicked() && !text_clicked && !icon_clicked, text: text_clicked, icon: icon_clicked }
+    let mut extra_clicked = false;
+    if let Some((label, enabled)) = extra_action {
+        let font = egui::TextStyle::Small.resolve(ui.style());
+        let accent = Color32::from_rgb(0x6c, 0x9d, 0xf2);
+        let col = if enabled { accent } else { weak.gamma_multiply(0.5) };
+        let g = p.layout_no_wrap(label.to_owned(), font, col);
+        let size = Vec2::new(g.size().x + 14.0, 22.0);
+        let a_rect = Rect::from_center_size(Pos2::new(right - size.x / 2.0, cy), size);
+        let sense = if enabled { Sense::click() } else { Sense::hover() };
+        let r = ui.interact(a_rect, ui.id().with(("section_extra", title)), sense);
+        if enabled && r.hovered() {
+            p.rect_filled(a_rect, 4.0, ui.visuals().widgets.hovered.bg_fill);
+        }
+        p.galley(Pos2::new(a_rect.left() + 7.0, cy - g.size().y / 2.0), g, col);
+        extra_clicked = r.clicked() && enabled;
+    }
+    HeaderClicks {
+        toggle: base.clicked() && !text_clicked && !extra_clicked && !icon_clicked,
+        text: text_clicked,
+        extra: extra_clicked,
+        icon: icon_clicked,
+    }
 }

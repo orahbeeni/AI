@@ -169,7 +169,7 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, d: &mut Detail) -> bool {
             ui.add_space(8.0);
             message_with_hashes(ui, &c.message);
             ui.separator();
-            filerows::section_header(ui, "Changed files", c.files.len(), None, None, None);
+            filerows::section_header(ui, "Changed files", c.files.len(), None, None, None, None);
             ui.add_space(4.0);
             filetree::mode_toggle(ui, &mut d.mode);
             ui.add_space(4.0);
