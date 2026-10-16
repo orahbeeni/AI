@@ -24,6 +24,7 @@ fn interactive_rebase_uses_our_binary_as_sequence_editor() {
     git(&dir, &["init", "-q"]);
     git(&dir, &["config", "user.name", "T"]);
     git(&dir, &["config", "user.email", "t@example.com"]);
+    git(&dir, &["config", "commit.gpgsign", "false"]);
     let mut ids = Vec::new();
     for n in 1..=3 {
         std::fs::write(dir.join(format!("f{n}")), format!("{n}\n")).unwrap();
@@ -54,6 +55,7 @@ fn squash_uses_our_binary_as_sequence_editor() {
     git(&dir, &["init", "-q"]);
     git(&dir, &["config", "user.name", "T"]);
     git(&dir, &["config", "user.email", "t@example.com"]);
+    git(&dir, &["config", "commit.gpgsign", "false"]);
     let mut ids = Vec::new();
     for n in 1..=4 {
         std::fs::write(dir.join(format!("f{n}")), format!("{n}\n")).unwrap();

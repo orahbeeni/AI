@@ -18,6 +18,13 @@ expected to work (all dependencies are cross-platform) but have not been run yet
 - Interactive rebase, and squashing several commits (with a conflict check before it runs)
 - Conflict editor in its own window: ours and theirs side by side, pick whole blocks or single
   lines in any order, editable result
+- Commits (and amends, merges, cherry-picks, reverts) run through the system `git`, so `pre-commit` /
+  `commit-msg` hooks run and `commit.gpgsign` signing is honoured; a hook that refuses shows its output
+- Refreshes by itself when files, branches or commits change outside the app (editor, terminal); ignored
+  folders are not watched. Can be turned off in Settings
+- Ignore files from the right-click menu (`.gitignore` or this clone only), stop tracking a committed file,
+  and list what git is ignoring
+- Stash with a description, staged changes only, selected files only, with or without untracked files, or keeping the index
 - Tabs for several repositories, clone and init, settings, a console showing the git commands used
 
 ## Build and install
@@ -136,5 +143,7 @@ The `scripts/` folder builds throwaway repositories for the features that need a
 
 ## Known limits
 
-No file history or blame yet, no pull-request integrations, no submodule or LFS support,
+No pull-request integrations, no submodule, worktree, bisect or LFS support, no reflog browser,
 and interactive rebase refuses ranges that contain merge commits.
+On a very large repository on Linux the file watcher may reach the inotify limit; changes are then
+picked up when the window regains focus.

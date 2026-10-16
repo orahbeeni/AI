@@ -12,6 +12,7 @@ pub mod diff;
 pub mod filehist;
 pub mod graph;
 pub mod history;
+pub mod ignore;
 pub mod merge;
 pub mod rebase;
 pub mod remote;
@@ -20,6 +21,7 @@ pub mod stash;
 pub mod status;
 pub mod system;
 pub mod undo;
+pub mod watch;
 
 pub use git2::Oid;
 pub use git2::Error as GitError;

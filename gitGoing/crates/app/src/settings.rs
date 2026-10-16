@@ -53,11 +53,13 @@ pub struct Settings {
     pub ignore_whitespace: bool,
     /// Play the intro animation at start.
     pub show_intro: bool,
+    /// Refresh by itself when files or branches change outside the app.
+    pub auto_refresh: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { theme: ThemeChoice::System, zoom: 1.0, pull_mode: PullMode::Merge, split_diff: false, ignore_whitespace: false, show_intro: true }
+        Settings { theme: ThemeChoice::System, zoom: 1.0, pull_mode: PullMode::Merge, split_diff: false, ignore_whitespace: false, show_intro: true, auto_refresh: true }
     }
 }
 
@@ -73,6 +75,7 @@ impl Settings {
             split_diff: get("split_diff").is_some_and(|v| v == "1"),
             ignore_whitespace: get("ignore_ws").is_some_and(|v| v == "1"),
             show_intro: get("intro").is_none_or(|v| v != "0"),
+            auto_refresh: get("auto_refresh").is_none_or(|v| v != "0"),
         }
     }
 
@@ -83,6 +86,7 @@ impl Settings {
         set("split_diff", (self.split_diff as u8).to_string());
         set("ignore_ws", (self.ignore_whitespace as u8).to_string());
         set("intro", (self.show_intro as u8).to_string());
+        set("auto_refresh", (self.auto_refresh as u8).to_string());
     }
 
     /// Push the settings into egui and the diff view.
@@ -94,6 +98,7 @@ impl Settings {
         });
         ctx.set_zoom_factor(self.zoom);
         crate::diffview::set_defaults(self.split_diff, self.ignore_whitespace);
+        gitgoing_core::watch::set_enabled(self.auto_refresh);
     }
 }
 
@@ -158,6 +163,8 @@ impl SettingsWindow {
                 });
                 ui.checkbox(&mut s.split_diff, "Show diffs side by side by default");
                 ui.checkbox(&mut s.ignore_whitespace, "Ignore whitespace changes in diffs by default");
+                ui.checkbox(&mut s.auto_refresh, "Refresh automatically when files or branches change outside the app")
+                    .on_hover_text("Watches the working tree (not ignored folders) and .git. Turn off for huge repositories.");
                 ui.add_space(8.0);
                 ui.strong("Commit author (global git config)");
                 egui::Grid::new("identity").num_columns(2).show(ui, |ui| {
@@ -203,6 +210,7 @@ mod tests {
             split_diff: true,
             ignore_whitespace: true,
             show_intro: false,
+            auto_refresh: false,
         };
         let mut store = HashMap::new();
         s.save(|k, v| {

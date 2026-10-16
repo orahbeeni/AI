@@ -8,6 +8,7 @@ impl RepoTab {
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
         self.dialog_error(ctx);
         self.dialog_stash_offer(ctx);
+        self.dialog_stash(ctx);
         self.dialog_new_branch(ctx);
         self.dialog_new_tag(ctx);
         self.dialog_force_push(ctx);
@@ -145,6 +146,76 @@ impl RepoTab {
                     }
                     Ok::<(), String>(())
                 });
+            }
+        }
+    }
+
+    /// Options for a new stash: message, what to include.
+    fn dialog_stash(&mut self, ctx: &egui::Context) {
+        let mut go = false;
+        let mut close = false;
+        if let Some(d) = &mut self.stash_dlg {
+            egui::Window::new("Stash changes")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.set_width(380.0);
+                    match &d.scope {
+                        StashScope::Paths(p) => {
+                            let what = if p.len() == 1 { p[0].clone() } else { format!("{} selected files", p.len()) };
+                            ui.label(format!("Stash only {what}."));
+                        }
+                        _ => {
+                            ui.radio_value(&mut d.scope, StashScope::All, "All changes");
+                            ui.radio_value(&mut d.scope, StashScope::Staged, "Only staged changes")
+                                .on_hover_text("Leave unstaged changes where they are");
+                        }
+                    }
+                    ui.add_space(4.0);
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut d.message)
+                            .hint_text("Description (optional)")
+                            .desired_width(f32::INFINITY),
+                    );
+                    if !d.focused {
+                        r.request_focus();
+                        d.focused = true;
+                    }
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let staged_only = d.scope == StashScope::Staged;
+                    ui.add_enabled_ui(!staged_only, |ui| {
+                        ui.checkbox(&mut d.include_untracked, "Include untracked files");
+                        ui.checkbox(&mut d.keep_index, "Keep staged changes in the working tree")
+                            .on_hover_text("Stash a copy of everything but leave the staged changes in place");
+                    });
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Stash").clicked() || enter {
+                            go = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+        }
+        if close {
+            self.stash_dlg = None;
+        }
+        if go {
+            if let Some(d) = self.stash_dlg.take() {
+                let opts = stash::SaveOptions {
+                    message: d.message,
+                    include_untracked: d.include_untracked,
+                    keep_index: d.keep_index,
+                    staged_only: d.scope == StashScope::Staged,
+                    paths: match d.scope {
+                        StashScope::Paths(p) => p,
+                        _ => Vec::new(),
+                    },
+                };
+                self.run_op(ctx, "Stash", move |p| stash::push(p, &opts));
             }
         }
     }

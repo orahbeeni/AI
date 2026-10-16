@@ -22,6 +22,7 @@ use gitgoing_core::remote::{self, PullMode};
 use gitgoing_core::rebase::{self, Action as RebaseAction, TodoItem};
 use gitgoing_core::remotes;
 use gitgoing_core::stash;
+use gitgoing_core::watch::Watch;
 use gitgoing_core::graph::{SegKind, PALETTE_SIZE};
 use gitgoing_core::history::{self, CommitRow, LoadEvent, RefKind, RepoInfo};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -159,6 +160,32 @@ impl Loaded {
         } else if let Some(d) = &mut self.detail {
             d.diff_open = false;
         }
+    }
+}
+
+/// What the "Stash changes" window will stash.
+#[derive(Clone, PartialEq, Eq)]
+enum StashScope {
+    All,
+    /// Only what is staged.
+    Staged,
+    /// The files picked in the Changes panel.
+    Paths(Vec<String>),
+}
+
+/// The open "Stash changes" window.
+struct StashDlg {
+    scope: StashScope,
+    message: String,
+    include_untracked: bool,
+    keep_index: bool,
+    /// The message field has been given focus once.
+    focused: bool,
+}
+
+impl StashDlg {
+    fn new(scope: StashScope) -> Self {
+        StashDlg { scope, message: String::new(), include_untracked: true, keep_index: false, focused: false }
     }
 }
 
@@ -366,6 +393,7 @@ pub struct RepoTab {
     /// The checkout in flight, so it can be repeated after stashing.
     retry: Option<Retry>,
     stash_offer: Option<StashOffer>,
+    stash_dlg: Option<StashDlg>,
     /// A failed operation to tell the user about in a window (the status bar is easy to miss).
     error_dlg: Option<(String, String)>,
     file_hist: Option<filedlgs::FileHistDlg>,
@@ -388,6 +416,10 @@ pub struct RepoTab {
     undo: Vec<UndoEntry>,
     redo: Vec<UndoEntry>,
     pending: Option<Pending>,
+    /// Notices changes made outside the app; see [`Watch`].
+    watch: Option<Watch>,
+    /// Starting the watcher failed; don't retry every frame.
+    watch_failed: bool,
 }
 
 impl RepoTab {
@@ -421,6 +453,7 @@ impl RepoTab {
             blocked: Arc::new(AtomicBool::new(false)),
             retry: None,
             stash_offer: None,
+            stash_dlg: None,
             error_dlg: None,
             file_hist: None,
             blame: None,
@@ -432,6 +465,8 @@ impl RepoTab {
             undo: Vec::new(),
             redo: Vec::new(),
             pending: None,
+            watch: None,
+            watch_failed: false,
         };
         app.open(path);
         app
@@ -680,6 +715,9 @@ impl RepoTab {
     /// Re-read history, sidebar and status after the repo changed.
     fn reload(&mut self, ctx: &egui::Context) {
         let Some(path) = self.repo_path() else { return };
+        if let Some(w) = &self.watch {
+            w.sync_refs();
+        }
         // Keep what the user was looking at: the selected commit and the search.
         let (selected, search, mut ch, show) = match self.repo.take() {
             Some(l) => {
@@ -790,12 +828,42 @@ impl RepoTab {
         self.poll_op(ctx);
         self.poll_plan();
         self.poll_files();
+        self.poll_watch(ctx);
         self.background_updates(ctx, regained);
+    }
+
+    /// React to changes made outside the app (an editor, a terminal).
+    fn poll_watch(&mut self, ctx: &egui::Context) {
+        if !gitgoing_core::watch::enabled() {
+            self.watch = None;
+            self.watch_failed = false;
+            return;
+        }
+        if self.watch.is_none() && !self.watch_failed {
+            let Some(path) = self.repo_path() else { return };
+            let repaint = ctx.clone();
+            self.watch = Watch::start(&path, move || repaint.request_repaint());
+            self.watch_failed = self.watch.is_none();
+        }
+        let Some(w) = &self.watch else { return };
+        // Our own operation or load is in flight and will reload by itself; the flags wait.
+        if self.op_rx.is_some() || self.repo.as_ref().is_none_or(|l| l.loading) {
+            return;
+        }
+        let changed = w.take();
+        if changed.refs {
+            self.reload(ctx);
+        } else if changed.work {
+            if let Some(c) = self.repo.as_mut().and_then(|l| l.changes.as_mut()) {
+                c.refresh(ctx);
+            }
+        }
     }
 
     fn background_updates(&mut self, ctx: &egui::Context, regained: bool) {
         let mut reload = None;
         let mut file_req: Option<FileRequest> = None;
+        let mut stash_req: Option<Vec<String>> = None;
         if let Some(l) = &mut self.repo {
             file_req = file_req.or_else(|| l.detail.as_mut().and_then(|d| d.file_request.take()));
             if let Some(c) = &mut l.changes {
@@ -803,6 +871,7 @@ impl RepoTab {
                     c.refresh(ctx);
                 }
                 file_req = file_req.or(c.take_file_request());
+                stash_req = c.take_stash_request();
                 if let Some(path) = c.take_resolve_request() {
                     match ConflictEditor::open(c.repo(), &path) {
                         Ok(ed) => self.conflict = Some(ed),
@@ -835,6 +904,9 @@ impl RepoTab {
         }
         if let Some(req) = file_req {
             self.file_action(ctx, req);
+        }
+        if let Some(paths) = stash_req {
+            self.stash_dlg = Some(StashDlg::new(StashScope::Paths(paths)));
         }
         if reload.is_some() {
             self.reload(ctx);
@@ -1079,7 +1151,7 @@ impl RepoTab {
                 None => {}
             }
             match stash_op {
-                Some(StashOp::Save) => self.run_op(ctx, "Stash", stash::save),
+                Some(StashOp::Save) => self.stash_dlg = Some(StashDlg::new(StashScope::All)),
                 Some(StashOp::Apply(i)) => self.run_op(ctx, "Apply stash", move |p| stash::apply(p, i)),
                 Some(StashOp::Pop(i)) => self.run_op(ctx, "Pop stash", move |p| stash::pop(p, i)),
                 None => {}

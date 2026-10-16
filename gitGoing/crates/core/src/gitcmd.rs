@@ -107,6 +107,16 @@ fn describe(cmd: &Command) -> (String, String) {
 
 /// Run a prepared command and turn failure into a readable message.
 pub fn run_cmd(cmd: &mut Command, what: &str) -> Result<String, String> {
+    run_inner(cmd, what, false)
+}
+
+/// Like [`run_cmd`], but a failure reports both standard error and standard
+/// output. Hooks may write their complaint to either.
+pub fn run_cmd_combined(cmd: &mut Command, what: &str) -> Result<String, String> {
+    run_inner(cmd, what, true)
+}
+
+fn run_inner(cmd: &mut Command, what: &str, combine: bool) -> Result<String, String> {
     let (repo, display) = describe(cmd);
     crate::gitlog::push(&repo, crate::gitlog::Kind::Cmd, display);
     let started = std::time::Instant::now();
@@ -135,9 +145,12 @@ pub fn run_cmd(cmd: &mut Command, what: &str) -> Result<String, String> {
     }
     let stderr = String::from_utf8_lossy(&out.stderr);
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let text = if stderr.trim().is_empty() { stdout } else { stderr };
-    let text = text.trim();
-    Err(if text.is_empty() { format!("git {what} failed ({})", out.status) } else { text.to_owned() })
+    let text = match (stderr.trim().is_empty(), stdout.trim().is_empty()) {
+        (true, _) => stdout.trim().to_owned(),
+        (false, false) if combine => format!("{}\n{}", stdout.trim(), stderr.trim()),
+        _ => stderr.trim().to_owned(),
+    };
+    Err(if text.is_empty() { format!("git {what} failed ({})", out.status) } else { text })
 }
 
 #[cfg(test)]

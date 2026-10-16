@@ -46,7 +46,7 @@ pub fn merge(repo_path: &Path, name: &str) -> Result<MergeOutcome, git2::Error> 
 pub(crate) fn merge_reference(repo: &Repository, reference: &Reference) -> Result<MergeOutcome, git2::Error> {
     ensure_clean_state(repo)?;
     let head = repo.head().map_err(|_| err("cannot merge before the first commit"))?;
-    let head_commit = head.peel_to_commit()?;
+    head.peel_to_commit()?;
 
     // Aborting a merge resets the working tree, so never start one on top of
     // uncommitted work to tracked files.
@@ -89,7 +89,7 @@ pub(crate) fn merge_reference(repo: &Repository, reference: &Reference) -> Resul
     checkout.safe().allow_conflicts(true).conflict_style_merge(true);
     repo.merge(&[&theirs], None, Some(&mut checkout))?;
 
-    let mut index = repo.index()?;
+    let index = repo.index()?;
     if index.has_conflicts() {
         let n = index.conflicts()?.count();
         // Pre-fill the message the user will commit with.
@@ -97,11 +97,11 @@ pub(crate) fn merge_reference(repo: &Repository, reference: &Reference) -> Resul
         return Ok(MergeOutcome::Conflicts(n));
     }
 
-    let sig = repo.signature()?;
-    let tree = repo.find_tree(index.write_tree()?)?;
-    let their_commit = repo.find_commit(theirs.id())?;
-    repo.commit(Some("HEAD"), &sig, &sig, &msg, &tree, &[&head_commit, &their_commit])?;
-    repo.cleanup_state()?;
+    // Conclude with the system git so commit hooks and signing apply. If a hook
+    // refuses, the merge stays in progress with this message ready to commit.
+    std::fs::write(repo.path().join("MERGE_MSG"), format!("{msg}\n")).map_err(|e| err(e.to_string()))?;
+    repo.signature()?;
+    crate::status::git_commit(repo.workdir().unwrap_or_else(|| repo.path()), &msg, false, true)?;
     Ok(MergeOutcome::Merged)
 }
 

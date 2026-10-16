@@ -145,7 +145,7 @@ impl RepoTab {
                     .as_ref()
                     .and_then(|l| l.info.as_ref())
                     .is_some_and(|i| !i.stashes.is_empty());
-                if icons::tool_button(ui, "Stash", Icon::Stash, can).on_hover_text("Stash all changes, including untracked files").clicked() {
+                if icons::tool_button(ui, "Stash", Icon::Stash, can).on_hover_text("Stash changes…").clicked() {
                     out.stash = Some(StashOp::Save);
                 }
                 if icons::tool_button(ui, "Pop", Icon::Pop, can && has_stash).on_hover_text("Apply and remove the latest stash").clicked() {

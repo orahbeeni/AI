@@ -127,56 +127,52 @@ pub fn unstage(repo_path: &Path, paths: &[String]) -> Result<(), git2::Error> {
     repo.reset_default(head.as_ref(), paths.iter().map(Path::new))
 }
 
+/// Create a commit from the index with the system `git`, so the repository's
+/// hooks (`pre-commit`, `commit-msg`, ...) run and `commit.gpgsign` is honoured.
+/// A merge, cherry-pick or revert in progress is concluded by the same command.
+///
+/// `allow_empty` is for those operations, where the result may legitimately equal HEAD.
+pub(crate) fn git_commit(repo_path: &Path, message: &str, amend: bool, allow_empty: bool) -> Result<Oid, git2::Error> {
+    let mut cmd = crate::gitcmd::command(Some(repo_path));
+    cmd.arg("commit");
+    if amend {
+        cmd.arg("--amend");
+    }
+    if allow_empty {
+        cmd.arg("--allow-empty");
+    }
+    cmd.arg(format!("--message={message}"));
+    #[cfg(test)]
+    {
+        // Tests must not depend on the developer's own git configuration (e.g. commit.gpgsign).
+        cmd.env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" }).env("GIT_CONFIG_NOSYSTEM", "1");
+    }
+    crate::gitcmd::run_cmd_combined(&mut cmd, "commit").map_err(|e| git2::Error::from_str(&e))?;
+    Repository::discover(repo_path)?.head()?.peel_to_commit().map(|c| c.id())
+}
+
 pub fn commit(repo_path: &Path, message: &str) -> Result<Oid, git2::Error> {
-    crate::gitlog::equiv(repo_path, format!("git commit -m {}", crate::gitlog::quote(message.lines().next().unwrap_or(""))));
     let message = message.trim();
     if message.is_empty() {
         return Err(git2::Error::from_str("commit message is empty"));
     }
-    let mut repo = Repository::discover(repo_path)?;
+    let repo = Repository::discover(repo_path)?;
     if crate::rebase::in_progress(&repo) {
         return Err(git2::Error::from_str("a rebase is in progress: continue or abort it instead of committing"));
     }
-    let sig = repo.signature()?;
+    repo.signature()?; // fail early, and in plain words, when user.name / user.email are missing
     let mut index = repo.index()?;
     if index.has_conflicts() {
         return Err(git2::Error::from_str("resolve all conflicts before committing"));
     }
-    let merging = repo.state() == git2::RepositoryState::Merge;
     let in_op = repo.state() != git2::RepositoryState::Clean;
-    let mut merge_heads = Vec::new();
-    if merging {
-        repo.mergehead_foreach(|oid| {
-            merge_heads.push(*oid);
-            true
-        })?;
-    }
-    let author_commit = if repo.state() == git2::RepositoryState::CherryPick {
-        repo.revparse_single("CHERRY_PICK_HEAD").ok().and_then(|o| o.peel_to_commit().ok())
-    } else {
-        None
-    };
     let tree_id = index.write_tree()?;
-    let tree = repo.find_tree(tree_id)?;
-    let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
-    let nothing = !in_op && match &parent {
-        Some(p) => p.tree_id() == tree_id,
-        None => tree.is_empty(),
-    };
-    if nothing {
+    let parent_tree = repo.head().ok().and_then(|h| h.peel_to_commit().ok()).map(|p| p.tree_id());
+    let empty_tree = parent_tree.is_none() && repo.find_tree(tree_id)?.is_empty();
+    if !in_op && (parent_tree == Some(tree_id) || empty_tree) {
         return Err(git2::Error::from_str("nothing to commit"));
     }
-    let merge_commits = merge_heads
-        .iter()
-        .map(|o| repo.find_commit(*o))
-        .collect::<Result<Vec<_>, _>>()?;
-    let parents: Vec<_> = parent.iter().chain(merge_commits.iter()).collect();
-    let author = author_commit.as_ref().map_or_else(|| sig.clone(), |c| c.author().to_owned());
-    let id = repo.commit(Some("HEAD"), &author, &sig, message, &tree, &parents)?;
-    if in_op {
-        repo.cleanup_state()?;
-    }
-    Ok(id)
+    git_commit(repo_path, message, false, in_op)
 }
 
 /// Stage a single hunk (by index, as numbered in [`workdir_diff`]) of a modified file.
@@ -382,24 +378,20 @@ pub fn discard_hunk(repo_path: &Path, path: &str, hunk: usize) -> Result<(), git
 /// Replace the HEAD commit with one that has the current index as its tree.
 /// The author, parents and (unless `message` is given) message are kept.
 pub fn amend(repo_path: &Path, message: &str) -> Result<Oid, git2::Error> {
-    crate::gitlog::equiv(repo_path, format!("git commit --amend -m {}", crate::gitlog::quote(message.lines().next().unwrap_or(""))));
     let message = message.trim();
     if message.is_empty() {
         return Err(git2::Error::from_str("commit message is empty"));
     }
     let repo = Repository::discover(repo_path)?;
     crate::merge::ensure_clean_state(&repo)?;
-    let sig = repo.signature()?;
-    let mut index = repo.index()?;
-    if index.has_conflicts() {
+    repo.signature()?;
+    if repo.index()?.has_conflicts() {
         return Err(git2::Error::from_str("resolve all conflicts before committing"));
     }
-    let head = repo
-        .head()
+    repo.head()
         .and_then(|h| h.peel_to_commit())
         .map_err(|_| git2::Error::from_str("there is no commit to amend"))?;
-    let tree = repo.find_tree(index.write_tree()?)?;
-    head.amend(Some("HEAD"), None, Some(&sig), None, Some(message), Some(&tree))
+    git_commit(repo_path, message, true, false)
 }
 
 /// Contents of a conflicted file (with its conflict markers) as plain lines.
@@ -637,7 +629,7 @@ mod tests {
         let before = repo.head().unwrap().peel_to_commit().unwrap();
         let id = amend(p, "reworded").unwrap();
         let after = repo.find_commit(id).unwrap();
-        assert_eq!(after.message(), Some("reworded"));
+        assert_eq!(after.message(), Some("reworded\n"));
         assert_eq!(after.tree_id(), before.tree_id());
         assert_eq!(after.parent_count(), before.parent_count());
         assert_eq!(status(p).unwrap().head_message.as_deref(), Some("reworded"));
@@ -651,4 +643,81 @@ mod tests {
         stage(p, &["a.txt".into()]).unwrap();
         assert_eq!(status(p).unwrap().staged[0].kind, ChangeKind::Deleted);
     }
+    #[cfg(unix)]
+    mod hooks {
+        use super::*;
+        use std::os::unix::fs::PermissionsExt;
+
+        fn script(path: std::path::PathBuf, body: &str) -> std::path::PathBuf {
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        }
+
+        fn repo_with_staged_file() -> (tempfile::TempDir, Repository) {
+            let dir = tempfile::tempdir().unwrap();
+            let repo = Repository::init(dir.path()).unwrap();
+            let mut cfg = repo.config().unwrap();
+            cfg.set_str("user.name", "T").unwrap();
+            cfg.set_str("user.email", "t@example.com").unwrap();
+            cfg.set_bool("commit.gpgsign", false).unwrap();
+            std::fs::write(dir.path().join("f"), "x\n").unwrap();
+            stage(dir.path(), &["f".into()]).unwrap();
+            (dir, repo)
+        }
+
+        #[test]
+        fn pre_commit_hook_can_refuse_a_commit() {
+            let (dir, repo) = repo_with_staged_file();
+            script(repo.path().join("hooks/pre-commit"), "echo 'lint failed: no tabs' >&2\nexit 1");
+            let e = commit(dir.path(), "msg").unwrap_err();
+            assert!(e.message().contains("lint failed: no tabs"), "{}", e.message());
+            assert!(repo.head().is_err(), "nothing was committed");
+        }
+
+        #[test]
+        fn commit_msg_hook_runs_and_may_rewrite_the_message() {
+            let (dir, repo) = repo_with_staged_file();
+            script(repo.path().join("hooks/commit-msg"), "echo 'Signed-off: hook' >> \"$1\"");
+            let id = commit(dir.path(), "subject").unwrap();
+            let msg = repo.find_commit(id).unwrap().message().unwrap().to_owned();
+            assert!(msg.starts_with("subject") && msg.contains("Signed-off: hook"), "{msg}");
+        }
+
+        #[test]
+        fn commit_gpgsign_is_honoured() {
+            let (dir, repo) = repo_with_staged_file();
+            // A stand-in for gpg that "signs" anything.
+            let gpg = script(
+                dir.path().join("fake-gpg"),
+                "cat >/dev/null\necho '[GNUPG:] SIG_CREATED D 1 8 00 0 ABCD' >&2\nprintf -- '-----BEGIN PGP SIGNATURE-----\\n\\nZmFrZQ==\\n-----END PGP SIGNATURE-----\\n'",
+            );
+            let mut cfg = repo.config().unwrap();
+            cfg.set_bool("commit.gpgsign", true).unwrap();
+            cfg.set_str("user.signingkey", "ABCD").unwrap();
+            cfg.set_str("gpg.program", gpg.to_str().unwrap()).unwrap();
+            let id = commit(dir.path(), "signed").unwrap();
+            let (sig, _) = repo.extract_signature(&id, None).expect("commit carries a signature");
+            assert!(sig.as_str().unwrap().contains("BEGIN PGP SIGNATURE"));
+        }
+
+        #[test]
+        fn amend_runs_hooks_and_keeps_the_author() {
+            let (dir, repo) = repo_with_staged_file();
+            let first = commit(dir.path(), "first").unwrap();
+            repo.config().unwrap().set_str("user.name", "Someone Else").unwrap();
+            script(repo.path().join("hooks/pre-commit"), "exit 1");
+            std::fs::write(dir.path().join("g"), "y\n").unwrap();
+            stage(dir.path(), &["g".into()]).unwrap();
+            assert!(amend(dir.path(), "second").is_err());
+            std::fs::remove_file(repo.path().join("hooks/pre-commit")).unwrap();
+            let id = amend(dir.path(), "second").unwrap();
+            let c = repo.find_commit(id).unwrap();
+            assert_ne!(id, first);
+            assert_eq!(c.summary(), Some("second"));
+            assert_eq!(c.author().name(), Some("T"), "amend keeps the original author");
+            assert_eq!(c.committer().name(), Some("Someone Else"));
+        }
+    }
+
 }

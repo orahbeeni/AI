@@ -1,7 +1,7 @@
 //! Operations on a chosen commit: cherry-pick, revert, reset, tag, detached checkout.
 
 use git2::{
-    build::CheckoutBuilder, CherrypickOptions, Commit, ObjectType, Oid, Repository, ResetType,
+    build::CheckoutBuilder, CherrypickOptions, ObjectType, Oid, Repository, ResetType,
     RevertOptions, StatusOptions,
 };
 use std::path::Path;
@@ -40,7 +40,7 @@ fn ensure_clean_tree(repo: &Repository) -> Result<(), git2::Error> {
     Ok(())
 }
 
-fn finish(repo: &Repository, author_of: &Commit, message: &str) -> Result<Applied, git2::Error> {
+fn finish(repo: &Repository, message: &str) -> Result<Applied, git2::Error> {
     let mut index = repo.index()?;
     if index.has_conflicts() {
         return Ok(Applied::Conflicts(index.conflicts()?.count()));
@@ -51,10 +51,9 @@ fn finish(repo: &Repository, author_of: &Commit, message: &str) -> Result<Applie
         repo.cleanup_state()?;
         return Err(err("nothing to commit: these changes are already applied"));
     }
-    let tree = repo.find_tree(tree_id)?;
-    let committer = repo.signature()?;
-    repo.commit(Some("HEAD"), &author_of.author(), &committer, message, &tree, &[&head])?;
-    repo.cleanup_state()?;
+    // The system git keeps the picked commit's author (from CHERRY_PICK_HEAD) and runs hooks and signing.
+    repo.signature()?;
+    crate::status::git_commit(repo.workdir().unwrap_or_else(|| repo.path()), message, false, true)?;
     Ok(Applied::Committed)
 }
 
@@ -71,7 +70,7 @@ pub fn cherry_pick(repo_path: &Path, id: Oid) -> Result<Applied, git2::Error> {
     checkout.safe().allow_conflicts(true).conflict_style_merge(true);
     opts.checkout_builder(checkout);
     repo.cherrypick(&commit, Some(&mut opts))?;
-    finish(&repo, &commit, commit.message().unwrap_or(""))
+    finish(&repo, commit.message().unwrap_or(""))
 }
 
 pub fn revert(repo_path: &Path, id: Oid) -> Result<Applied, git2::Error> {
@@ -92,8 +91,6 @@ pub fn revert(repo_path: &Path, id: Oid) -> Result<Applied, git2::Error> {
         commit.summary().unwrap_or(""),
         commit.id()
     );
-    // The reverting commit is authored by the current user.
-    let me = repo.signature()?;
     let mut index = repo.index()?;
     if index.has_conflicts() {
         return Ok(Applied::Conflicts(index.conflicts()?.count()));
@@ -104,9 +101,8 @@ pub fn revert(repo_path: &Path, id: Oid) -> Result<Applied, git2::Error> {
         repo.cleanup_state()?;
         return Err(err("nothing to commit: this commit is already reverted"));
     }
-    let tree = repo.find_tree(tree_id)?;
-    repo.commit(Some("HEAD"), &me, &me, &msg, &tree, &[&head])?;
-    repo.cleanup_state()?;
+    repo.signature()?;
+    crate::status::git_commit(repo.workdir().unwrap_or_else(|| repo.path()), &msg, false, true)?;
     Ok(Applied::Committed)
 }
 
