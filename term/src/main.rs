@@ -66,6 +66,16 @@ fn main() -> eframe::Result {
         .with_title("term")
         .with_app_id("term")
         .with_icon(icon());
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    #[allow(unused_mut)]
+    let mut options = eframe::NativeOptions { viewport, ..Default::default() };
+    // macOS: the standard app menu quits at once on ⌘Q. Without it, ⌘Q reaches term, which asks
+    // first (⌘H and ⌘M, also from that menu, are handled by term too).
+    #[cfg(target_os = "macos")]
+    {
+        options.event_loop_builder = Some(Box::new(|b| {
+            use winit::platform::macos::EventLoopBuilderExtMacOS;
+            b.with_default_menu(false);
+        }));
+    }
     eframe::run_native("term", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, args)))))
 }

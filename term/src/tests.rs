@@ -629,3 +629,46 @@ fn export_and_import_round_trip() {
     let _ = std::fs::remove_dir_all(&dir);
     unsafe { std::env::remove_var("TERM_CONFIG_DIR") };
 }
+
+/// Closing the window or quitting asks first; Esc cancels, Enter (or the quit key again) quits.
+#[test]
+#[ignore] // opens a real shell and renders offscreen; run with --ignored
+fn quit_asks_first() {
+    use eframe::egui::{Key, ViewportEvent, ViewportId};
+
+    let _guard = CONFIG_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let cfg = std::env::temp_dir().join(format!("term-quit-{}", std::process::id()));
+    // SAFETY: tests touching TERM_CONFIG_DIR hold CONFIG_DIR_LOCK.
+    unsafe { std::env::set_var("TERM_CONFIG_DIR", &cfg) };
+    let mut h = egui_kittest::Harness::builder()
+        .with_size([1100.0, 640.0])
+        .build_eframe(|cc| crate::app::App::new(cc, crate::Args { layout: None, run: false, fresh: true, dir: Some("/tmp".into()) }));
+    h.run_steps(2);
+    let key = |h: &mut egui_kittest::Harness<'_, crate::app::App>, key: Key| {
+        h.state_mut().script_step(&format!("key:{}", key.name()));
+        h.run_steps(2);
+    };
+
+    // The window's close button.
+    h.input_mut().viewports.entry(ViewportId::ROOT).or_default().events.push(ViewportEvent::Close);
+    h.step();
+    // The harness keeps viewport events between frames; a real close request arrives once.
+    h.input_mut().viewports.entry(ViewportId::ROOT).or_default().events.clear();
+    h.run_steps(2);
+    assert_eq!(h.state().quit_state(), (true, false), "closing the window asks first and stays open");
+    if let Ok(dir) = std::env::var("TERM_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/quit.png")).unwrap();
+    }
+    key(&mut h, Key::Escape);
+    assert_eq!(h.state().quit_state(), (false, false), "Esc cancels");
+
+    // Closing the last tab or terminal asks too, and Enter confirms.
+    h.state_mut().script_step("close_tab");
+    h.run_steps(1);
+    assert_eq!(h.state().quit_state(), (true, false));
+    key(&mut h, Key::Enter);
+    assert!(h.state().quit_state().1, "Enter quits");
+
+    let _ = std::fs::remove_dir_all(&cfg);
+    unsafe { std::env::remove_var("TERM_CONFIG_DIR") };
+}

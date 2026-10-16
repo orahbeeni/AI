@@ -238,6 +238,15 @@ impl Theme {
     }
 }
 
+/// When quitting asks for confirmation.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub enum QuitConfirm {
+    Always,
+    /// Only while a terminal is running something other than its shell.
+    WhenRunning,
+    Never,
+}
+
 /// What a tab shows (a name given with "Rename tab" always wins).
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub enum TabTitle {
@@ -296,6 +305,8 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("font_reset", "Reset font size"),
     ("fullscreen", "Toggle full screen"),
     ("preferences", "Preferences"),
+    ("hide", "Hide term (macOS)"),
+    ("minimize", "Minimise window"),
     ("quit", "Quit"),
 ];
 
@@ -348,6 +359,8 @@ fn default_keybindings() -> BTreeMap<String, Vec<String>> {
     b("fullscreen", &["F11"], &["Cmd+Ctrl+F"]);
     b("preferences", &["Ctrl+Shift+Comma"], &["Cmd+Comma"]);
     b("quit", &["Ctrl+Shift+Q"], &["Cmd+Q"]);
+    b("hide", &[], &["Cmd+H"]);
+    b("minimize", &[], &["Cmd+M"]);
     m
 }
 
@@ -432,7 +445,7 @@ pub struct Settings {
     pub startup_picker: bool,
     /// Run a layout's auto-run commands when opening it from the list.
     pub launcher_run: bool,
-    pub confirm_quit: bool,
+    pub quit_confirm: QuitConfirm,
     pub keybindings: BTreeMap<String, Vec<String>>,
 }
 
@@ -468,7 +481,7 @@ impl Default for Settings {
             startup_layout: String::new(),
             startup_picker: true,
             launcher_run: true,
-            confirm_quit: false,
+            quit_confirm: QuitConfirm::Always,
             keybindings: default_keybindings(),
         }
     }
@@ -532,8 +545,10 @@ impl Settings {
 
     pub fn shortcut_label(&self, action: &str) -> String {
         let keys = self.keybindings.get(action).map(|v| v.as_slice()).unwrap_or(&[]);
-        let usable = keys.iter().find(|k| cfg!(target_os = "macos") || !k.to_ascii_lowercase().contains("cmd"));
-        usable.cloned().unwrap_or_default()
+        let has_cmd = |k: &&String| k.to_ascii_lowercase().contains("cmd");
+        // On macOS show the ⌘ shortcut when there is one; elsewhere ⌘ shortcuts do not apply.
+        let pick = if cfg!(target_os = "macos") { keys.iter().find(has_cmd).or(keys.first()) } else { keys.iter().find(|k| !has_cmd(k)) };
+        pick.cloned().unwrap_or_default()
     }
 }
 

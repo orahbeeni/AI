@@ -13,7 +13,7 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use eframe::egui::{self, Align, Color32, CursorIcon, Key, Layout, Modifiers, Rect, RichText, Sense, Stroke, UiBuilder, pos2, vec2};
 
 use crate::Args;
-use crate::config::{Combo, Rgb, Settings, TabTitle, Theme};
+use crate::config::{Combo, QuitConfirm, Rgb, Settings, TabTitle, Theme};
 use crate::input;
 use crate::layout::{self, Dir, Nav, Node};
 use crate::pane::{Pane, SavedCommand, TermSize, all_text};
@@ -327,6 +327,25 @@ impl App {
         }
     }
 
+    /// Whether quitting now should ask first.
+    fn quit_needs_confirm(&self) -> bool {
+        !self.tabs.is_empty()
+            && match self.s.quit_confirm {
+                QuitConfirm::Always => true,
+                QuitConfirm::WhenRunning => self.running_jobs() > 0,
+                QuitConfirm::Never => false,
+            }
+    }
+
+    /// Quit, after confirmation when the settings ask for it.
+    fn request_quit(&mut self) {
+        if self.quit_needs_confirm() {
+            self.dlg.confirm_quit = true;
+        } else {
+            self.close_window = true;
+        }
+    }
+
     fn take_id(&mut self) -> u64 {
         self.next_id += 1;
         self.next_id - 1
@@ -476,6 +495,16 @@ impl App {
     }
 
     fn on_key(&mut self, key: Key, m: Modifiers, paste: Option<String>) {
+        if self.dlg.confirm_quit {
+            // The quit question takes the keyboard: Enter (or the quit shortcut again) quits, Esc cancels.
+            let quit_again = self.combos.iter().any(|(a, c)| a == "quit" && c.matches(key, m));
+            if quit_again || (key == Key::Enter && m.is_none()) {
+                self.close_window = true;
+            } else if key == Key::Escape {
+                self.dlg.confirm_quit = false;
+            }
+            return;
+        }
         if key == Key::Escape && self.dlg.find.is_some() && m.is_none() {
             self.dlg.find = None;
             return;
@@ -584,11 +613,16 @@ impl App {
             "split_horizontal" => self.split(Dir::Col),
             "split_vertical" => self.split(Dir::Row),
             "close_pane" => {
-                if let Some(id) = fid {
+                // Closing the very last terminal would quit, so it asks like quitting does.
+                let last = self.tabs.len() == 1 && self.tabs[0].root.leaves().len() == 1;
+                if last {
+                    self.request_quit();
+                } else if let Some(id) = fid {
                     self.remove_pane(id);
                 }
             }
             "new_tab" => self.new_tab(None),
+            "close_tab" if self.tabs.len() == 1 => self.request_quit(),
             "close_tab" => self.close_tab(self.active),
             "next_tab" if !self.tabs.is_empty() => self.active = (self.active + 1) % self.tabs.len(),
             "prev_tab" if !self.tabs.is_empty() => self.active = (self.active + self.tabs.len() - 1) % self.tabs.len(),
@@ -693,7 +727,9 @@ impl App {
             "about" => self.dlg.about = true,
             "export" => self.export_settings(),
             "import" => self.pick_import(),
-            "quit" => self.close_window = true,
+            "quit" => self.request_quit(),
+            "minimize" => self.ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+            "hide" => hide_app(),
             _ => {}
         }
     }
@@ -764,6 +800,7 @@ impl App {
                     self.active = to;
                 }
                 Act::MoveTab(..) => {}
+                Act::CloseTab(_) if self.tabs.len() == 1 => self.request_quit(),
                 Act::CloseTab(i) => self.close_tab(i),
                 Act::RenameTab(i) => {
                     let title = self.tab_title(i);
@@ -1472,6 +1509,14 @@ fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
     Rgb(f(a.0, b.0), f(a.1, b.1), f(a.2, b.2))
 }
 
+/// macOS ⌘H: hide the whole app, as the standard app menu would.
+fn hide_app() {
+    #[cfg(target_os = "macos")]
+    if let Some(mtm) = objc2::MainThreadMarker::new() {
+        objc2_app_kit::NSApplication::sharedApplication(mtm).hide(None);
+    }
+}
+
 /// Drop leaves whose terminal failed to start.
 fn prune(n: Node<Option<u64>>) -> Option<Node<u64>> {
     match n {
@@ -1515,9 +1560,10 @@ impl eframe::App for App {
         {
             self.window_size = Some([r.width(), r.height()]);
         }
-        if ctx.input(|i| i.viewport().close_requested()) && !self.close_window && self.dlg.wants_confirm_quit(&self.s, self.running_jobs())
-        {
+        // The window's close button (or the OS) asks to close: confirm first unless already confirmed.
+        if ctx.input(|i| i.viewport().close_requested()) && !self.close_window && self.quit_needs_confirm() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.dlg.confirm_quit = true;
         }
 
         self.housekeeping();
@@ -1614,6 +1660,12 @@ impl App {
 
 #[cfg(any(test, debug_assertions))]
 impl App {
+    /// (asking whether to quit, about to close the window)
+    #[cfg(test)]
+    pub(crate) fn quit_state(&self) -> (bool, bool) {
+        (self.dlg.confirm_quit, self.close_window)
+    }
+
     #[cfg(test)]
     pub(crate) fn save_dialog_only_tab(&self) -> Option<bool> {
         self.dlg.save_layout.as_ref().map(|s| s.only_tab)
@@ -1641,6 +1693,13 @@ impl App {
             match crate::transfer::read(std::path::Path::new(path)) {
                 Ok(b) => self.dlg.open_import(path.into(), b),
                 Err(e) => self.error = Some(e),
+            }
+        } else if let Some(name) = step.strip_prefix("key:") {
+            // A key press as the keyboard hook would deliver it (the test harness skips that hook).
+            if let Some(key) = Key::from_name(name) {
+                for pressed in [true, false] {
+                    self.keys.push(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE });
+                }
             }
         } else if step == "menu_preview" {
             self.preview_menu = true;

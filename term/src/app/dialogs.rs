@@ -9,7 +9,7 @@ use alacritty_terminal::term::search::{Match, RegexSearch};
 use eframe::egui::{self, Align2, Color32, Key, Rect, RichText, Sense, pos2, vec2};
 
 use super::{Act, App};
-use crate::config::{ACTIONS, Combo, CursorKind, Rgb, Settings, TabTitle, Theme, known_fonts};
+use crate::config::{ACTIONS, Combo, CursorKind, QuitConfirm, Rgb, Settings, TabTitle, Theme, known_fonts};
 use crate::pane::SavedCommand;
 use crate::session;
 
@@ -86,7 +86,7 @@ pub struct Dialogs {
     pub find: Option<Find>,
     pub import: Option<ImportDlg>,
     pub about: bool,
-    confirm_quit: bool,
+    pub confirm_quit: bool,
     confirm_delete: Option<String>,
 }
 
@@ -154,15 +154,6 @@ impl Dialogs {
             p.page = PrefsPage::Colours;
             p.draft.theme = t;
         }
-    }
-
-    /// Whether closing the window should wait for confirmation.
-    pub fn wants_confirm_quit(&mut self, s: &Settings, running: usize) -> bool {
-        if s.confirm_quit && running > 0 && !self.confirm_quit {
-            self.confirm_quit = true;
-            return true;
-        }
-        false
     }
 }
 
@@ -354,7 +345,19 @@ impl App {
                     if cfg!(target_os = "macos") {
                         ui.checkbox(&mut d.option_as_meta, "Option key acts as Meta (Alt)");
                     }
-                    ui.checkbox(&mut d.confirm_quit, "Ask before quitting while programs are running");
+                    ui.horizontal(|ui| {
+                        ui.label("Ask before quitting");
+                        let label = |q: QuitConfirm| match q {
+                            QuitConfirm::Always => "Always",
+                            QuitConfirm::WhenRunning => "Only while a program is running",
+                            QuitConfirm::Never => "Never",
+                        };
+                        egui::ComboBox::from_id_salt("quit_confirm").selected_text(label(d.quit_confirm)).show_ui(ui, |ui| {
+                            for q in [QuitConfirm::Always, QuitConfirm::WhenRunning, QuitConfirm::Never] {
+                                ui.selectable_value(&mut d.quit_confirm, q, label(q));
+                            }
+                        });
+                    });
                 }
                 PrefsPage::Appearance => {
                     egui::Grid::new("appearance").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
@@ -1321,17 +1324,50 @@ impl App {
         }
         if self.dlg.confirm_quit {
             let running = self.running_jobs();
-            egui::Window::new("Quit term?").collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-                ui.label(format!("{running} terminal(s) are still running a program. Quit anyway?"));
-                ui.horizontal(|ui| {
-                    if ui.button("Quit").clicked() {
-                        self.close_window = true;
+            let terminals: usize = self.tabs.iter().map(|t| t.root.leaves().len()).sum();
+            let accent = self.s.theme.accent;
+            let on_accent = if accent.luminance() > 0.55 { Color32::BLACK } else { Color32::WHITE };
+            let quit_key = self.s.shortcut_label("quit");
+            let mut never = self.s.quit_confirm == QuitConfirm::Never;
+            egui::Window::new("Quit term?")
+                .collapsible(false)
+                .resizable(false)
+                .min_width(360.0)
+                .anchor(Align2::CENTER_CENTER, [0.0, -40.0])
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    let what = if terminals == 1 { "the terminal".to_string() } else { format!("all {terminals} terminals") };
+                    ui.label(format!("This closes {what} in this window."));
+                    if running > 0 {
+                        let r = if running == 1 { "1 terminal is".to_string() } else { format!("{running} terminals are") };
+                        ui.colored_label(Color32::from_rgb(230, 150, 50), format!("{r} still running a program (e.g. a server)."));
                     }
-                    if ui.button("Cancel").clicked() {
-                        self.dlg.confirm_quit = false;
-                    }
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("Your tabs, splits and folders are restored next time.").weak());
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        let quit =
+                            egui::Button::new(RichText::new("Quit").color(on_accent)).fill(accent.color()).min_size(vec2(72.0, 26.0));
+                        if ui.add(quit).clicked() {
+                            self.close_window = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.dlg.confirm_quit = false;
+                        }
+                        let hint = if quit_key.is_empty() {
+                            "Enter quits, Esc cancels".to_string()
+                        } else {
+                            format!("Enter or {quit_key} quits, Esc cancels")
+                        };
+                        ui.label(RichText::new(hint).weak().small());
+                    });
+                    ui.add_space(4.0);
+                    ui.checkbox(&mut never, "Don't ask again").on_hover_text("Change this later in Preferences → General");
                 });
-            });
+            if never != (self.s.quit_confirm == QuitConfirm::Never) {
+                self.s.quit_confirm = if never { QuitConfirm::Never } else { QuitConfirm::Always };
+                self.s.save();
+            }
         }
     }
 }
