@@ -17,6 +17,13 @@ pub fn set_defaults(split: bool, ignore_ws: bool) {
     DEFAULT_IGNORE_WS.store(ignore_ws, Ordering::Relaxed);
 }
 
+/// A see-through colour that blends in plain sRGB. `Color32::from_rgba_unmultiplied`
+/// premultiplies in linear space, which makes low alphas far stronger than they read.
+fn tint(r: u8, g: u8, b: u8, a: u8) -> Color32 {
+    let m = |c: u8| (c as u16 * a as u16 / 255) as u8;
+    Color32::from_rgba_premultiplied(m(r), m(g), m(b), a)
+}
+
 impl Default for DiffOpts {
     fn default() -> Self {
         DiffOpts {
@@ -332,10 +339,10 @@ fn body(
     let weak = ui.visuals().weak_text_color();
     // Muted tints like GitKraken's: dark green / dark red rows, with a stronger
     // tint on the exact characters that changed.
-    let add_bg = Color32::from_rgba_unmultiplied(0x4c, 0xaf, 0x50, 46);
-    let del_bg = Color32::from_rgba_unmultiplied(0xe5, 0x53, 0x4b, 40);
-    let add_hi = Color32::from_rgba_unmultiplied(0x4c, 0xaf, 0x50, 90);
-    let del_hi = Color32::from_rgba_unmultiplied(0xe5, 0x53, 0x4b, 90);
+    let add_bg = tint(0x4c, 0xaf, 0x50, 30);
+    let del_bg = tint(0xe5, 0x53, 0x4b, 30);
+    let add_hi = tint(0x4c, 0xaf, 0x50, 80);
+    let del_hi = tint(0xe5, 0x53, 0x4b, 80);
     let empty_bg = Color32::from_rgba_unmultiplied(128, 128, 128, 14);
     let line_col = Color32::from_rgba_unmultiplied(128, 128, 128, 80);
     let sign_green = Color32::from_rgb(0x4c, 0xaf, 0x50);
@@ -433,13 +440,13 @@ fn body(
         }
         out.join("\n")
     };
-    let text_hi = Color32::from_rgba_unmultiplied(0x4e, 0xa8, 0xde, 110);
+    let text_hi = tint(0x4e, 0xa8, 0xde, 90);
     let toggle = |sel: &mut HashSet<(u32, u32)>, idx: usize| {
         if matches!(lines[idx].kind, LineKind::Add | LineKind::Del) && !sel.remove(&line_ids[idx]) {
             sel.insert(line_ids[idx]);
         }
     };
-    let selection = ui.visuals().selection.bg_fill.gamma_multiply(0.7);
+    let selection = tint(0x4e, 0xa8, 0xde, 40);
 
     let mut clicked = None;
     let mut discard = None;
