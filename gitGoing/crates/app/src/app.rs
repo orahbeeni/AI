@@ -280,6 +280,18 @@ struct RebaseDlg {
     pushed: usize,
 }
 
+/// The "change commit date" window.
+struct RedateDlg {
+    id: gitgoing_core::Oid,
+    plan: gitgoing_core::redate::Plan,
+    /// The new date as typed (local time).
+    text: String,
+    author: bool,
+    committer: bool,
+    /// Delete every trace of the old commits from this repository afterwards.
+    purge: bool,
+}
+
 /// The "set upstream" window for a local branch.
 struct UpstreamDlg {
     local: String,
@@ -297,6 +309,7 @@ enum CommitAction {
     Checkout(gitgoing_core::Oid),
     CopySha(gitgoing_core::Oid),
     InteractiveRebase(gitgoing_core::Oid),
+    ChangeDate(gitgoing_core::Oid),
     /// Squash the multi-selected commits.
     Squash,
 }
@@ -377,6 +390,10 @@ pub struct RepoTab {
     branch_at: Option<gitgoing_core::Oid>,
     /// (commit, name, message) of the open "new tag" dialog.
     new_tag: Option<(gitgoing_core::Oid, String, String)>,
+    /// The open "change commit date" dialog.
+    redate_dlg: Option<RedateDlg>,
+    /// The running operation rewrote history for good: drop the undo and redo stacks when it ends.
+    forget_undo: bool,
     remote_dlg: Option<RemoteDlg>,
     upstream_dlg: Option<UpstreamDlg>,
     rebase_dlg: Option<RebaseDlg>,
@@ -442,6 +459,8 @@ impl RepoTab {
             new_branch: None,
             branch_at: None,
             new_tag: None,
+            redate_dlg: None,
+            forget_undo: false,
             remote_dlg: None,
             upstream_dlg: None,
             rebase_dlg: None,
@@ -776,6 +795,12 @@ impl RepoTab {
                     match pending {
                         Some(Pending::Undo(e)) => self.redo.push(e),
                         Some(Pending::Redo(e)) => self.undo.push(e),
+                        None if self.forget_undo => {
+                            // History was rewritten for good: the old snapshots point at deleted commits.
+                            self.forget_undo = false;
+                            self.undo.clear();
+                            self.redo.clear();
+                        }
                         None => {
                             if let Some(e) = entry {
                                 self.undo.push(e);
@@ -786,6 +811,7 @@ impl RepoTab {
                     self.report_done(ctx);
                 }
                 Err(e) => {
+                    self.forget_undo = false;
                     // A failed undo/redo leaves the entry where it was.
                     match pending {
                         Some(Pending::Undo(en)) => self.undo.push(en),
@@ -1228,6 +1254,7 @@ impl RepoTab {
                 Some(CommitAction::CopySha(id)) => ctx.copy_text(id.to_string()),
                 Some(CommitAction::Squash) => self.start_squash(ctx),
                 Some(CommitAction::InteractiveRebase(id)) => self.start_interactive_rebase(ctx, id),
+                Some(CommitAction::ChangeDate(id)) => self.open_redate(id),
                 None => {}
             }
         }

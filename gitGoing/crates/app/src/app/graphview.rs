@@ -273,6 +273,9 @@ pub(super) fn history_view(
                     if ui.button("Interactive rebase from here…").clicked() {
                         pick(CommitAction::InteractiveRebase(id), ui);
                     }
+                    if ui.button("Change date…").clicked() {
+                        pick(CommitAction::ChangeDate(id), ui);
+                    }
                     ui.menu_button("Reset current branch to here", |ui| {
                         if ui.button("Soft (keep index and files)").clicked() {
                             pick(CommitAction::Reset(id, ResetMode::Soft), ui);

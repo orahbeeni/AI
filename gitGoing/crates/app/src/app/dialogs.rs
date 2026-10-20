@@ -11,6 +11,7 @@ impl RepoTab {
         self.dialog_stash(ctx);
         self.dialog_new_branch(ctx);
         self.dialog_new_tag(ctx);
+        self.dialog_redate(ctx);
         self.dialog_force_push(ctx);
         self.dialog_squash(ctx);
         self.dialog_rebase(ctx);
@@ -288,6 +289,114 @@ impl RepoTab {
         }
         if let Some((id, n, m)) = tag_create {
             self.run_op(ctx, "Create tag", move |p| commit_ops::create_tag(p, &n, id, &m));
+        }
+    }
+
+    /// Open the change-date window for a commit, or say why it can't be done.
+    pub(super) fn open_redate(&mut self, id: gitgoing_core::Oid) {
+        use gitgoing_core::redate;
+        let Some(path) = self.repo_path() else { return };
+        let opened = redate::plan(&path, id).map_err(|e| e.message().to_owned()).and_then(|plan| {
+            let (now, off) = redate::parse_when(&path, "")?;
+            Ok(RedateDlg {
+                id,
+                text: timefmt::absolute(now, off),
+                author: plan.author_is_me,
+                committer: true,
+                purge: plan.pushed_to.is_empty(),
+                plan,
+            })
+        });
+        match opened {
+            Ok(d) => self.redate_dlg = Some(d),
+            Err(e) => self.error_dlg = Some(("Change commit date".to_owned(), e)),
+        }
+    }
+
+    fn dialog_redate(&mut self, ctx: &egui::Context) {
+        let mut go = None;
+        let mut close = false;
+        if let Some(d) = &mut self.redate_dlg {
+            egui::Window::new("Change commit date")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.set_width(480.0);
+                    let pl = &d.plan;
+                    ui.label(format!("{}  {}", &d.id.to_string()[..8], pl.summary));
+                    ui.weak(format!(
+                        "by {} · authored {} · committed {}",
+                        pl.author,
+                        timefmt::absolute(pl.author_time.0, pl.author_time.1),
+                        timefmt::absolute(pl.committer_time.0, pl.committer_time.1),
+                    ));
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.label("New date and time");
+                        let r = ui.add(egui::TextEdit::singleline(&mut d.text).desired_width(170.0));
+                        r.on_hover_text("Your local time, e.g. 2026-10-19 14:30. Git's other date forms work too.");
+                    });
+                    ui.checkbox(&mut d.author, "Author date (the one the graph shows)");
+                    ui.checkbox(&mut d.committer, "Committer date");
+                    if !pl.author_is_me && d.author {
+                        ui.colored_label(Color32::from_rgb(0xe5, 0xc0, 0x7b), format!("{} wrote this commit; you would be changing their authored date.", pl.author));
+                    }
+                    ui.add_space(6.0);
+                    ui.label(if pl.rewritten > 1 {
+                        format!(
+                            "The commit and the {} after it on '{}' are recreated with new hashes. Their content, messages and other dates stay exactly the same.",
+                            pl.rewritten - 1,
+                            pl.branch
+                        )
+                    } else {
+                        format!("Only this commit is recreated (a new hash); '{}' then points at the new one. Its content stays exactly the same.", pl.branch)
+                    });
+                    if !pl.pushed_to.is_empty() {
+                        ui.colored_label(
+                            Color32::from_rgb(0xe5, 0x53, 0x4b),
+                            format!("Already on {}: you would need to force-push, and the old commit would stay there.", pl.pushed_to.join(", ")),
+                        );
+                    }
+                    if !pl.also_on.is_empty() {
+                        ui.colored_label(
+                            Color32::from_rgb(0xe5, 0xc0, 0x7b),
+                            format!("Also contained in {}: those keep the old commit.", pl.also_on.join(", ")),
+                        );
+                    }
+                    ui.add_space(6.0);
+                    ui.add_enabled_ui(pl.pushed_to.is_empty(), |ui| {
+                        ui.checkbox(&mut d.purge, "Remove all trace of the old commits from this repository");
+                    });
+                    if d.purge && pl.pushed_to.is_empty() {
+                        ui.weak(
+                            "Deletes the old commits for good: their reflog entries and objects (git reflog expire + gc --prune=now). \
+                             Other unreachable commits, such as from earlier resets, are deleted too, and Undo is cleared.",
+                        );
+                    }
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        let ok = !d.text.trim().is_empty() && (d.author || d.committer);
+                        if ui.add_enabled(ok, egui::Button::new("Change date")).clicked() {
+                            go = Some((d.id, d.text.trim().to_owned(), d.author, d.committer, d.purge && pl.pushed_to.is_empty()));
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+        }
+        if close || go.is_some() {
+            self.redate_dlg = None;
+        }
+        if let Some((id, text, author, committer, purge)) = go {
+            if self.op_rx.is_none() {
+                self.forget_undo = purge;
+            }
+            self.run_op(ctx, "Change date", move |p| {
+                let when = gitgoing_core::redate::parse_when(p, &text)?;
+                gitgoing_core::redate::redate(p, id, when, author, committer, purge).map_err(|e| e.message().to_owned())
+            });
         }
     }
 
