@@ -49,6 +49,12 @@ pub fn explain(raw: &str) -> Option<Explained> {
     if l.contains("http error 429") || l.contains("too many requests") {
         return e("Too many requests — the site is rate-limiting you.", "Wait a while, or set a download speed limit in Options → Network & sign-in.");
     }
+    if l.contains("ffmpeg exited with code -") {
+        return e(
+            "ffmpeg crashed.",
+            "The bundled ffmpeg doesn’t work on this system. On Linux install ffmpeg with your package manager (e.g. sudo apt install ffmpeg) — the app will use it automatically.",
+        );
+    }
     if l.contains("ffmpeg") && (l.contains("not found") || l.contains("not installed") || l.contains("could not find")) {
         return e("ffmpeg is needed for this option.", "Open Settings → Tools and install ffmpeg.");
     }

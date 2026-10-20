@@ -48,8 +48,23 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// A system ffmpeg + ffprobe pair living in the same folder (yt-dlp's
+/// `--ffmpeg-location` takes one folder).
+fn system_ffmpeg_pair(name: &str) -> Option<PathBuf> {
+    let (ff, probe) = (find_on_path("ffmpeg")?, find_on_path("ffprobe")?);
+    (ff.parent() == probe.parent()).then(|| if name == "ffmpeg" { ff } else { probe })
+}
+
 /// Resolve where a tool lives, honouring the user's "managed vs system" choice.
 pub fn locate(paths: &Paths, settings: &Settings, name: &str) -> Option<(PathBuf, &'static str)> {
+    // On Linux the downloadable static ffmpeg is linked against an old static
+    // glibc and segfaults whenever it resolves a host name (every live/HLS/DASH
+    // download), so a distro-provided ffmpeg always wins there.
+    if platform::os() == Os::Linux && (name == "ffmpeg" || name == "ffprobe") {
+        if let Some(p) = system_ffmpeg_pair(name) {
+            return Some((p, "system"));
+        }
+    }
     if name == "yt-dlp" && !settings.custom_ytdlp_path.trim().is_empty() {
         let p = PathBuf::from(settings.custom_ytdlp_path.trim());
         if p.is_file() {
@@ -170,8 +185,33 @@ pub async fn install(host: &dyn Host, paths: &Paths, name: &str) -> Result<(), S
     let _ = std::fs::remove_file(&tmp);
     result?;
     platform::prepare_binary(&dest).map_err(|e| e.to_string())?;
+    if name == "ffmpeg" && os == Os::Linux {
+        if let Err(e) = smoke_test_ffmpeg(&dest).await {
+            let _ = std::fs::remove_file(&dest);
+            return Err(e);
+        }
+    }
     emit(host, ProgressEvent { name, stage: "done", downloaded: 0, total: None });
     Ok(())
+}
+
+/// Opening a URL by host name makes a broken static ffmpeg crash with a signal;
+/// a healthy one just reports "connection refused". Needs no network.
+async fn smoke_test_ffmpeg(path: &Path) -> Result<(), String> {
+    let mut cmd = tokio::process::Command::new(path);
+    cmd.args(["-hide_banner", "-loglevel", "quiet", "-i", "http://localhost:1/x", "-f", "null", "-"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    platform::configure_command(&mut cmd);
+    let status = tokio::time::timeout(std::time::Duration::from_secs(20), cmd.status()).await;
+    match status {
+        Ok(Ok(st)) if st.code().is_none() => Err(
+            "The downloaded ffmpeg crashes on this system. Install ffmpeg with your package manager \
+             (e.g. `sudo apt install ffmpeg`); the app will use it automatically."
+                .into(),
+        ),
+        _ => Ok(()),
+    }
 }
 
 async fn install_inner(host: &dyn Host, name: &str, os: Os, arch: Arch, dest: &Path, tmp: &Path) -> Result<(), String> {
@@ -298,6 +338,22 @@ mod tests {
         let system_mode = Settings { binary_source: "system".into(), ..Default::default() };
         if find_on_path("yt-dlp").is_some() {
             assert_eq!(locate(&paths, &system_mode, "yt-dlp").unwrap().1, "system");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn linux_prefers_system_ffmpeg_pair() {
+        let dir = std::env::temp_dir().join(format!("ytgrab-bin-{}", uuid::Uuid::new_v4()));
+        let paths = Paths::installed_at(dir.clone(), dir.join("dl"));
+        std::fs::create_dir_all(&paths.bin_dir).unwrap();
+        let managed = paths.bin_dir.join("ffmpeg");
+        std::fs::write(&managed, b"x").unwrap();
+        let got = locate(&paths, &Settings::default(), "ffmpeg").unwrap();
+        if platform::os() == Os::Linux && system_ffmpeg_pair("ffmpeg").is_some() {
+            assert_eq!(got.1, "system");
+        } else {
+            assert_eq!(got, (managed, "managed"));
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

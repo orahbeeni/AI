@@ -1,6 +1,6 @@
 [package]
 name = "ytgrab"
-version = "0.1.0"
+version = "0.1.1"
 description = "A friendly desktop front-end for yt-dlp"
 edition = "2021"
 rust-version = "1.80"
