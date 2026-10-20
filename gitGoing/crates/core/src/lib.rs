@@ -15,6 +15,7 @@ pub mod history;
 pub mod ignore;
 pub mod merge;
 pub mod rebase;
+pub mod redate;
 pub mod remote;
 pub mod remotes;
 pub mod stash;
