@@ -5,9 +5,17 @@ mod config;
 mod cwd;
 mod fonts;
 mod input;
+mod integration;
 mod layout;
+mod links;
+mod marks;
+mod notify;
 mod pane;
+mod record;
+mod search;
 mod session;
+mod sound;
+mod stream;
 #[cfg(test)]
 mod tests;
 mod transfer;

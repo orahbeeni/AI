@@ -2,22 +2,27 @@
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Line, Point};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::{self, Term};
+use alacritty_terminal::term::search::Match;
+use alacritty_terminal::term::{self, Term, TermMode};
 use alacritty_terminal::vte::ansi::{CursorShape, CursorStyle, Processor, Rgb as VteRgb, StdSyncHandler};
 use eframe::egui;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{CursorKind, Settings, Theme};
+use crate::marks::MarkLog;
+use crate::record::Recorder;
+use crate::stream::{Item, Mark, Scanner};
 
 /// A command saved with a terminal, typed into its shell on demand or when its layout opens.
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug, Default)]
@@ -26,6 +31,40 @@ pub struct SavedCommand {
     pub command: String,
     /// Run automatically when the layout is opened.
     pub auto_run: bool,
+    /// Keep it running: when it ends with an error (an ssh connection that dropped, say) run it again.
+    pub reconnect: bool,
+}
+
+/// Text saved with a terminal to find again later, and optionally to be told about when it appears.
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug, Default)]
+#[serde(default)]
+pub struct SavedSearch {
+    pub pattern: String,
+    /// A regular expression; otherwise plain text, ignoring case.
+    pub regex: bool,
+    /// Raise an alert when this appears in new output.
+    pub alert: bool,
+}
+
+impl SavedSearch {
+    /// The pattern as a regular expression (plain text is escaped and made case-insensitive).
+    pub fn regex_source(&self) -> String {
+        if self.regex { self.pattern.clone() } else { format!("(?i){}", regex::escape(&self.pattern)) }
+    }
+}
+
+/// Something that happened in a terminal's output, for the window to react to.
+#[derive(Clone, Debug)]
+pub enum PaneEvent {
+    CommandDone { command: String, exit: Option<i32>, took: Duration },
+    Watch { pattern: String, line: String },
+    Notify { title: String, body: String },
+}
+
+struct Watch {
+    pattern: String,
+    re: regex::Regex,
+    last: Option<Instant>,
 }
 
 /// State shared between the UI and a terminal's background threads.
@@ -46,6 +85,50 @@ pub struct Shared {
     pub theme: Mutex<Theme>,
     /// Lines that scrolled into history while the view was held still.
     pub held_lines: AtomicU64,
+    /// Prompt and output positions from shell integration.
+    /// Lock order: the terminal first, then this.
+    pub marks: Mutex<MarkLog>,
+    pub events: Mutex<Vec<PaneEvent>>,
+    watches: Mutex<Vec<Watch>>,
+    recorder: Mutex<Option<Recorder>>,
+    /// Whether programs may read the clipboard (OSC 52).
+    pub osc52_read: AtomicBool,
+    /// The most lines the scrollback holds (see `track_scroll`).
+    history_cap: AtomicUsize,
+}
+
+impl Shared {
+    fn push_event(&self, e: PaneEvent) {
+        let mut v = self.events.lock().unwrap();
+        if v.len() < 200 {
+            v.push(e);
+        }
+    }
+
+    /// Text lines that arrived: record them and look for watched patterns.
+    fn lines_arrived(&self, lines: &[String]) {
+        if lines.is_empty() {
+            return;
+        }
+        if let Some(r) = self.recorder.lock().unwrap().as_mut() {
+            r.write_lines(lines);
+        }
+        let mut watches = self.watches.lock().unwrap();
+        if watches.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        for line in lines {
+            for w in watches.iter_mut() {
+                // One alert per pattern every few seconds, however fast the log scrolls.
+                if w.last.is_some_and(|t| now.duration_since(t) < Duration::from_secs(3)) || !w.re.is_match(line) {
+                    continue;
+                }
+                w.last = Some(now);
+                self.push_event(PaneEvent::Watch { pattern: w.pattern.clone(), line: line.chars().take(300).collect() });
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -65,7 +148,12 @@ impl EventListener for Listener {
             Event::Bell => self.shared.bell.store(true, Ordering::Relaxed),
             Event::ClipboardStore(_, text) => *self.shared.clipboard_store.lock().unwrap() = Some(text),
             Event::ClipboardLoad(_, format) => {
-                let text = arboard::Clipboard::new().and_then(|mut c| c.get_text()).unwrap_or_default();
+                // A program (possibly on a remote host) asking for the clipboard: only when allowed.
+                let text = if self.shared.osc52_read.load(Ordering::Relaxed) {
+                    arboard::Clipboard::new().and_then(|mut c| c.get_text()).unwrap_or_default()
+                } else {
+                    String::new()
+                };
                 let _ = self.writer.send(format(&text).into_bytes());
             }
             Event::ColorRequest(index, format) => {
@@ -105,6 +193,14 @@ impl Dimensions for TermSize {
     }
 }
 
+/// The link under the pointer while the link key is held: the cells to underline and where it leads.
+#[derive(Clone, Debug)]
+pub struct LinkHover {
+    /// (line, first column, one past the last column)
+    pub segments: Vec<(i32, usize, usize)>,
+    pub target: crate::links::Target,
+}
+
 pub struct Pane {
     pub id: u64,
     pub term: Arc<FairMutex<Term<Listener>>>,
@@ -119,6 +215,28 @@ pub struct Pane {
     /// User-chosen name shown in the title bar.
     pub name: Option<String>,
     pub commands: Vec<SavedCommand>,
+    pub searches: Vec<SavedSearch>,
+    /// Identifies this terminal's saved scrollback between runs.
+    pub uid: String,
+    /// The searches the background watches were last built from.
+    watch_sig: Vec<SavedSearch>,
+    /// The saved search last selected with a click, and the match it found.
+    pub search_hit: Option<(usize, Match)>,
+    /// Something happened here that the user has not looked at yet.
+    pub alert: bool,
+    /// When the foreground job started, for finish alerts on shells without integration.
+    pub job_since: Option<Instant>,
+    /// The command to run again when it fails (see `SavedCommand::reconnect`) and the state of retrying.
+    pub keep_alive: Option<String>,
+    pub reconnect_at: Option<Instant>,
+    pub reconnect_tries: u32,
+    /// The keep-alive command ended; offer to run it again.
+    pub reconnect_offer: bool,
+    pub recording: Option<std::path::PathBuf>,
+    /// Output time (see `Shared::last_output_ms`) when the scrollback was last written to disk.
+    saved_ms: Option<u64>,
+    /// A full-screen program ran during the current job, so its end is not worth an alert.
+    pub job_fullscreen: bool,
     /// Saved commands waiting for the shell's first prompt.
     pub pending: Vec<String>,
     pub spawned: Instant,
@@ -130,6 +248,9 @@ pub struct Pane {
     pub last_mouse_cell: Option<(usize, usize)>,
     pub scroll_accum: f32,
     pub bell_until: Option<Instant>,
+    pub link_hover: Option<LinkHover>,
+    /// Where file names seen in the output lead: (key, when looked up, the file).
+    pub link_cache: std::collections::HashMap<String, (Instant, Option<PathBuf>)>,
 }
 
 pub fn term_config(s: &Settings) -> term::Config {
@@ -169,6 +290,7 @@ impl Pane {
         size: TermSize,
         cell: (f32, f32),
         ctx: &egui::Context,
+        restore: Option<&str>,
     ) -> Result<Pane, String> {
         let pty = native_pty_system();
         let pair = pty
@@ -188,6 +310,7 @@ impl Pane {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         cmd.env("TERM_PROGRAM", "term");
+        cmd.env("TERM_INTEGRATION_DIR", crate::integration::dir());
         // A login shell started from Finder has no locale; Java apps (e.g. SAP Commerce) then mangle UTF-8.
         if std::env::var_os("LANG").is_none() {
             cmd.env("LANG", "en_US.UTF-8");
@@ -211,6 +334,12 @@ impl Pane {
             size: Mutex::new(window_size(size, cell)),
             theme: Mutex::new(settings.theme.clone()),
             held_lines: AtomicU64::new(0),
+            marks: Mutex::new(MarkLog::default()),
+            events: Mutex::new(Vec::new()),
+            watches: Mutex::new(Vec::new()),
+            recorder: Mutex::new(None),
+            osc52_read: AtomicBool::new(settings.osc52_read),
+            history_cap: AtomicUsize::new(settings.scrollback_lines),
         });
 
         // Writer thread: the UI never blocks on a full PTY buffer.
@@ -228,6 +357,9 @@ impl Pane {
 
         let listener = Listener { shared: shared.clone(), writer: wtx.clone() };
         let term = Arc::new(FairMutex::new(Term::new(term_config(settings), &size, listener)));
+        if let Some(text) = restore.filter(|t| !t.is_empty()) {
+            restore_scrollback(&mut term.lock(), text);
+        }
 
         // Reader thread: raw bytes from the shell.
         let (rtx, rrx) = mpsc::sync_channel::<Vec<u8>>(64);
@@ -259,6 +391,7 @@ impl Pane {
                 .name(format!("pty-parser-{id}"))
                 .spawn(move || {
                     let mut parser: Processor<StdSyncHandler> = Processor::new();
+                    let mut scanner = Scanner::default();
                     let started = Instant::now();
                     loop {
                         let msg = match parser.sync_timeout().sync_timeout() {
@@ -266,17 +399,21 @@ impl Pane {
                             None => rrx.recv().map_err(|_| RecvTimeoutError::Disconnected),
                         };
                         match msg {
-                            Ok(first) => {
-                                let mut t = term.lock();
-                                let before = HoldMark::take(&t);
-                                parser.advance(&mut *t, &first);
-                                // Drain whatever else is queued under the same lock.
+                            Ok(mut bytes) => {
+                                // Drain whatever else is queued so it is handled under the same lock.
                                 while let Ok(more) = rrx.try_recv() {
-                                    parser.advance(&mut *t, &more);
+                                    bytes.extend_from_slice(&more);
                                 }
-                                if shared.pinned.load(Ordering::Relaxed) || shared.locked.load(Ordering::Relaxed) {
-                                    before.restore(&mut t, &shared.held_lines);
-                                }
+                                let lines = {
+                                    let mut t = term.lock();
+                                    let before = HoldMark::take(&t);
+                                    let lines = ingest(&mut t, &mut parser, &shared, &mut scanner, &bytes);
+                                    if shared.pinned.load(Ordering::Relaxed) || shared.locked.load(Ordering::Relaxed) {
+                                        before.restore(&mut t, &shared.held_lines);
+                                    }
+                                    lines
+                                };
+                                shared.lines_arrived(&lines);
                             }
                             Err(RecvTimeoutError::Timeout) => parser.stop_sync(&mut *term.lock()),
                             Err(RecvTimeoutError::Disconnected) => break,
@@ -304,6 +441,19 @@ impl Pane {
             cwd_checked: Instant::now(),
             name: None,
             commands: Vec::new(),
+            searches: Vec::new(),
+            uid: new_uid(id),
+            watch_sig: Vec::new(),
+            search_hit: None,
+            alert: false,
+            job_since: None,
+            keep_alive: None,
+            reconnect_at: None,
+            reconnect_tries: 0,
+            reconnect_offer: false,
+            recording: None,
+            saved_ms: None,
+            job_fullscreen: false,
             pending: Vec::new(),
             spawned: Instant::now(),
             selecting: false,
@@ -313,11 +463,22 @@ impl Pane {
             last_mouse_cell: None,
             scroll_accum: 0.0,
             bell_until: None,
+            link_hover: None,
+            link_cache: std::collections::HashMap::new(),
         })
     }
 
     pub fn write(&self, bytes: impl Into<Vec<u8>>) {
         let _ = self.writer.send(bytes.into());
+    }
+
+    /// Remember that a keep-alive saved command is being run here.
+    pub fn note_run(&mut self, cmd: &str) {
+        if self.commands.iter().any(|c| c.reconnect && c.command.trim() == cmd.trim()) {
+            self.keep_alive = Some(cmd.to_string());
+            self.reconnect_at = None;
+            self.reconnect_offer = false;
+        }
     }
 
     /// Type a command into the shell and press Enter.
@@ -331,9 +492,21 @@ impl Pane {
         if size.cols == self.size.cols && size.rows == self.size.rows {
             return;
         }
+        let reflow = size.cols != self.size.cols;
         self.size = size;
         *self.shared.size.lock().unwrap() = window_size(size, cell);
-        self.term.lock().resize(size);
+        {
+            let mut t = self.term.lock();
+            let mut marks = self.shared.marks.lock().unwrap();
+            if reflow {
+                // Wrapping lines differently moves text in ways that cannot be followed.
+                t.resize(size);
+                marks.invalidate();
+            } else {
+                let cap = self.shared.history_cap.load(Ordering::Relaxed);
+                track_scroll(&mut t, &mut marks, cap, true, |t| t.resize(size));
+            }
+        }
         let _ = self.master.resize(PtySize { rows: size.rows as u16, cols: size.cols as u16, pixel_width: 0, pixel_height: 0 });
     }
 
@@ -416,6 +589,66 @@ impl Pane {
     pub fn apply_settings(&self, s: &Settings) {
         self.term.lock().set_options(term_config(s));
         *self.shared.theme.lock().unwrap() = s.theme.clone();
+        self.shared.osc52_read.store(s.osc52_read, Ordering::Relaxed);
+        self.shared.history_cap.store(s.scrollback_lines, Ordering::Relaxed);
+    }
+
+    /// Rebuild the background watches when the saved searches changed.
+    pub fn sync_watches(&mut self) {
+        if self.watch_sig == self.searches {
+            return;
+        }
+        self.watch_sig = self.searches.clone();
+        let list = self
+            .searches
+            .iter()
+            .filter(|s| s.alert && !s.pattern.is_empty())
+            .filter_map(|s| {
+                let re = regex::Regex::new(&s.regex_source()).ok()?;
+                Some(Watch { pattern: s.pattern.clone(), re, last: None })
+            })
+            .collect();
+        *self.shared.watches.lock().unwrap() = list;
+    }
+
+    /// Start or stop writing this terminal's output to a file in `dir`.
+    pub fn set_recording(&mut self, on: bool, dir: &std::path::Path) -> Result<(), String> {
+        if !on {
+            *self.shared.recorder.lock().unwrap() = None;
+            self.recording = None;
+            return Ok(());
+        }
+        if self.recording.is_some() {
+            return Ok(());
+        }
+        let r = Recorder::create(dir, &self.title()).map_err(|e| format!("could not start recording in {}: {e}", dir.display()))?;
+        self.recording = Some(r.path.clone());
+        *self.shared.recorder.lock().unwrap() = Some(r);
+        Ok(())
+    }
+
+    /// Write the recent scrollback to disk unless nothing new has arrived since the last time.
+    pub fn save_scrollback(&mut self, max_lines: usize) {
+        let ms = self.shared.last_output_ms.load(Ordering::Relaxed);
+        if self.saved_ms == Some(ms) {
+            return;
+        }
+        self.saved_ms = Some(ms);
+        let text = self.scrollback_text(max_lines);
+        crate::session::save_scrollback(&self.uid, &text);
+    }
+
+    /// The pane's recent scrollback as plain text, newest `max_lines` lines.
+    pub fn scrollback_text(&self, max_lines: usize) -> String {
+        let t = self.term.lock();
+        let top = (t.bottommost_line().0 - max_lines as i32 + 1).max(t.topmost_line().0);
+        let from = Point::new(Line(top), Column(0));
+        let to = Point::new(t.bottommost_line(), t.last_column());
+        let mut s = t.bounds_to_string(from, to);
+        while s.ends_with('\n') || s.ends_with(' ') {
+            s.pop();
+        }
+        s
     }
 
     pub fn kill(&mut self) {
@@ -480,6 +713,152 @@ impl HoldMark {
         if moved > 0 {
             t.scroll_display(Scroll::Delta(moved as i32));
             held.fetch_add(moved as u64, Ordering::Relaxed);
+        }
+    }
+}
+
+fn new_uid(id: u64) -> String {
+    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    format!("{ms:x}-{id:x}-{:x}", std::process::id())
+}
+
+/// Print the previous run's output (dimmed) at the top of a fresh terminal.
+fn restore_scrollback(t: &mut Term<Listener>, text: &str) {
+    let mut body = String::from("\x1b[2m");
+    for line in text.lines() {
+        body.push_str(&line.replace(|c: char| c.is_control(), " "));
+        body.push_str("\r\n");
+    }
+    body.push_str("── restored from the previous session ──\x1b[0m\r\n");
+    let mut parser: Processor<StdSyncHandler> = Processor::new();
+    parser.advance(t, body.as_bytes());
+}
+
+/// Run `op` on the terminal and add to the marks' scroll counter by however far the text moved.
+///
+/// The movement is measured with a selection anchored at the top of the screen, because the
+/// emulator rotates a selection together with the text (the user's own selection is set aside
+/// meanwhile and put back rotated the same way). That stays exact only while the text moves less
+/// than the scrollback holds, so `op` must not scroll more than `cap` lines. When the probe is
+/// lost (the screen was cleared) the growth of the history gives the answer, as long as the
+/// history is not full. If neither works every mark is dropped rather than left wrong.
+pub fn track_scroll<T: EventListener>(t: &mut Term<T>, marks: &mut MarkLog, cap: usize, allow_negative: bool, op: impl FnOnce(&mut Term<T>)) {
+    if marks.blocks.is_empty() || t.mode().contains(TermMode::ALT_SCREEN) {
+        op(t);
+        return;
+    }
+    let history_before = t.grid().history_size();
+    let saved = t.selection.take();
+    let anchor = Point::new(Line(0), Column(0));
+    let mut probe = Selection::new(SelectionType::Lines, anchor, Side::Left);
+    probe.update(anchor, Side::Left);
+    t.selection = Some(probe);
+    op(t);
+    let probe_line = t.selection.take().and_then(|s| s.to_range(&*t)).map(|r| r.start.line.0 as i64);
+    // Gone to the other screen: this one did not move.
+    if t.mode().contains(TermMode::ALT_SCREEN) {
+        return;
+    }
+    let history_after = t.grid().history_size();
+    let moved = match probe_line {
+        Some(l) => Some(-l),
+        None if history_after < cap => Some(history_after as i64 - history_before as i64),
+        None => None,
+    };
+    match moved {
+        Some(d) if d >= 0 || allow_negative => {
+            marks.scrolled += d;
+            // The emulator drops the user's selection whenever it loses the probe (clearing the screen, say).
+            t.selection = saved.filter(|_| probe_line.is_some()).and_then(|s| s.rotate(&*t, &(Line(0)..Line(t.screen_lines() as i32)), d as i32));
+        }
+        _ => marks.invalidate(),
+    }
+}
+
+/// Advance the emulator through `bytes`, in steps small enough for `track_scroll` to follow.
+fn advance_tracked(t: &mut Term<Listener>, parser: &mut Processor<StdSyncHandler>, marks: &mut MarkLog, cap: usize, bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    if marks.blocks.is_empty() {
+        parser.advance(t, bytes);
+        return;
+    }
+    // Every line that scrolls needs at least a byte of output, so a piece of this size moves the text less than the history holds.
+    for piece in bytes.chunks((cap / 2).max(50)) {
+        track_scroll(t, marks, cap, false, |t| parser.advance(t, piece));
+    }
+}
+
+/// Feed output to the emulator, acting on shell-integration marks exactly where they occur.
+/// Returns the plain text lines that arrived (none for full-screen programs).
+fn ingest(
+    t: &mut Term<Listener>,
+    parser: &mut Processor<StdSyncHandler>,
+    shared: &Shared,
+    scanner: &mut Scanner,
+    bytes: &[u8],
+) -> Vec<String> {
+    let mut items: Vec<(usize, Item)> = Vec::new();
+    scanner.feed(bytes, |end, item| items.push((end, item)));
+    let alt_start = t.mode().contains(TermMode::ALT_SCREEN);
+    let cap = shared.history_cap.load(Ordering::Relaxed);
+    let mut marks = shared.marks.lock().unwrap();
+    let mut lines = Vec::new();
+    let mut at = 0;
+    for (end, item) in items {
+        match item {
+            Item::Line(l) => lines.push(l),
+            Item::Notify(title, body) => shared.push_event(PaneEvent::Notify { title, body }),
+            Item::Mark(mark) => {
+                advance_tracked(t, parser, &mut marks, cap, &bytes[at..end]);
+                at = end;
+                if !t.mode().contains(TermMode::ALT_SCREEN) {
+                    handle_mark(t, &mut marks, shared, mark);
+                }
+            }
+        }
+    }
+    advance_tracked(t, parser, &mut marks, cap, &bytes[at..]);
+    marks.prune(t.topmost_line().0);
+    if alt_start || t.mode().contains(TermMode::ALT_SCREEN) {
+        lines.clear();
+    }
+    lines
+}
+
+fn handle_mark(t: &Term<Listener>, marks: &mut MarkLog, shared: &Shared, mark: Mark) {
+    let cursor = t.grid().cursor.point;
+    let key = marks.key(cursor.line.0);
+    let col = cursor.column.0;
+    match mark {
+        Mark::PromptStart => marks.prompt_start(key),
+        Mark::PromptEnd => marks.prompt_end(key, col),
+        Mark::OutputStart => {
+            let command = marks
+                .blocks
+                .back()
+                .and_then(|b| b.input)
+                .map(|(k, c)| {
+                    let start = Point::new(Line(marks.line(k)), Column(c));
+                    let end = if col == 0 {
+                        Point::new(Line(cursor.line.0 - 1), t.last_column())
+                    } else {
+                        Point::new(cursor.line, Column(col - 1))
+                    };
+                    if start.line >= t.topmost_line() && start <= end {
+                        t.bounds_to_string(start, end).split_whitespace().collect::<Vec<_>>().join(" ")
+                    } else {
+                        String::new()
+                    }
+                })
+                .unwrap_or_default();
+            marks.output_start(key, col, command);
+        }
+        Mark::OutputEnd(exit) => {
+            if let Some(f) = marks.output_end(key, col, exit) {
+                shared.push_event(PaneEvent::CommandDone { command: f.command, exit: f.exit, took: f.took });
+            }
         }
     }
 }

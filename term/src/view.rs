@@ -15,7 +15,8 @@ use eframe::egui::{
 
 use crate::config::{CursorKind, Rgb, Settings, Theme};
 use crate::input::{MouseAction, mouse_report};
-use crate::pane::{Pane, TermSize};
+use crate::links::{self, Target};
+use crate::pane::{LinkHover, Pane, TermSize};
 
 pub const FONT_FAMILY: &str = "term";
 
@@ -265,6 +266,51 @@ pub fn draw(painter: &Painter, text_rect: Rect, pane: &Pane, s: &Settings, m: &M
         paint_text(*row, *col, text, *st, *width, true);
     }
 
+    // The link under the pointer.
+    if let Some(h) = &pane.link_hover {
+        let col = theme.accent.color();
+        for &(line, c0, c1) in &h.segments {
+            let row = line + offset;
+            if row >= 0 && (row as usize) < term.screen_lines() {
+                let r = cell_rect(row as usize, c0, c1 - c0);
+                painter.hline(r.x_range(), (r.max.y - 1.5).round() + 0.5, Stroke::new(1.5, col));
+            }
+        }
+    }
+
+    // A bar beside each command's output: green when it succeeded, red when it failed.
+    if s.command_marks && s.padding >= 6.0 {
+        let marks = pane.shared.marks.lock().unwrap();
+        if marks.seen {
+            let rows = term.screen_lines() as i32;
+            for b in marks.blocks.iter() {
+                let Some(out) = b.output else { continue };
+                // From the prompt through the output; a command that printed nothing still gets its own line.
+                let first = marks.line(b.prompt);
+                let last = match b.last_output_line() {
+                    Some(k) => marks.line(k),
+                    None if b.running() => cursor.point.line.0,
+                    None => marks.line(out) - 1,
+                };
+                let (r0, r1) = ((first + offset).max(0), (last + offset).min(rows - 1));
+                if r1 < r0 {
+                    continue;
+                }
+                let colour = if b.running() {
+                    theme.accent.color()
+                } else if b.exit.unwrap_or(0) == 0 {
+                    Color32::from_rgb(80, 190, 110)
+                } else {
+                    Color32::from_rgb(230, 80, 80)
+                };
+                let top = cell_rect(r0 as usize, 0, 1).min.y + 1.0;
+                let bottom = cell_rect(r1 as usize, 0, 1).max.y - 1.0;
+                let x = origin.x - 6.0;
+                painter.rect_filled(Rect::from_min_max(pos2(x, top), pos2(x + 2.5, bottom)), 1.0, colour);
+            }
+        }
+    }
+
     // Cursor, unless it is a filled block (already drawn as the cell's colours).
     let cursor_row = cursor.point.line.0 + offset;
     if cursor_visible && !block_cursor && cursor_row >= 0 && (cursor_row as usize) < term.screen_lines() {
@@ -311,6 +357,8 @@ pub struct MouseOut {
     /// Paste from the clipboard (false) or the primary selection (true).
     pub paste: Option<bool>,
     pub menu_allowed: bool,
+    /// A link was clicked.
+    pub open: Option<Target>,
 }
 
 /// Selection, wheel scrolling and mouse reporting for one terminal.
@@ -344,9 +392,22 @@ pub fn mouse(ui: &Ui, resp: &Response, pane: &mut Pane, text_rect: Rect, m: &Met
         ui.ctx().set_cursor_icon(if mouse_mode { CursorIcon::Default } else { CursorIcon::Text });
     }
 
-    let Some(p) = pointer else { return out };
+    let Some(p) = pointer else {
+        pane.link_hover = None;
+        return out;
+    };
     let offset = pane.term.lock().grid().display_offset();
     let (point, side, col, row) = point_at(p, text_rect, m, pane.size, offset);
+
+    // Links: with the link key held (Ctrl, or ⌘ on macOS) URLs and file names under the pointer light up.
+    let link_key = if cfg!(target_os = "macos") { mods.mac_cmd } else { mods.ctrl };
+    pane.link_hover = if s.clickable_links && link_key && hovered && !mouse_mode && !pane.selecting { link_at(pane, point) } else { None };
+    if pane.link_hover.is_some() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        if pressed[0] {
+            out.open = pane.link_hover.as_ref().map(|h| h.target.clone());
+        }
+    }
 
     // Wheel.
     if hovered && wheel != 0.0 {
@@ -411,7 +472,7 @@ pub fn mouse(ui: &Ui, resp: &Response, pane: &mut Pane, text_rect: Rect, m: &Met
     }
 
     // Selection.
-    if hovered && pressed[0] {
+    if hovered && pressed[0] && out.open.is_none() {
         let now = Instant::now();
         let repeat = pane.last_click.is_some_and(|(t, at)| now.duration_since(t) < Duration::from_millis(400) && at.distance(p) < 5.0);
         pane.click_count = if repeat { pane.click_count % 3 + 1 } else { 1 };
@@ -507,4 +568,153 @@ pub fn hold_badge(ui: &mut Ui, text_rect: Rect, pane: &Pane, s: &Settings) -> bo
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
     resp.clicked()
+}
+
+/// The URL or file name at `point`, if any.
+fn link_at(pane: &mut Pane, point: Point) -> Option<LinkHover> {
+    let (segments, target) = {
+        let t = pane.term.lock();
+        let grid = t.grid();
+        let cols = t.columns();
+        if point.line < t.topmost_line() || point.line > t.bottommost_line() {
+            return None;
+        }
+
+        // An explicit hyperlink (OSC 8) wins over guessing from the text.
+        if let Some(link) = grid[point].hyperlink() {
+            let uri = link.uri().to_string();
+            let same = |c: usize| grid[Point::new(point.line, Column(c))].hyperlink().is_some_and(|l| l.uri() == uri);
+            let (mut a, mut b) = (point.column.0, point.column.0);
+            while a > 0 && same(a - 1) {
+                a -= 1;
+            }
+            while b + 1 < cols && same(b + 1) {
+                b += 1;
+            }
+            return Some(LinkHover { segments: vec![(point.line.0, a, b + 1)], target: Target::Url(uri) });
+        }
+
+        // The logical line around the pointer: rows that wrap into each other read as one.
+        let wraps = |line: i32| grid[Point::new(Line(line), Column(cols - 1))].flags.contains(Flags::WRAPLINE);
+        let (mut first, mut last) = (point.line.0, point.line.0);
+        while first > t.topmost_line().0 && point.line.0 - first < 20 && wraps(first - 1) {
+            first -= 1;
+        }
+        while last < t.bottommost_line().0 && last - point.line.0 < 20 && wraps(last) {
+            last += 1;
+        }
+        let mut text = String::new();
+        let mut cells: Vec<(i32, usize, usize)> = Vec::new();
+        let mut at = None;
+        for line in first..=last {
+            for c in 0..cols {
+                let cell = &grid[Point::new(Line(line), Column(c))];
+                if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                let width = if cell.flags.contains(Flags::WIDE_CHAR) { 2 } else { 1 };
+                if line == point.line.0 && (c..c + width).contains(&point.column.0) {
+                    at = Some(cells.len());
+                }
+                text.push(if cell.c == '\0' || cell.c == '\t' { ' ' } else { cell.c });
+                cells.push((line, c, width));
+            }
+        }
+        let hit = links::link_at(&text, at?)?;
+        let mut segments: Vec<(i32, usize, usize)> = Vec::new();
+        for &(line, c, w) in &cells[hit.start..hit.end] {
+            match segments.last_mut() {
+                Some((l, _, end)) if *l == line && *end == c => *end = c + w,
+                _ => segments.push((line, c, c + w)),
+            }
+        }
+        (segments, hit.target)
+    };
+
+    // A file name only counts when it leads somewhere; looking is cached because the hover repeats every frame.
+    if let Target::File { path, .. } = &target {
+        let key = format!("{}\0{path}", pane.cwd.display());
+        let fresh = pane.link_cache.get(&key).filter(|(when, _)| when.elapsed() < Duration::from_secs(20)).map(|(_, f)| f.clone());
+        let found = fresh.unwrap_or_else(|| {
+            let f = links::resolve(path, &pane.cwd);
+            if pane.link_cache.len() > 300 {
+                pane.link_cache.clear();
+            }
+            pane.link_cache.insert(key, (Instant::now(), f.clone()));
+            f
+        });
+        found?;
+    }
+    Some(LinkHover { segments, target })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use alacritty_terminal::grid::Dimensions;
+
+    use super::*;
+    use crate::config::Settings;
+
+    /// The cell at which `needle` starts on the screen, once the shell has printed it.
+    fn find_cell(pane: &Pane, needle: &str) -> Point {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            {
+                let t = pane.term.lock();
+                for line in t.topmost_line().0..=t.bottommost_line().0 {
+                    let text = t.bounds_to_string(Point::new(Line(line), Column(0)), Point::new(Line(line), t.last_column()));
+                    // The shell echoes the command too; the output is the line that does not start at the prompt.
+                    if let Some(col) = text.find(needle).filter(|_| !text.contains("printf")) {
+                        return Point::new(Line(line), Column(col));
+                    }
+                }
+            }
+            assert!(Instant::now() < deadline, "never saw {needle:?}:\n{}", pane.scrollback_text(30));
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn links_under_the_pointer() {
+        let dir = std::env::temp_dir().canonicalize().unwrap().join(format!("term-linkview-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "x").unwrap();
+
+        let ctx = egui::Context::default();
+        let mut s = Settings::default();
+        s.shell = "/bin/sh".into();
+        let mut pane = Pane::spawn(1, &s, Some(dir.clone()), TermSize { cols: 100, rows: 24 }, (8.0, 16.0), &ctx, None).unwrap();
+        pane.run_command(r"printf 'see %s:42 and %s, gone %s now\n' src/lib.rs https://example.com/a/b. nowhere/x.rs");
+        pane.run_command(r"printf '\033]8;;https://hidden.test/page\033\\click me\033]8;;\033\\ ok\n'");
+
+        // A file that exists, with its line number.
+        let at = find_cell(&pane, "src/lib.rs:42");
+        let hover = link_at(&mut pane, Point::new(at.line, Column(at.column.0 + 3))).expect("file link");
+        assert_eq!(hover.target, Target::File { path: "src/lib.rs".into(), line: Some(42), col: None });
+        assert_eq!(hover.segments, vec![(at.line.0, at.column.0, at.column.0 + "src/lib.rs:42".len())]);
+
+        // A URL without the sentence's full stop.
+        let at = find_cell(&pane, "https://example.com");
+        let hover = link_at(&mut pane, Point::new(at.line, Column(at.column.0 + 5))).expect("url link");
+        assert_eq!(hover.target, Target::Url("https://example.com/a/b".into()));
+        assert_eq!(hover.segments[0].2 - hover.segments[0].1, "https://example.com/a/b".len());
+
+        // A path that leads nowhere is not a link, and neither is plain text.
+        let at = find_cell(&pane, "nowhere/x.rs");
+        assert!(link_at(&mut pane, at).is_none());
+        let at = find_cell(&pane, "and");
+        assert!(link_at(&mut pane, at).is_none());
+
+        // An explicit hyperlink uses its own address, not the visible text.
+        let at = find_cell(&pane, "click me");
+        let hover = link_at(&mut pane, Point::new(at.line, Column(at.column.0 + 2))).expect("hyperlink");
+        assert_eq!(hover.target, Target::Url("https://hidden.test/page".into()));
+        assert_eq!(hover.segments, vec![(at.line.0, at.column.0, at.column.0 + "click me".len())]);
+        let _ = pane.term.lock().columns();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

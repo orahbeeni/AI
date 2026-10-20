@@ -127,7 +127,8 @@ fn settings_and_layout_round_trip() {
     let spec = |cwd: &str, cmds: &[(&str, bool)]| PaneSpec {
         cwd: Some(cwd.into()),
         name: None,
-        commands: cmds.iter().map(|(c, a)| SavedCommand { command: c.to_string(), auto_run: *a }).collect(),
+        commands: cmds.iter().map(|(c, a)| SavedCommand { command: c.to_string(), auto_run: *a, ..Default::default() }).collect(),
+        ..Default::default()
     };
     let mut root = Node::Leaf(spec("/opt/hybris/bin/platform", &[(". ./setantenv.sh", true), ("./hybrisserver.sh debug", true)]));
     if let Node::Leaf(first) = root.clone() {
@@ -155,13 +156,13 @@ fn real_shell_round_trip() {
         s.shell = "/bin/sh".into();
     }
     let dir = std::env::temp_dir().canonicalize().unwrap();
-    let mut p = Pane::spawn(1, &s, Some(dir.clone()), TermSize { cols: 80, rows: 24 }, (8.0, 16.0), &ctx).unwrap();
+    let mut p = Pane::spawn(1, &s, Some(dir.clone()), TermSize { cols: 80, rows: 24 }, (8.0, 16.0), &ctx, None).unwrap();
     p.run_command("echo hello-$((40+2))");
     p.run_command("cd / && pwd");
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let text = all_text(&p.term.lock());
-        if text.contains("hello-42") && text.lines().any(|l| l.trim() == "/") {
+        if text.contains("hello-42") && text.lines().any(|l| l.trim().trim_start_matches("$ ") == "/") {
             break;
         }
         assert!(Instant::now() < deadline, "no output from the shell:\n{text}");
@@ -192,7 +193,8 @@ fn visual() {
     let pane = |cwd: &str, name: Option<&str>, cmds: &[(&str, bool)]| PaneSpec {
         cwd: Some(cwd.into()),
         name: name.map(String::from),
-        commands: cmds.iter().map(|(c, a)| SavedCommand { command: c.to_string(), auto_run: *a }).collect(),
+        commands: cmds.iter().map(|(c, a)| SavedCommand { command: c.to_string(), auto_run: *a, ..Default::default() }).collect(),
+        ..Default::default()
     };
     let root = Node::Split {
         dir: Dir::Row,
@@ -314,6 +316,21 @@ fn visual() {
             ],
         ),
         ("layout", &["layout:LAYOUT", "new_tab", "next_tab"]),
+        ("workflow", &["prefs_page:Workflow"]),
+        ("goto", &["run:cd /etc", "split_vertical", "new_tab", "alert", "goto"]),
+        ("searches", &["addsearch:ERROR!", "addsearch:Exception in thread", "addsearch:Started Application", "edit_searches"]),
+        (
+            "marks",
+            &[
+                "run:. $TERM_INTEGRATION_DIR/term.bash; clear",
+                "run:ls /",
+                "run:seq 1 5",
+                "run:false",
+                "record",
+                "alert",
+                "toast:cvv2 server: finished|“./hybrisserver.sh debug” took 4m 12s",
+            ],
+        ),
     ];
     let only = std::env::var("TERM_SHOT").ok();
     for (name, steps) in scenarios {
@@ -360,7 +377,8 @@ fn layout_list_and_rename() {
     let pane = |cwd: &str, auto: bool| PaneSpec {
         cwd: Some(cwd.into()),
         name: None,
-        commands: vec![SavedCommand { command: "ls".into(), auto_run: auto }],
+        commands: vec![SavedCommand { command: "ls".into(), auto_run: auto, ..Default::default() }],
+        ..Default::default()
     };
     let root =
         Node::Split { dir: Dir::Row, ratio: 0.5, a: Box::new(Node::Leaf(pane("/a", true))), b: Box::new(Node::Leaf(pane("/a", false))) };
@@ -599,7 +617,8 @@ fn export_and_import_round_trip() {
         root: Node::Leaf(PaneSpec {
             cwd: Some(cwd.into()),
             name: None,
-            commands: vec![SavedCommand { command: "./start-jbr.sh".into(), auto_run: true }],
+            commands: vec![SavedCommand { command: "./start-jbr.sh".into(), auto_run: true, ..Default::default() }],
+            ..Default::default()
         }),
         focused: 0,
         layout: None,
@@ -671,4 +690,252 @@ fn quit_asks_first() {
 
     let _ = std::fs::remove_dir_all(&cfg);
     unsafe { std::env::remove_var("TERM_CONFIG_DIR") };
+}
+
+/// A real bash with the shell integration: its prompts and commands are marked, the exit codes and
+/// command text are captured, and the marks stay on the right lines while the output scrolls,
+/// also once the scrollback is full and the oldest lines drop off the top.
+#[test]
+#[cfg(unix)]
+fn bash_integration_marks_commands() {
+    use std::time::{Duration, Instant};
+
+    use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::index::{Column, Line, Point};
+
+    use crate::pane::{Pane, TermSize};
+
+    if !std::path::Path::new("/bin/bash").exists() {
+        return;
+    }
+    let _guard = CONFIG_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let cfg = std::env::temp_dir().join(format!("term-bash-{}", std::process::id()));
+    // SAFETY: tests touching TERM_CONFIG_DIR hold CONFIG_DIR_LOCK.
+    unsafe { std::env::set_var("TERM_CONFIG_DIR", &cfg) };
+    crate::integration::ensure().unwrap();
+    let rc = cfg.join("bashrc");
+    std::fs::write(&rc, format!("PS1='$ '\n. '{}/term.bash'\n", crate::integration::dir())).unwrap();
+    let ctx = eframe::egui::Context::default();
+
+    let start = |scrollback: usize| {
+        let mut s = Settings::default();
+        s.shell = "/bin/bash".into();
+        s.shell_args = vec!["--noprofile".into(), "--rcfile".into(), rc.display().to_string(), "-i".into()];
+        s.scrollback_lines = scrollback;
+        Pane::spawn(1, &s, Some(cfg.clone()), TermSize { cols: 80, rows: 24 }, (8.0, 16.0), &ctx, None).unwrap()
+    };
+    // Wait until the command called `last` has finished.
+    let wait_for = |p: &Pane, last: &str| {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            if p.shared.marks.lock().unwrap().blocks.iter().any(|b| b.command == last && b.end.is_some()) {
+                break;
+            }
+            let marked: Vec<_> = p.shared.marks.lock().unwrap().blocks.iter().map(|b| (b.command.clone(), b.exit)).collect();
+            assert!(Instant::now() < deadline, "{last:?} was never marked as finished: {marked:?}\n{}", p.scrollback_text(50));
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    let line_text = |p: &Pane, key: i64| {
+        let t = p.term.lock();
+        let line = Line(p.shared.marks.lock().unwrap().line(key));
+        t.bounds_to_string(Point::new(line, Column(0)), Point::new(line, t.last_column())).trim_end().to_string()
+    };
+
+    // Plenty of scrollback: everything stays.
+    let p = start(10_000);
+    p.run_command("echo hi");
+    p.run_command("seq 1 100");
+    p.run_command("false");
+    wait_for(&p, "false");
+    let blocks: Vec<_> = p.shared.marks.lock().unwrap().blocks.iter().filter(|b| b.end.is_some()).cloned().collect();
+    assert_eq!((blocks[0].command.as_str(), blocks[0].exit), ("echo hi", Some(0)));
+    assert_eq!(line_text(&p, blocks[0].output.unwrap()), "hi");
+    assert_eq!(blocks[1].command, "seq 1 100");
+    assert_eq!(line_text(&p, blocks[1].output.unwrap()), "1", "output start moved while 100 lines scrolled by");
+    assert_eq!(line_text(&p, blocks[1].last_output_line().unwrap()), "100");
+    assert_eq!((blocks[2].command.as_str(), blocks[2].exit), ("false", Some(1)));
+    assert!(blocks[1].took.is_some());
+    assert!(p.term.lock().grid().history_size() > 50, "the output really did scroll");
+
+    // Narrowing the terminal reflows the text: the marks are dropped rather than left pointing at the wrong lines.
+    let mut p = p;
+    p.resize(TermSize { cols: 40, rows: 24 }, (8.0, 16.0));
+    assert!(p.shared.marks.lock().unwrap().blocks.is_empty());
+    drop(p);
+
+    // A small scrollback that is full long before the end: lines drop off the top all the time.
+    let p = start(40);
+    p.run_command("seq 1 300");
+    p.run_command("echo marker-one");
+    p.run_command("seq 1 150");
+    p.run_command("echo marker-two");
+    wait_for(&p, "echo marker-two");
+    let marks = p.shared.marks.lock().unwrap();
+    assert!(marks.blocks.iter().all(|b| b.command != "seq 1 300"), "the first command scrolled out of the history");
+    drop(marks);
+    let last = p.shared.marks.lock().unwrap().blocks.iter().rev().find(|b| b.command == "echo marker-two").cloned().unwrap();
+    assert_eq!(line_text(&p, last.output.unwrap()), "marker-two");
+    assert_eq!(line_text(&p, last.prompt), "$ echo marker-two");
+    assert!(p.term.lock().grid().history_size() == 40, "history is full");
+    drop(p);
+
+    // The user's own selection rides along with the text, and the marks are still right.
+    let p = start(10_000);
+    p.run_command("echo sel-target");
+    wait_for(&p, "echo sel-target");
+    {
+        use alacritty_terminal::index::Side;
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        let key = p.shared.marks.lock().unwrap().blocks.iter().find(|b| b.command == "echo sel-target").unwrap().output.unwrap();
+        let line = Line(p.shared.marks.lock().unwrap().line(key));
+        let mut t = p.term.lock();
+        let mut sel = Selection::new(SelectionType::Simple, Point::new(line, Column(0)), Side::Left);
+        sel.update(Point::new(line, Column(9)), Side::Right);
+        t.selection = Some(sel);
+        assert_eq!(t.selection_to_string().as_deref(), Some("sel-target"));
+    }
+    p.run_command("seq 1 150");
+    wait_for(&p, "seq 1 150");
+    assert_eq!(p.term.lock().selection_to_string().as_deref(), Some("sel-target"), "the selection moved with its text");
+    let seq = p.shared.marks.lock().unwrap().blocks.iter().find(|b| b.command == "seq 1 150").cloned().unwrap();
+    assert_eq!(line_text(&p, seq.output.unwrap()), "1");
+    assert_eq!(line_text(&p, seq.last_output_line().unwrap()), "150");
+    drop(p);
+
+    unsafe { std::env::remove_var("TERM_CONFIG_DIR") };
+    let _ = std::fs::remove_dir_all(&cfg);
+}
+
+/// Saved searches that alert, notification requests from programs, recording and scrollback restore.
+#[test]
+#[cfg(unix)]
+fn watches_recording_and_scrollback() {
+    use std::time::{Duration, Instant};
+
+    use crate::pane::{Pane, PaneEvent, SavedSearch, TermSize, all_text};
+
+    let _guard = CONFIG_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let cfg = std::env::temp_dir().join(format!("term-watch-{}", std::process::id()));
+    // SAFETY: tests touching TERM_CONFIG_DIR hold CONFIG_DIR_LOCK.
+    unsafe { std::env::set_var("TERM_CONFIG_DIR", &cfg) };
+    let ctx = eframe::egui::Context::default();
+    let mut s = Settings::default();
+    s.shell = "/bin/sh".into();
+    let size = TermSize { cols: 80, rows: 24 };
+    let mut p = Pane::spawn(1, &s, Some(cfg.clone()), size, (8.0, 16.0), &ctx, None).unwrap();
+    std::fs::create_dir_all(&cfg).unwrap();
+    p.searches = vec![
+        SavedSearch { pattern: "boom".into(), regex: false, alert: true },
+        SavedSearch { pattern: r"^FAIL \d+$".into(), regex: true, alert: true },
+        SavedSearch { pattern: "silent".into(), regex: false, alert: false },
+    ];
+    p.sync_watches();
+    p.set_recording(true, &cfg.join("logs")).unwrap();
+    // The echo of what is typed must not itself contain the watched text.
+    p.run_command(r"printf 'all fine\n\033[31mBOO%s here\033[0m silent\nFAIL %d\n\033]9;Build done\007' M 42");
+
+    let mut events = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while events.len() < 3 {
+        events.extend(std::mem::take(&mut *p.shared.events.lock().unwrap()));
+        assert!(Instant::now() < deadline, "events so far: {events:?}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let watched: Vec<_> = events.iter().filter_map(|e| if let PaneEvent::Watch { pattern, line } = e { Some((pattern.as_str(), line.as_str())) } else { None }).collect();
+    assert!(watched.contains(&("boom", "BOOM here silent")), "{events:?}");
+    assert!(watched.contains(&(r"^FAIL \d+$", "FAIL 42")), "{events:?}");
+    assert_eq!(watched.len(), 2, "the search without Alert stays quiet: {events:?}");
+    assert!(events.iter().any(|e| matches!(e, PaneEvent::Notify { body, .. } if body == "Build done")), "{events:?}");
+
+    // The recording holds plain text.
+    let path = p.recording.clone().unwrap();
+    let recorded = std::fs::read_to_string(&path).unwrap();
+    assert!(recorded.contains("BOOM here silent") && recorded.contains("FAIL 42") && !recorded.contains('\x1b'), "{recorded}");
+    p.set_recording(false, &cfg).unwrap();
+    assert!(p.recording.is_none());
+
+    // Scrollback is written once, and comes back (dimmed, with a banner) in a new terminal.
+    p.save_scrollback(100);
+    let saved = crate::session::load_scrollback(&p.uid).unwrap();
+    assert!(saved.contains("FAIL 42"), "{saved}");
+    let q = Pane::spawn(2, &s, Some(cfg.clone()), size, (8.0, 16.0), &ctx, Some(&saved)).unwrap();
+    let text = all_text(&q.term.lock());
+    assert!(text.contains("FAIL 42") && text.contains("restored from the previous session"), "{text}");
+    crate::session::prune_scrollback(&[]);
+    assert!(crate::session::load_scrollback(&p.uid).is_none());
+
+    unsafe { std::env::remove_var("TERM_CONFIG_DIR") };
+    let _ = std::fs::remove_dir_all(&cfg);
+}
+
+/// Keeping a command alive, and moving terminals between tabs.
+#[test]
+#[ignore]
+fn reconnect_and_move_terminals() {
+    use std::time::Duration;
+
+    let _guard = CONFIG_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let cfg = std::env::temp_dir().join(format!("term-move-{}", std::process::id()));
+    // SAFETY: tests touching TERM_CONFIG_DIR hold CONFIG_DIR_LOCK.
+    unsafe { std::env::set_var("TERM_CONFIG_DIR", &cfg) };
+    let mut h = egui_kittest::Harness::builder()
+        .with_size([1100.0, 640.0])
+        .build_eframe(|cc| crate::app::App::new(cc, crate::Args { layout: None, run: false, fresh: true, dir: Some("/tmp".into()) }));
+    h.run_steps(2);
+
+    // An ssh that dropped (exit 255) is retried; a clean exit or Ctrl+C ends the keeping alive.
+    let secs = Duration::from_secs;
+    assert_eq!(h.state_mut().finish_command("ssh host", Some(255), secs(5)), (true, false, true));
+    assert_eq!(h.state_mut().finish_command("ssh host", Some(0), secs(5)), (true, false, false), "the retry was already scheduled");
+    // Without an exit status it is not clear whether the command failed: offer, do not retry.
+    assert_eq!(h.state_mut().finish_command("ssh host", None, secs(5)).1, true);
+    // Something else that ended in this terminal is not the saved command.
+    assert_eq!(h.state_mut().finish_command("ls", Some(255), secs(1)).2, true);
+
+    // Three terminals in one tab, then moved around.
+    for step in ["split_vertical", "split_horizontal"] {
+        h.state_mut().script_step(step);
+        h.run_steps(2);
+    }
+    assert_eq!(h.state().tab_sizes(), vec![3]);
+    h.state_mut().script_step("move_pane:new");
+    h.run_steps(2);
+    assert_eq!(h.state().tab_sizes(), vec![2, 1], "the terminal went to a tab of its own");
+    h.state_mut().script_step("move_pane:0");
+    h.run_steps(2);
+    assert_eq!(h.state().tab_sizes(), vec![3], "moving the only terminal of a tab removes that tab");
+    h.state_mut().script_step("move_pane:new");
+    h.run_steps(2);
+    h.state_mut().script_step("move_pane:new");
+    h.run_steps(2);
+    assert_eq!(h.state().tab_sizes(), vec![2, 1], "a terminal alone in its tab stays put");
+
+    unsafe { std::env::remove_var("TERM_CONFIG_DIR") };
+    let _ = std::fs::remove_dir_all(&cfg);
+}
+
+/// A program (say, vim over ssh) copying to the clipboard with OSC 52 reaches the terminal's clipboard request.
+#[test]
+#[cfg(unix)]
+fn osc52_clipboard_store_arrives() {
+    use std::time::{Duration, Instant};
+
+    use crate::pane::{Pane, TermSize};
+
+    let ctx = eframe::egui::Context::default();
+    let mut s = Settings::default();
+    s.shell = "/bin/sh".into();
+    let p = Pane::spawn(1, &s, Some(std::env::temp_dir()), TermSize { cols: 80, rows: 24 }, (8.0, 16.0), &ctx, None).unwrap();
+    p.run_command(r"printf '\033]52;c;aGVsbG8gZnJvbSB0aGUgcmVtb3RlIGhvc3Q=\007'");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(text) = p.shared.clipboard_store.lock().unwrap().take() {
+            assert_eq!(text, "hello from the remote host");
+            return;
+        }
+        assert!(Instant::now() < deadline, "no clipboard request arrived");
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }

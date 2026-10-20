@@ -2,15 +2,16 @@
 
 use std::collections::BTreeMap;
 
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Boundary, Column, Direction, Point, Side};
-use alacritty_terminal::selection::{Selection, SelectionType};
-use alacritty_terminal::term::search::{Match, RegexSearch};
+use alacritty_terminal::term::search::Match;
 use eframe::egui::{self, Align2, Color32, Key, Rect, RichText, Sense, pos2, vec2};
 
-use super::{Act, App};
+use super::{Act, App, format_duration};
 use crate::config::{ACTIONS, Combo, CursorKind, QuitConfirm, Rgb, Settings, TabTitle, Theme, known_fonts};
-use crate::pane::SavedCommand;
+use crate::integration::Shell;
+use crate::links::EDITOR_PRESETS;
+use crate::notify;
+use crate::pane::{SavedCommand, SavedSearch};
+use crate::search::{self, escape_regex, fuzzy};
 use crate::session;
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -19,6 +20,7 @@ pub enum PrefsPage {
     General,
     Appearance,
     Colours,
+    Workflow,
     Keys,
 }
 
@@ -28,6 +30,21 @@ pub struct Prefs {
     keys: BTreeMap<String, String>,
     /// The theme in effect before previewing, restored on Cancel.
     applied_theme: Theme,
+    /// Outcome of the last shell-integration install.
+    message: Option<String>,
+    /// Outcome of the last notification or sound test, filled in from the thread that ran it.
+    test_result: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    test_message: Option<String>,
+}
+
+/// A type-to-filter list opened over the window (go to…, command history).
+#[derive(Default)]
+pub struct Picker {
+    query: String,
+    selected: usize,
+    focus: bool,
+    /// Names offered besides the terminals (saved layouts), read once when the list opens.
+    names: Vec<String>,
 }
 
 pub struct LayoutsDlg {
@@ -76,6 +93,13 @@ pub struct Dialogs {
     pub layouts: Option<LayoutsDlg>,
     pub save_layout: Option<SaveLayout>,
     pub commands: Option<u64>,
+    pub searches: Option<u64>,
+    searches_focus: bool,
+    new_search: String,
+    new_search_regex: bool,
+    new_search_alert: bool,
+    pub goto: Option<Picker>,
+    pub history: Option<Picker>,
     /// Focus the empty "new command" row on the next frame.
     commands_focus: bool,
     /// The always-present empty row at the end of the saved-commands list: text and auto-run.
@@ -93,7 +117,39 @@ pub struct Dialogs {
 impl Dialogs {
     pub fn open_prefs(&mut self, s: &Settings) {
         let keys = s.keybindings.iter().map(|(k, v)| (k.clone(), v.join(", "))).collect();
-        self.prefs = Some(Prefs { draft: s.clone(), page: PrefsPage::General, keys, applied_theme: s.theme.clone() });
+        self.prefs = Some(Prefs { draft: s.clone(), page: PrefsPage::General, keys,
+            applied_theme: s.theme.clone(),
+            message: None,
+            test_result: Default::default(),
+            test_message: None,
+        });
+    }
+
+    pub fn open_prefs_page(&mut self, s: &Settings, page: PrefsPage) {
+        self.open_prefs(s);
+        if let Some(p) = &mut self.prefs {
+            p.page = page;
+        }
+    }
+
+    pub fn open_goto(&mut self) {
+        self.history = None;
+        self.goto = Some(Picker { focus: true, names: session::list_layouts(), ..Default::default() });
+    }
+
+    pub fn open_history(&mut self) {
+        self.goto = None;
+        self.history = Some(Picker { focus: true, ..Default::default() });
+    }
+
+    pub fn open_searches(&mut self, pane: u64) {
+        if self.searches != Some(pane) {
+            self.new_search.clear();
+            self.new_search_regex = false;
+            self.new_search_alert = false;
+        }
+        self.searches = Some(pane);
+        self.searches_focus = true;
     }
 
     pub fn open_layouts(&mut self, at_startup: bool) {
@@ -157,17 +213,6 @@ impl Dialogs {
     }
 }
 
-fn escape_regex(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() * 2);
-    for c in s.chars() {
-        if "\\.+*?()|[]{}^$#&-~".contains(c) {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
-}
-
 fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
     let f = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     Rgb(f(a.0, b.0), f(a.1, b.1), f(a.2, b.2))
@@ -187,6 +232,9 @@ impl App {
         self.layouts_window(ctx);
         self.save_layout_window(ctx);
         self.commands_window(ctx);
+        self.searches_window(ctx);
+        self.goto_window(ctx);
+        self.history_window(ctx);
         self.rename_windows(ctx);
         self.find_bar(ctx);
         self.import_window(ctx);
@@ -272,6 +320,8 @@ impl App {
     }
 
     fn prefs_window(&mut self, ctx: &egui::Context) {
+        // Whether the focused terminal's shell is marking its prompts, for the Workflow page.
+        let integrated = self.focused().and_then(|id| self.panes.get(&id)).is_some_and(|p| p.shared.marks.lock().unwrap().seen);
         let Some(prefs) = &mut self.dlg.prefs else { return };
         let mut open = true;
         let mut apply = false;
@@ -285,6 +335,7 @@ impl App {
                     (PrefsPage::General, "General"),
                     (PrefsPage::Appearance, "Appearance"),
                     (PrefsPage::Colours, "Colours"),
+                    (PrefsPage::Workflow, "Workflow"),
                     (PrefsPage::Keys, "Keybindings"),
                 ] {
                     ui.selectable_value(&mut prefs.page, p, label);
@@ -339,9 +390,10 @@ impl App {
                     ui.checkbox(&mut d.copy_on_select, "Copy selected text automatically when the mouse button is released");
                     ui.checkbox(&mut d.middle_click_paste, "Middle-click pastes");
                     if !cfg!(target_os = "macos") {
-                        ui.checkbox(&mut d.plain_copy_paste, "Ctrl+C copies and Ctrl+V pastes (no Shift)").on_hover_text(
-                            "Ctrl+C copies while text is selected and otherwise interrupts the program as usual. \
-                             Ctrl+V pastes instead of being sent to the program (quoted-insert).",
+                        ui.checkbox(&mut d.ctrl_without_shift, "Shortcuts work without Shift (Ctrl+C, Ctrl+V, Ctrl+T, Ctrl+W …)").on_hover_text(
+                            "Every Ctrl+Shift+<key> shortcut also works as Ctrl+<key>, unless that key is bound to something else. \
+                             Ctrl+C copies only while text is selected, otherwise it interrupts the program as usual. \
+                             The program no longer receives these Ctrl keys (e.g. readline's Ctrl+W, Ctrl+R, Ctrl+L).",
                         );
                     }
                     ui.checkbox(&mut d.right_click_menu, "Right-click opens a menu (otherwise it pastes)");
@@ -476,6 +528,144 @@ impl App {
                             ui.end_row();
                         }
                     });
+                }
+                PrefsPage::Workflow => {
+                    let weak = |ui: &mut egui::Ui, t: &str| {
+                        ui.label(RichText::new(t).weak().size(12.0));
+                    };
+                    ui.heading("Alerts");
+                    ui.checkbox(&mut d.desktop_notifications, "Desktop notifications (and taskbar attention) when the window is in the background");
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut d.notify_long_commands, "Alert when a command that ran for at least");
+                        ui.add(egui::DragValue::new(&mut d.long_command_secs).range(1..=3600).suffix(" s"));
+                        ui.label("ends");
+                    });
+                    ui.checkbox(&mut d.notify_when_focused, "Alert even while I am looking at that terminal");
+                    let ctx = ui.ctx().clone();
+                    ui.horizontal(|ui| {
+                        if ui.button("Send a test notification").on_hover_text("Sent after 5 seconds, so you can switch to another window first").clicked() {
+                            let slot = prefs.test_result.clone();
+                            let repaint = ctx.clone();
+                            prefs.test_message = Some("Sending in 5 seconds: switch to another window now (desktops hide notifications from the window you are using)…".into());
+                            notify::test(std::time::Duration::from_secs(5), move |text| {
+                                *slot.lock().unwrap() = Some(text);
+                                repaint.request_repaint();
+                            });
+                        }
+                    });
+                    ui.checkbox(&mut d.alert_sound, "Play a ping sound when an alert is raised");
+                    ui.add_enabled_ui(d.alert_sound, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Sound");
+                            ui.add(egui::TextEdit::singleline(&mut d.alert_sound_file).hint_text("the system's ping").desired_width(240.0));
+                            if ui.button("Browse…").clicked()
+                                && let Some(p) = rfd::FileDialog::new().add_filter("Sounds", &["wav", "ogg", "oga", "mp3", "flac", "aiff"]).pick_file()
+                            {
+                                d.alert_sound_file = p.display().to_string();
+                            }
+                            if ui.button("▶ Play").clicked() {
+                                let slot = prefs.test_result.clone();
+                                let repaint = ctx.clone();
+                                crate::sound::test(&d.alert_sound_file, move |text| {
+                                    *slot.lock().unwrap() = Some(text);
+                                    repaint.request_repaint();
+                                });
+                            }
+                        });
+                    });
+                    if let Some(text) = prefs.test_result.lock().unwrap().take() {
+                        prefs.test_message = Some(text);
+                    }
+                    if let Some(m) = &prefs.test_message {
+                        ui.label(RichText::new(m).size(12.0));
+                    }
+                    weak(ui, "Also: watch text with a terminal's 🔍 saved searches, or have a script ask with  printf '\\e]9;Build done\\a'  (works over ssh too).");
+
+                    ui.add_space(10.0);
+                    ui.heading("Links");
+                    ui.checkbox(&mut d.clickable_links, "Ctrl+click opens URLs and file names in the output (⌘+click on macOS)");
+                    ui.horizontal(|ui| {
+                        ui.label("Open files with");
+                        let current = EDITOR_PRESETS.iter().find(|(_, c)| *c == d.editor_command).map(|(n, _)| *n).unwrap_or("Custom");
+                        egui::ComboBox::from_id_salt("editor").selected_text(current).show_ui(ui, |ui| {
+                            for (n, c) in EDITOR_PRESETS {
+                                ui.selectable_value(&mut d.editor_command, c.to_string(), *n);
+                            }
+                        });
+                    });
+                    ui.add(egui::TextEdit::singleline(&mut d.editor_command).hint_text("system default").desired_width(420.0).font(egui::TextStyle::Monospace));
+                    weak(ui, "{file}, {line} and {col} are filled in, e.g.  code -g {file}:{line}:{col}");
+
+                    ui.add_space(10.0);
+                    ui.heading("Shell integration");
+                    weak(
+                        ui,
+                        "Makes the shell mark each prompt and command. That gives you jump-to-prompt, select or copy a command's output, exit status and timing, the command history, and finish alerts that work on every OS.",
+                    );
+                    ui.horizontal(|ui| {
+                        if integrated {
+                            ui.colored_label(Color32::from_rgb(80, 190, 110), "● Active in the current terminal");
+                        } else {
+                            ui.label(RichText::new("○ Not active in the current terminal").weak());
+                        }
+                    });
+                    let detected = Shell::detect();
+                    for shell in Shell::ALL {
+                        ui.horizontal(|ui| {
+                            let mark = if shell.installed() { "✓ installed" } else { "" };
+                            let label = if detected == Some(shell) { format!("{} (your shell)", shell.name()) } else { shell.name().to_string() };
+                            ui.add_sized([150.0, 20.0], egui::Label::new(label));
+                            if ui.button(if shell.installed() { "Reinstall" } else { "Install" }).clicked() {
+                                prefs.message = Some(match shell.install() {
+                                    Ok(rc) => format!("Added to {}. Open a new terminal to use it.", rc.display()),
+                                    Err(e) => e,
+                                });
+                            }
+                            if ui.button("Copy line").on_hover_text("Copy what Install adds to the shell's startup file").clicked() {
+                                ui.ctx().copy_text(shell.snippet());
+                            }
+                            ui.label(RichText::new(mark).weak());
+                        });
+                    }
+                    if let Some(m) = &prefs.message {
+                        ui.label(m);
+                    }
+                    ui.checkbox(&mut d.command_marks, "Show a green / red bar beside each command's output");
+
+                    ui.add_space(10.0);
+                    ui.heading("Recording and session");
+                    ui.checkbox(&mut d.record_output, "Write every terminal's output to a text file as it arrives");
+                    ui.horizontal(|ui| {
+                        ui.label("Into");
+                        ui.add(egui::TextEdit::singleline(&mut d.record_dir).hint_text("logs folder in the settings folder").desired_width(300.0));
+                        if ui.button("Browse…").clicked()
+                            && let Some(p) = rfd::FileDialog::new().pick_folder()
+                        {
+                            d.record_dir = p.display().to_string();
+                        }
+                        if ui.button("Open").clicked() {
+                            open_path(&crate::record::record_dir(d));
+                        }
+                    });
+                    weak(ui, "One terminal only: right-click → Record to a file.");
+                    ui.checkbox(&mut d.persist_scrollback, "Keep each terminal's recent output across restarts and crashes");
+                    ui.add_enabled_ui(d.persist_scrollback, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Keep the last");
+                            ui.add(egui::DragValue::new(&mut d.persist_lines).range(100..=100_000).speed(50));
+                            ui.label("lines of each");
+                        });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Save the session every");
+                        ui.add(egui::DragValue::new(&mut d.autosave_secs).range(0..=3600).suffix(" s"));
+                        weak(ui, "(0 = only when quitting)");
+                    });
+
+                    ui.add_space(10.0);
+                    ui.heading("Remote sessions");
+                    ui.checkbox(&mut d.osc52_read, "Let programs read my clipboard (OSC 52)")
+                        .on_hover_text("Programs can always put text on your clipboard, which makes copying from remote editors work. Reading it back is off by default, because a remote host could then see what you copied.");
                 }
                 PrefsPage::Keys => {
                     ui.label("Separate several shortcuts with commas, e.g. \"Ctrl+Shift+O, Cmd+D\". Modifiers: Ctrl, Shift, Alt, Cmd.");
@@ -939,7 +1129,7 @@ impl App {
                     t.layout = Some(name.clone());
                 }
             }
-            let snap = self.snapshot(&name, only);
+            let snap = self.snapshot(&name, only, false);
             match session::save_layout(&snap) {
                 Ok(()) => {
                     self.layout_name = name;
@@ -1013,6 +1203,9 @@ impl App {
                                     swap = Some((i, i - 1));
                                 }
                                 ui.add_space(4.0);
+                                ui.checkbox(&mut c.reconnect, "Keep alive").on_hover_text(
+                                    "If this command ends with an error (an ssh connection that dropped, say), run it again automatically, waiting a little longer each time.",
+                                );
                                 ui.checkbox(&mut c.auto_run, "Auto-run");
                                 ui.add_space(4.0);
                                 let edit =
@@ -1068,7 +1261,11 @@ impl App {
                         });
                     });
                 if commit {
-                    p.commands.push(SavedCommand { command: self.dlg.new_command.trim().to_string(), auto_run: self.dlg.new_command_auto });
+                    p.commands.push(SavedCommand {
+                        command: self.dlg.new_command.trim().to_string(),
+                        auto_run: self.dlg.new_command_auto,
+                        ..Default::default()
+                    });
                     self.dlg.new_command.clear();
                     self.dlg.new_command_auto = false;
                 }
@@ -1088,7 +1285,7 @@ impl App {
                         .clicked()
                         && let Some(s) = sel
                     {
-                        p.commands.push(SavedCommand { command: s, auto_run: false });
+                        p.commands.push(SavedCommand { command: s, ..Default::default() });
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let autos: Vec<String> =
@@ -1114,13 +1311,352 @@ impl App {
                 // Keep a command typed into the empty row but never confirmed.
                 let pending = self.dlg.new_command.trim();
                 if !pending.is_empty() {
-                    p.commands.push(SavedCommand { command: pending.to_string(), auto_run: self.dlg.new_command_auto });
+                    p.commands.push(SavedCommand { command: pending.to_string(), auto_run: self.dlg.new_command_auto, ..Default::default() });
                 }
                 p.commands.retain(|c| !c.command.trim().is_empty());
             }
             self.dlg.new_command.clear();
             self.dlg.new_command_auto = false;
             self.dlg.commands = None;
+        }
+    }
+
+
+    /// The query box and keys of a picker. Returns (selection moved, Enter pressed, Escape pressed).
+    fn picker_header(ui: &mut egui::Ui, pk: &mut Picker, hint: &str, count: usize) -> (bool, bool, bool) {
+        let r = ui.add(egui::TextEdit::singleline(&mut pk.query).hint_text(hint).desired_width(f32::INFINITY).margin(vec2(8.0, 6.0)));
+        if pk.focus {
+            r.request_focus();
+            pk.focus = false;
+        }
+        if r.changed() {
+            pk.selected = 0;
+        }
+        let (down, up, enter, esc) =
+            ui.input(|i| (i.key_pressed(Key::ArrowDown), i.key_pressed(Key::ArrowUp), i.key_pressed(Key::Enter), i.key_pressed(Key::Escape)));
+        let before = pk.selected;
+        if down {
+            pk.selected += 1;
+        }
+        if up {
+            pk.selected = pk.selected.saturating_sub(1);
+        }
+        pk.selected = pk.selected.min(count.saturating_sub(1));
+        (pk.selected != before, enter, esc)
+    }
+
+    /// "Go to…": jump to any terminal, open a saved layout, or run one of this terminal's saved commands.
+    fn goto_window(&mut self, ctx: &egui::Context) {
+        let Some(mut pk) = self.dlg.goto.take() else { return };
+        enum Item {
+            Pane(u64),
+            Layout(String),
+            Command(u64, String),
+        }
+        let home = dirs::home_dir().map(|h| h.display().to_string()).unwrap_or_default();
+        let tilde = |p: &std::path::Path| {
+            let d = p.display().to_string();
+            if !home.is_empty() && d.starts_with(&home) { format!("~{}", &d[home.len()..]) } else { d }
+        };
+        let mut rows: Vec<(String, String, Item)> = Vec::new();
+        for (ti, tab) in self.tabs.iter().enumerate() {
+            for id in tab.root.leaves() {
+                let Some(p) = self.panes.get(&id) else { continue };
+                let mut label = p.title();
+                if p.alert {
+                    label = format!("🔔 {label}");
+                }
+                let layout = tab.layout.as_ref().map(|l| format!("{l} · ")).unwrap_or_default();
+                rows.push((label, format!("tab {} · {layout}{}", ti + 1, tilde(&p.cwd)), Item::Pane(id)));
+            }
+        }
+        if let Some(id) = self.focused() {
+            for c in self.panes.get(&id).map(|p| p.commands.clone()).unwrap_or_default() {
+                rows.push((format!("▶ {}", c.command), "run in this terminal".into(), Item::Command(id, c.command)));
+            }
+        }
+        for n in &pk.names {
+            rows.push((format!("Open layout: {n}"), "saved layout".into(), Item::Layout(n.clone())));
+        }
+        let mut scored: Vec<(i32, (String, String, Item))> =
+            rows.into_iter().filter_map(|r| fuzzy(&pk.query, &format!("{} {}", r.0, r.1)).map(|s| (s, r))).collect();
+        scored.sort_by_key(|(s, _)| -*s);
+
+        let mut chosen: Option<usize> = None;
+        let mut close = false;
+        egui::Window::new("goto_picker")
+            .title_bar(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_TOP, [0.0, 70.0])
+            .show(ctx, |ui| {
+                ui.set_width(580.0);
+                let (moved, enter, esc) = Self::picker_header(ui, &mut pk, "Go to a terminal, layout or saved command…", scored.len());
+                close = esc;
+                if enter && !scored.is_empty() {
+                    chosen = Some(pk.selected);
+                }
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
+                    if scored.is_empty() {
+                        ui.weak("Nothing matches");
+                    }
+                    for (i, (_, (label, detail, _))) in scored.iter().enumerate() {
+                        let b = egui::Button::new(())
+                            .left_text(RichText::new(label))
+                            .right_text(RichText::new(detail).weak().size(11.5))
+                            .selected(i == pk.selected)
+                            .min_size(vec2(ui.available_width(), 26.0))
+                            .truncate();
+                        let r = ui.add(b);
+                        if i == pk.selected && moved {
+                            r.scroll_to_me(None);
+                        }
+                        if r.clicked() {
+                            chosen = Some(i);
+                        }
+                    }
+                });
+            });
+        if let Some(i) = chosen {
+            match scored.swap_remove(i).1.2 {
+                Item::Pane(id) => self.acts.push(Act::Focus(id)),
+                Item::Layout(n) => self.acts.push(Act::OpenLayout(n, false, true)),
+                Item::Command(id, c) => self.acts.push(Act::Run(id, c)),
+            }
+            close = true;
+        }
+        if !close {
+            self.dlg.goto = Some(pk);
+        }
+    }
+
+    /// Every command typed in any terminal since term started, newest first.
+    fn history_window(&mut self, ctx: &egui::Context) {
+        let Some(mut pk) = self.dlg.history.take() else { return };
+        struct Entry {
+            command: String,
+            pane: u64,
+            exit: Option<i32>,
+            ago: Option<std::time::Duration>,
+            at: Option<std::time::Instant>,
+        }
+        let mut entries: Vec<Entry> = Vec::new();
+        let mut integrated = false;
+        for (id, p) in &self.panes {
+            let marks = p.shared.marks.lock().unwrap();
+            integrated |= marks.seen;
+            for b in marks.blocks.iter().rev().take(500) {
+                if !b.command.is_empty() {
+                    entries.push(Entry {
+                        command: b.command.clone(),
+                        pane: *id,
+                        exit: b.exit,
+                        ago: b.started.map(|s| s.elapsed()),
+                        at: b.started,
+                    });
+                }
+            }
+        }
+        entries.sort_by(|a, b| b.at.cmp(&a.at));
+        let mut seen = std::collections::HashSet::new();
+        entries.retain(|e| seen.insert(e.command.clone()));
+        let entries: Vec<Entry> = entries.into_iter().filter(|e| fuzzy(&pk.query, &e.command).is_some()).collect();
+
+        let target = self.focused();
+        let mut chosen: Option<(usize, bool)> = None;
+        let mut close = false;
+        let mut open_prefs = false;
+        egui::Window::new("history_picker")
+            .title_bar(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_TOP, [0.0, 70.0])
+            .show(ctx, |ui| {
+                ui.set_width(620.0);
+                let (moved, enter, esc) = Self::picker_header(ui, &mut pk, "Search commands from all terminals…", entries.len());
+                close = esc;
+                if enter && !entries.is_empty() {
+                    chosen = Some((pk.selected, ui.input(|i| i.modifiers.shift)));
+                }
+                ui.add_space(4.0);
+                if !integrated {
+                    ui.label("Command history needs shell integration, so the shell can tell term what was typed.");
+                    if ui.button("Set up shell integration…").clicked() {
+                        open_prefs = true;
+                    }
+                } else if entries.is_empty() {
+                    ui.weak("No commands yet");
+                }
+                egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
+                    for (i, e) in entries.iter().enumerate() {
+                        let name = self.panes.get(&e.pane).map(|p| p.title()).unwrap_or_default();
+                        let mut detail = name;
+                        if let Some(c) = e.exit.filter(|c| *c != 0) {
+                            detail = format!("✗ {c} · {detail}");
+                        }
+                        if let Some(a) = e.ago {
+                            detail = format!("{detail} · {} ago", format_duration(std::time::Duration::from_secs(a.as_secs())));
+                        }
+                        let b = egui::Button::new(())
+                            .left_text(RichText::new(&e.command).monospace())
+                            .right_text(RichText::new(detail).weak().size(11.5))
+                            .selected(i == pk.selected)
+                            .min_size(vec2(ui.available_width(), 26.0))
+                            .truncate();
+                        let r = ui.add(b);
+                        if i == pk.selected && moved {
+                            r.scroll_to_me(None);
+                        }
+                        if r.clicked() {
+                            chosen = Some((i, ui.input(|i| i.modifiers.shift)));
+                        }
+                    }
+                });
+                ui.weak("Enter types it into the terminal · Shift+Enter runs it");
+            });
+        if let (Some((i, run)), Some(t)) = (chosen, target) {
+            let cmd = entries[i].command.clone();
+            self.acts.push(if run { Act::Run(t, cmd) } else { Act::Insert(t, cmd) });
+            close = true;
+        }
+        if open_prefs {
+            self.dlg.open_prefs_page(&self.s, PrefsPage::Workflow);
+            close = true;
+        }
+        if !close {
+            self.dlg.history = Some(pk);
+        }
+    }
+
+    /// The saved searches of one terminal: text to find again, and optionally to be alerted about.
+    fn searches_window(&mut self, ctx: &egui::Context) {
+        let Some(id) = self.dlg.searches else { return };
+        let theme = self.s.theme.clone();
+        let Some(p) = self.panes.get_mut(&id) else {
+            self.dlg.searches = None;
+            return;
+        };
+        let mut open = true;
+        let title = p.title();
+        let card = mix(theme.background, theme.foreground, 0.07).color();
+        let accent = theme.accent.color();
+        let focus_new = std::mem::take(&mut self.dlg.searches_focus);
+        let mut find: Option<usize> = None;
+        egui::Window::new(format!("Saved searches — {title}"))
+            .id(egui::Id::new("searches_window"))
+            .open(&mut open)
+            .collapsible(false)
+            .default_width(640.0)
+            .min_width(520.0)
+            .show(ctx, |ui| {
+                ui.label(RichText::new("Text to find again in this terminal's output. Click Find to select the latest match, again for earlier ones.").weak());
+                ui.label(RichText::new("Tick Alert to be told when it shows up in new output (a notification when you are elsewhere).").weak());
+                ui.add_space(10.0);
+                let mut remove = None;
+                let mut swap = None;
+                let n = p.searches.len();
+                for (i, sv) in p.searches.iter_mut().enumerate() {
+                    egui::Frame::new().fill(card).corner_radius(8).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            if ui.add(egui::Button::new(RichText::new("Find").color(accent)).min_size(vec2(44.0, 28.0))).clicked() {
+                                find = Some(i);
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let icon = |ui: &mut egui::Ui, s: &str, enabled: bool, tip: &str| {
+                                    ui.add_enabled(enabled, egui::Button::new(RichText::new(s).size(13.0)).frame(false).min_size(vec2(22.0, 26.0)))
+                                        .on_hover_text(tip)
+                                        .clicked()
+                                };
+                                if icon(ui, "🗑", true, "Remove") {
+                                    remove = Some(i);
+                                }
+                                if icon(ui, "↓", i + 1 < n, "Move down") {
+                                    swap = Some((i, i + 1));
+                                }
+                                if icon(ui, "↑", i > 0, "Move up") {
+                                    swap = Some((i, i - 1));
+                                }
+                                ui.checkbox(&mut sv.alert, "🔔 Alert");
+                                ui.checkbox(&mut sv.regex, "Regex");
+                                let edit = egui::TextEdit::singleline(&mut sv.pattern).font(egui::TextStyle::Monospace).margin(vec2(8.0, 5.0));
+                                ui.add_sized([ui.available_width(), 28.0], edit);
+                            });
+                        });
+                    });
+                    ui.add_space(4.0);
+                }
+                // The empty row: type and press Enter.
+                let mut commit = false;
+                egui::Frame::new()
+                    .fill(mix(theme.background, theme.foreground, 0.04).color())
+                    .stroke(egui::Stroke::new(1.0, mix(theme.background, theme.foreground, 0.12).color()))
+                    .corner_radius(8)
+                    .inner_margin(egui::Margin::symmetric(8, 6))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.add_sized([44.0, 28.0], egui::Label::new(RichText::new("+").size(15.0).color(accent)));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.checkbox(&mut self.dlg.new_search_alert, "🔔 Alert");
+                                ui.checkbox(&mut self.dlg.new_search_regex, "Regex");
+                                let edit = egui::TextEdit::singleline(&mut self.dlg.new_search)
+                                    .font(egui::TextStyle::Monospace)
+                                    .hint_text("New search: type it and press Enter")
+                                    .margin(vec2(8.0, 5.0));
+                                let r = ui.add_sized([ui.available_width(), 28.0], edit);
+                                if focus_new {
+                                    r.request_focus();
+                                }
+                                if r.lost_focus() && !self.dlg.new_search.trim().is_empty() {
+                                    commit = true;
+                                }
+                            });
+                        });
+                    });
+                if commit {
+                    p.searches.push(SavedSearch {
+                        pattern: self.dlg.new_search.trim().to_string(),
+                        regex: self.dlg.new_search_regex,
+                        alert: self.dlg.new_search_alert,
+                    });
+                    self.dlg.new_search.clear();
+                    self.dlg.new_search_alert = false;
+                    if ui.input(|i| i.key_pressed(Key::Enter)) {
+                        self.dlg.searches_focus = true;
+                    }
+                }
+                if let Some((a, b)) = swap {
+                    p.searches.swap(a, b);
+                }
+                if let Some(i) = remove {
+                    p.searches.remove(i);
+                }
+                ui.add_space(8.0);
+                let sel = p.term.lock().selection_to_string().map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && !s.contains('\n'));
+                if ui
+                    .add_enabled(sel.is_some(), egui::Button::new("Add selected text"))
+                    .on_disabled_hover_text("Select some text (one line) in the terminal first")
+                    .clicked()
+                    && let Some(s) = sel
+                {
+                    p.searches.push(SavedSearch { pattern: s, ..Default::default() });
+                }
+            });
+        if let Some(i) = find {
+            self.acts.push(Act::FindSaved(id, i, false));
+        }
+        if !open && let Some(p) = self.panes.get_mut(&id) {
+            let pending = self.dlg.new_search.trim();
+            if !pending.is_empty() {
+                p.searches.push(SavedSearch {
+                    pattern: pending.to_string(),
+                    regex: self.dlg.new_search_regex,
+                    alert: self.dlg.new_search_alert,
+                });
+            }
+            p.searches.retain(|s| !s.pattern.trim().is_empty());
+            self.dlg.new_search.clear();
+            self.dlg.new_search_alert = false;
+            self.dlg.searches = None;
         }
     }
 
@@ -1195,6 +1731,7 @@ impl App {
         };
         let mut step: Option<bool> = None;
         let mut close = false;
+        let mut save = false;
         let before = f.query.clone();
         egui::Area::new(egui::Id::new("find_bar"))
             .fixed_pos(egui::pos2(rect.max.x - 430.0, rect.min.y + 24.0))
@@ -1221,6 +1758,13 @@ impl App {
                             step = Some(false);
                         }
                         ui.checkbox(&mut f.regex, ".*").on_hover_text("Regular expression");
+                        if ui
+                            .add_enabled(!f.query.is_empty(), egui::Button::new("☆").frame(false))
+                            .on_hover_text("Save this search with the terminal (see 🔍 in its title bar)")
+                            .clicked()
+                        {
+                            save = true;
+                        }
                         if !f.status.is_empty() {
                             ui.weak(&f.status);
                         }
@@ -1233,6 +1777,15 @@ impl App {
         if f.query != before {
             f.last = None;
             f.status.clear();
+        }
+        if save {
+            let (id, query, regex) = (f.pane, f.query.clone(), f.regex);
+            if let Some(p) = self.panes.get_mut(&id) {
+                if !p.searches.iter().any(|s| s.pattern == query && s.regex == regex) {
+                    p.searches.push(SavedSearch { pattern: query.clone(), regex, alert: false });
+                }
+                self.toast(id, "Search saved", format!("“{query}” is under 🔍 in this terminal's title bar."));
+            }
         }
         if close {
             self.dlg.find = None;
@@ -1250,34 +1803,17 @@ impl App {
             return;
         }
         let pattern = if f.regex { f.query.clone() } else { escape_regex(&f.query) };
-        let mut re = match RegexSearch::new(&pattern) {
-            Ok(r) => r,
-            Err(_) => {
-                f.status = "Invalid pattern".into();
-                return;
-            }
-        };
         let mut t = p.term.lock();
-        let origin = match &f.last {
-            Some(m) if backwards => m.start().sub(&*t, Boundary::None, 1),
-            Some(m) => m.end().add(&*t, Boundary::None, 1),
-            None if backwards => Point::new(t.bottommost_line(), t.last_column()),
-            None => Point::new(t.topmost_line(), Column(0)),
-        };
-        let dir = if backwards { Direction::Left } else { Direction::Right };
-        let side = if backwards { Side::Right } else { Side::Left };
-        match t.search_next(&mut re, origin, dir, side, None) {
-            Some(m) => {
-                let mut sel = Selection::new(SelectionType::Simple, *m.start(), Side::Left);
-                sel.update(*m.end(), Side::Right);
-                t.selection = Some(sel);
-                t.scroll_to_point(*m.start());
+        match search::find(&t, &pattern, f.last.as_ref(), backwards) {
+            Err(()) => f.status = "Invalid pattern".into(),
+            Ok(Some(m)) => {
+                search::select(&mut t, &m);
                 f.last = Some(m);
                 f.status.clear();
                 drop(t);
                 p.set_hold(true);
             }
-            None => f.status = "Not found".into(),
+            Ok(None) => f.status = "Not found".into(),
         }
     }
 

@@ -295,6 +295,13 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("scroll_top", "Scroll to top"),
     ("scroll_bottom", "Scroll to bottom"),
     ("find", "Find in scrollback"),
+    ("prev_prompt", "Jump to previous prompt"),
+    ("next_prompt", "Jump to next prompt"),
+    ("select_output", "Select the last command's output"),
+    ("copy_output", "Copy the last command's output"),
+    ("goto", "Go to a terminal or tab…"),
+    ("command_history", "Command history…"),
+    ("record", "Record this terminal to a file"),
     ("clear", "Clear scrollback and reset"),
     ("broadcast", "Cycle broadcast input (off / tab / all)"),
     ("commands", "Run a saved command"),
@@ -348,6 +355,13 @@ fn default_keybindings() -> BTreeMap<String, Vec<String>> {
     b("scroll_top", &["Shift+Home"], &["Cmd+Home"]);
     b("scroll_bottom", &["Shift+End"], &["Cmd+End"]);
     b("find", &["Ctrl+Shift+F"], &["Cmd+F"]);
+    b("prev_prompt", &["Ctrl+Shift+PageUp"], &["Cmd+Shift+Up"]);
+    b("next_prompt", &["Ctrl+Shift+PageDown"], &["Cmd+Shift+Down"]);
+    b("select_output", &["Ctrl+Shift+J"], &["Cmd+Shift+J"]);
+    b("copy_output", &["Ctrl+Shift+Y"], &["Cmd+Shift+Y"]);
+    b("goto", &["Ctrl+Shift+K"], &["Cmd+Shift+K"]);
+    b("command_history", &["Ctrl+Shift+H"], &["Cmd+Y"]);
+    b("record", &[], &[]);
     b("clear", &["Ctrl+Shift+G"], &["Cmd+K"]);
     b("broadcast", &["Ctrl+Shift+B"], &["Cmd+Shift+B"]);
     b("commands", &["Ctrl+Shift+R"], &["Cmd+Shift+R"]);
@@ -424,9 +438,39 @@ pub struct Settings {
     /// Freeze the view while a selection exists so live output cannot move the text being copied.
     pub lock_on_select: bool,
     pub middle_click_paste: bool,
-    /// Ctrl+C copies (while text is selected) and Ctrl+V pastes, without Shift. Not used on macOS.
-    pub plain_copy_paste: bool,
+    /// Every Ctrl+Shift+<key> binding also works as Ctrl+<key> (Ctrl+C copies only while text is selected).
+    /// Not used on macOS.
+    #[serde(alias = "plain_copy_paste")]
+    pub ctrl_without_shift: bool,
     pub right_click_menu: bool,
+    /// Ctrl+click (⌘+click on macOS) opens URLs and file paths in the output.
+    pub clickable_links: bool,
+    /// Opens `file:line` links. `{file}`, `{line}` and `{col}` are replaced; empty uses the system opener.
+    pub editor_command: String,
+    /// Desktop notifications for finished commands, watched text and programs that ask for one.
+    pub desktop_notifications: bool,
+    /// Notify when a command that ran at least `long_command_secs` finishes out of sight.
+    pub notify_long_commands: bool,
+    pub long_command_secs: u32,
+    /// Also notify while looking at the terminal.
+    pub notify_when_focused: bool,
+    /// Play a ping whenever an alert is raised.
+    pub alert_sound: bool,
+    /// A sound file to play instead of the system's ping (wav, ogg, mp3 … depending on the OS's player).
+    pub alert_sound_file: String,
+    /// Colour bars beside each command's output and a status badge in the title bar (needs shell integration).
+    pub command_marks: bool,
+    /// Let programs read the clipboard through OSC 52. Off: a remote host cannot read what you copied.
+    pub osc52_read: bool,
+    /// Write every terminal's output to a text file as it arrives.
+    pub record_output: bool,
+    /// Folder for recordings; empty uses `logs` in the settings folder.
+    pub record_dir: String,
+    /// Keep each terminal's recent scrollback across restarts and crashes.
+    pub persist_scrollback: bool,
+    pub persist_lines: usize,
+    /// Seconds between automatic saves of the session (0 = only when quitting).
+    pub autosave_secs: u32,
     pub bold_is_bright: bool,
     pub faux_bold: bool,
     pub show_titlebars: bool,
@@ -467,8 +511,23 @@ impl Default for Settings {
             copy_on_select: true,
             lock_on_select: true,
             middle_click_paste: true,
-            plain_copy_paste: false,
+            ctrl_without_shift: false,
             right_click_menu: true,
+            clickable_links: true,
+            editor_command: String::new(),
+            desktop_notifications: true,
+            notify_long_commands: true,
+            long_command_secs: 10,
+            notify_when_focused: false,
+            alert_sound: false,
+            alert_sound_file: String::new(),
+            command_marks: true,
+            osc52_read: false,
+            record_output: false,
+            record_dir: String::new(),
+            persist_scrollback: true,
+            persist_lines: 5000,
+            autosave_secs: 30,
             bold_is_bright: true,
             faux_bold: true,
             show_titlebars: true,
@@ -520,6 +579,9 @@ impl Settings {
             self.keybindings.entry(action).or_insert(keys);
         }
         self.font_size = self.font_size.clamp(6.0, 72.0);
+        self.long_command_secs = self.long_command_secs.clamp(1, 3600);
+        self.persist_lines = self.persist_lines.clamp(100, 100_000);
+        self.autosave_secs = self.autosave_secs.min(3600);
     }
 
     pub fn save(&self) {

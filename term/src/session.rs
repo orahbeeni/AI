@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{config_dir, layouts_dir};
 use crate::layout::Node;
-use crate::pane::SavedCommand;
+use crate::pane::{SavedCommand, SavedSearch};
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug, Default)]
 #[serde(default)]
@@ -14,6 +14,9 @@ pub struct PaneSpec {
     pub cwd: Option<String>,
     pub name: Option<String>,
     pub commands: Vec<SavedCommand>,
+    pub searches: Vec<SavedSearch>,
+    /// Names this terminal's saved scrollback; only in the session, not in saved layouts.
+    pub uid: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -176,4 +179,32 @@ pub fn load_session() -> Option<LayoutFile> {
 
 pub fn save_session(l: &LayoutFile) {
     let _ = write(&session_path(), l);
+}
+
+fn scrollback_dir() -> PathBuf {
+    config_dir().join("scrollback")
+}
+
+fn scrollback_path(uid: &str) -> PathBuf {
+    let safe: String = uid.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    scrollback_dir().join(format!("{safe}.txt"))
+}
+
+pub fn save_scrollback(uid: &str, text: &str) {
+    let _ = std::fs::create_dir_all(scrollback_dir());
+    let _ = std::fs::write(scrollback_path(uid), text);
+}
+
+pub fn load_scrollback(uid: &str) -> Option<String> {
+    std::fs::read_to_string(scrollback_path(uid)).ok().filter(|t| !t.trim().is_empty())
+}
+
+/// Delete saved scrollback that no terminal in the session refers to any more.
+pub fn prune_scrollback(keep: &[String]) {
+    let keep: Vec<PathBuf> = keep.iter().map(|u| scrollback_path(u)).collect();
+    for e in std::fs::read_dir(scrollback_dir()).into_iter().flatten().flatten() {
+        if !keep.contains(&e.path()) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
 }
