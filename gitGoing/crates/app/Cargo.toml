@@ -12,4 +12,7 @@ png = { version = "0.17", default-features = false }
 jpeg-decoder = { version = "0.3", default-features = false }
 
 [dev-dependencies]
+egui_kittest = { version = "0.31.1", features = ["wgpu", "snapshot"] }
+# The test renderer turns on egui's accesskit; egui-winit has to be built to match (tests only).
+egui-winit = { version = "0.31.1", default-features = false, features = ["accesskit"] }
 tempfile = "3"

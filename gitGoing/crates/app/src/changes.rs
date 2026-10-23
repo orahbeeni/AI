@@ -2,6 +2,7 @@
 
 use crate::detail::{spawn, Fetch};
 use crate::diffview::{self, DiffOpts, HunkBtn};
+use gitgoing_core::origins::Origins;
 use crate::filemenu::{self, FileRequest};
 use crate::filerows;
 use crate::filetree::{self, ViewMode};
@@ -24,6 +25,11 @@ pub struct Changes {
     selected: Option<(String, bool)>,
     diff: Option<Result<FileDiff, String>>,
     diff_rx: Fetch<FileDiff>,
+    /// Where the selected diff's old-side lines came from.
+    origins: Option<Origins>,
+    origins_rx: Fetch<Origins>,
+    /// A line history for the app to open.
+    pub line_history: Option<crate::linehist::Request>,
     summary: String,
     description: String,
     /// Whether the centre pane shows the selected file's diff.
@@ -85,6 +91,9 @@ impl Changes {
             selected: None,
             diff: None,
             diff_rx: None,
+            origins: None,
+            origins_rx: None,
+            line_history: None,
             summary: String::new(),
             description: String::new(),
             diff_open: false,
@@ -163,6 +172,12 @@ impl Changes {
         let conflicted = matches!(&self.status, Some(Ok(s))
             if !staged && s.unstaged.iter().any(|e| e.path == path && e.kind == ChangeKind::Conflicted));
         let (file_view, ignore_ws) = (self.opts.file_view, self.opts.ignore_ws);
+        self.origins = None;
+        self.origins_rx = None;
+        if !file_view && !conflicted {
+            let (r, p) = (repo.clone(), path.clone());
+            self.origins_rx = Some(spawn(ctx, move || gitgoing_core::origins::for_working_changes(&r, &p, staged)));
+        }
         self.diff_rx = Some(spawn(ctx, move || {
             use gitgoing_core::diff::{file_text, FileSource};
             if conflicted {
@@ -226,6 +241,13 @@ impl Changes {
             if let Ok(r) = rx.try_recv() {
                 self.diff_rx = None;
                 self.diff = Some(r);
+            }
+        }
+        if let Some(rx) = &self.origins_rx {
+            if let Ok(r) = rx.try_recv() {
+                self.origins_rx = None;
+                // Without origins (e.g. a binary file) the diff simply shows no notes.
+                self.origins = r.ok();
             }
         }
         if let Some(rx) = &self.ignored_rx {
@@ -745,8 +767,17 @@ pub fn diff_pane(ui: &mut egui::Ui, c: &mut Changes) -> bool {
             edit_label: (kind != Some(ChangeKind::Deleted))
                 .then_some(if staged { "Edit in working directory" } else { "Edit this file" }),
             hunk_btn,
+            origins: c.origins.as_ref(),
         },
     );
+    if let (Some((a, b)), Some(o)) = (out.line_history, &c.origins) {
+        match (o.rev, o.rev_range(a, b)) {
+            (Some(rev), Some((start, end))) => {
+                c.line_history = Some(crate::linehist::Request { repo: c.repo.clone(), rev, path: o.path.clone(), start, end })
+            }
+            _ => c.error = Some("Those lines are only staged; they have no committed history yet.".to_owned()),
+        }
+    }
     if out.refetch {
         c.load_diff(&ctx);
     }

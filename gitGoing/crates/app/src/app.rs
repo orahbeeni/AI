@@ -21,6 +21,7 @@ use gitgoing_core::undo::{self, UndoEntry};
 use gitgoing_core::remote::{self, PullMode};
 use gitgoing_core::rebase::{self, Action as RebaseAction, TodoItem};
 use gitgoing_core::remotes;
+use gitgoing_core::changesets;
 use gitgoing_core::stash;
 use gitgoing_core::watch::Watch;
 use gitgoing_core::graph::{SegKind, PALETTE_SIZE};
@@ -189,6 +190,17 @@ impl StashDlg {
     }
 }
 
+/// The window to save the current changes as a named set, or to rename one.
+struct ChangeSetDlg {
+    /// Renaming this set (reference name) instead of saving.
+    rename: Option<String>,
+    name: String,
+    include_untracked: bool,
+    /// Names of the saved sets, offered for updating.
+    existing: Vec<String>,
+    focused: bool,
+}
+
 enum StashOp {
     Save,
     Apply(usize),
@@ -198,6 +210,10 @@ enum StashOp {
 enum Confirm {
     DeleteBranch(String),
     DropStash(usize),
+    /// Delete a saved change set: (reference name, display name).
+    DeleteChangeSet(String, String),
+    /// Replace a saved change set's contents with the current changes (display name).
+    UpdateChangeSet(String),
     DeleteTag(String),
     HardReset(gitgoing_core::Oid),
     DeleteRemoteBranch(String),
@@ -411,6 +427,10 @@ pub struct RepoTab {
     retry: Option<Retry>,
     stash_offer: Option<StashOffer>,
     stash_dlg: Option<StashDlg>,
+    change_set_dlg: Option<ChangeSetDlg>,
+    /// The history of some lines, opened from a diff.
+    line_hist: Option<crate::linehist::LineHistWin>,
+    line_hist_serial: u64,
     /// A failed operation to tell the user about in a window (the status bar is easy to miss).
     error_dlg: Option<(String, String)>,
     file_hist: Option<filedlgs::FileHistDlg>,
@@ -473,6 +493,9 @@ impl RepoTab {
             retry: None,
             stash_offer: None,
             stash_dlg: None,
+            change_set_dlg: None,
+            line_hist: None,
+            line_hist_serial: 0,
             error_dlg: None,
             file_hist: None,
             blame: None,
@@ -1167,6 +1190,25 @@ impl RepoTab {
                 Some(SidebarAction::ApplyStash(i)) => stash_op = Some(StashOp::Apply(i)),
                 Some(SidebarAction::PopStash(i)) => stash_op = Some(StashOp::Pop(i)),
                 Some(SidebarAction::DropStash(i)) => self.confirm = Some(Confirm::DropStash(i)),
+                Some(SidebarAction::SaveChanges) => {
+                    let existing = self.repo.as_ref().and_then(|l| l.info.as_ref()).map(|i| i.change_sets.iter().map(|c| c.name.clone()).collect()).unwrap_or_default();
+                    self.change_set_dlg = Some(ChangeSetDlg { rename: None, name: String::new(), include_untracked: true, existing, focused: false });
+                }
+                Some(SidebarAction::RenameChangeSet(refname, name)) => {
+                    self.change_set_dlg = Some(ChangeSetDlg { rename: Some(refname), name, include_untracked: true, existing: Vec::new(), focused: false });
+                }
+                Some(SidebarAction::ApplyChangeSet(refname)) => {
+                    self.run_op(ctx, "Apply saved changes", move |p| changesets::apply(p, &refname))
+                }
+                Some(SidebarAction::UpdateChangeSet(name)) => self.confirm = Some(Confirm::UpdateChangeSet(name)),
+                Some(SidebarAction::DeleteChangeSet(refname, name)) => self.confirm = Some(Confirm::DeleteChangeSet(refname, name)),
+                Some(SidebarAction::ShowChangeSet(id)) => {
+                    if let (Some(l), Some(path)) = (&mut self.repo, repo_path.as_ref()) {
+                        l.show_changes = false;
+                        l.selected = None;
+                        l.detail = Some(Detail::new(ctx, path, id));
+                    }
+                }
                 Some(SidebarAction::ShowStash(id)) => {
                     if let (Some(l), Some(path)) = (&mut self.repo, repo_path.as_ref()) {
                         l.show_changes = false;
@@ -1209,6 +1251,27 @@ impl RepoTab {
                 history_view(ui, l, tab_id, widths, &mut commit_act);
             }
         });
+        // A diff asked for the history of some lines: open (or replace) the window.
+        let req = self.repo.as_mut().and_then(|l| {
+            l.changes.as_mut().and_then(|c| c.line_history.take()).or_else(|| l.detail.as_mut().and_then(|d| d.line_history.take()))
+        });
+        if let Some(r) = req {
+            self.line_hist_serial += 1;
+            self.line_hist = Some(crate::linehist::LineHistWin::new(ctx, r, self.line_hist_serial));
+        }
+        if let Some(w) = &mut self.line_hist {
+            match w.show(ctx) {
+                crate::linehist::Outcome::Open => {}
+                crate::linehist::Outcome::Closed => self.line_hist = None,
+                crate::linehist::Outcome::ShowCommit(id) => {
+                    if let (Some(path), Some(l)) = (self.repo_path(), self.repo.as_mut()) {
+                        l.show_changes = false;
+                        l.selected = None;
+                        l.detail = Some(Detail::new(ctx, &path, id));
+                    }
+                }
+            }
+        }
         // The conflict editor lives in its own window.
         if let Some(ed) = &mut self.conflict {
             match ed.show(ctx) {

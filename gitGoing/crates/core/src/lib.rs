@@ -1,6 +1,7 @@
 //! UI-independent git logic for gitgoing.
 
 pub mod branches;
+pub mod changesets;
 pub mod clone;
 pub mod commit_ops;
 pub mod compare;
@@ -14,6 +15,7 @@ pub mod graph;
 pub mod history;
 pub mod ignore;
 pub mod merge;
+pub mod origins;
 pub mod rebase;
 pub mod redate;
 pub mod remote;

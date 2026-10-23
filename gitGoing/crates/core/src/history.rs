@@ -68,6 +68,8 @@ pub struct RepoInfo {
     pub head_oid: Option<Oid>,
     pub remotes: Vec<crate::remotes::RemoteInfo>,
     pub stashes: Vec<crate::stash::StashEntry>,
+    /// Saved change sets (`refs/keep/*`).
+    pub change_sets: Vec<crate::changesets::ChangeSet>,
     pub refs: HashMap<Oid, Vec<RefLabel>>,
     /// Local branch (short name) -> (commits to push, files changed by upstream
     /// commits it doesn't have yet). Only branches with something to push or pull appear.
@@ -230,10 +232,11 @@ fn collect_info(repo: &mut Repository) -> Result<RepoInfo, git2::Error> {
         });
     let path = repo.workdir().unwrap_or_else(|| repo.path()).to_path_buf();
     let stashes = crate::stash::list(repo);
+    let change_sets = crate::changesets::list(repo);
     let head_oid = repo.head().ok().and_then(|h| h.target());
     let remotes = crate::remotes::list(repo);
     let unpulled = unpulled_files(repo);
-    Ok(RepoInfo { path, head_branch, upstream, head_oid, remotes, stashes, refs, unpulled })
+    Ok(RepoInfo { path, head_branch, upstream, head_oid, remotes, stashes, change_sets, refs, unpulled })
 }
 
 #[cfg(test)]

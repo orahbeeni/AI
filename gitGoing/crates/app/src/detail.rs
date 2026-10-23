@@ -8,6 +8,7 @@ use crate::filetree::{self, ViewMode};
 use crate::timefmt;
 use eframe::egui::{self, Color32, Pos2, RichText, Sense};
 use gitgoing_core::diff::{self, ChangeKind, CommitDetail, FileDiff};
+use gitgoing_core::origins::Origins;
 use gitgoing_core::Oid;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
@@ -25,6 +26,10 @@ pub struct Detail {
     opts: DiffOpts,
     diff_rx: Fetch<FileDiff>,
     diff: Option<Result<FileDiff, String>>,
+    origins: Option<Origins>,
+    origins_rx: Fetch<Origins>,
+    /// A line history for the app to open.
+    pub line_history: Option<crate::linehist::Request>,
     mode: ViewMode,
     /// A file-menu choice for the app to carry out.
     pub file_request: Option<FileRequest>,
@@ -85,6 +90,9 @@ impl Detail {
             opts: DiffOpts::default(),
             diff_rx: None,
             diff: None,
+            origins: None,
+            origins_rx: None,
+            line_history: None,
             mode: ViewMode::default(),
             file_request: None,
         }
@@ -101,6 +109,12 @@ impl Detail {
         self.file = Some(idx);
         self.diff = None;
         let (file_view, ignore_ws) = (self.opts.file_view, self.opts.ignore_ws);
+        self.origins = None;
+        self.origins_rx = None;
+        if !file_view {
+            let (r, p) = (repo.clone(), old.clone().unwrap_or_else(|| path.clone()));
+            self.origins_rx = Some(spawn(ctx, move || gitgoing_core::origins::for_commit(&r, id, &p)));
+        }
         self.diff_rx = Some(spawn(ctx, move || {
             if file_view {
                 diff::file_text(&repo, diff::FileSource::Commit(id), &path)
@@ -125,6 +139,12 @@ impl Detail {
             if let Ok(r) = rx.try_recv() {
                 self.diff_rx = None;
                 self.diff = Some(r);
+            }
+        }
+        if let Some(rx) = &self.origins_rx {
+            if let Ok(r) = rx.try_recv() {
+                self.origins_rx = None;
+                self.origins = r.ok();
             }
         }
     }
@@ -261,8 +281,13 @@ pub fn diff_pane(ui: &mut egui::Ui, d: &mut Detail) -> bool {
         &mut d.opts,
         &d.diff,
         d.diff_rx.is_some(),
-        &diffview::Header { title: &path, kind, tag: &tag, edit_label: None, hunk_btn: None },
+        &diffview::Header { title: &path, kind, tag: &tag, edit_label: None, hunk_btn: None, origins: d.origins.as_ref() },
     );
+    if let (Some((a, b)), Some(o)) = (out.line_history, &d.origins) {
+        if let (Some(rev), Some((start, end))) = (o.rev, o.rev_range(a, b)) {
+            d.line_history = Some(crate::linehist::Request { repo: d.repo.clone(), rev, path: o.path.clone(), start, end });
+        }
+    }
     if out.refetch {
         if let Some(i) = d.file {
             d.select_file(&ctx, i);

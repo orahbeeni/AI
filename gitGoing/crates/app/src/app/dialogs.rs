@@ -9,6 +9,7 @@ impl RepoTab {
         self.dialog_error(ctx);
         self.dialog_stash_offer(ctx);
         self.dialog_stash(ctx);
+        self.dialog_change_set(ctx);
         self.dialog_new_branch(ctx);
         self.dialog_new_tag(ctx);
         self.dialog_redate(ctx);
@@ -217,6 +218,82 @@ impl RepoTab {
                     },
                 };
                 self.run_op(ctx, "Stash", move |p| stash::push(p, &opts));
+            }
+        }
+    }
+
+    /// Save the current changes as a named set (or rename one). Saving only takes a copy.
+    fn dialog_change_set(&mut self, ctx: &egui::Context) {
+        let mut go = false;
+        let mut close = false;
+        if let Some(d) = &mut self.change_set_dlg {
+            let renaming = d.rename.is_some();
+            let exists = !renaming && d.existing.iter().any(|n| n == d.name.trim());
+            egui::Window::new(if renaming { "Rename saved changes" } else { "Save changes as a set" })
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.set_width(400.0);
+                    if !renaming {
+                        ui.label(
+                            "Keeps a copy of your uncommitted changes under a name. They stay in your working \
+                             folder; apply the set again whenever you like from SAVED CHANGES.",
+                        );
+                        ui.add_space(4.0);
+                    }
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut d.name).hint_text("Name, e.g. local config").desired_width(f32::INFINITY),
+                    );
+                    if !d.focused {
+                        r.request_focus();
+                        d.focused = true;
+                    }
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if !d.existing.is_empty() {
+                        ui.add_space(4.0);
+                        ui.weak("Or update a saved set with the current changes:");
+                        ui.horizontal_wrapped(|ui| {
+                            for n in &d.existing {
+                                if ui.selectable_label(d.name.trim() == n, n).clicked() {
+                                    d.name = n.clone();
+                                }
+                            }
+                        });
+                    }
+                    if !renaming {
+                        ui.add_space(4.0);
+                        ui.checkbox(&mut d.include_untracked, "Include new (untracked) files");
+                    }
+                    if exists {
+                        ui.colored_label(Color32::from_rgb(220, 160, 40), format!("'{}' will be replaced with the current changes.", d.name.trim()));
+                    }
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        let label = if renaming { "Rename" } else if exists { "Update" } else { "Save" };
+                        let ok = !d.name.trim().is_empty();
+                        if ui.add_enabled(ok, egui::Button::new(label)).clicked() || (enter && ok) {
+                            go = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+        }
+        if close {
+            self.change_set_dlg = None;
+        }
+        if go {
+            if let Some(d) = self.change_set_dlg.take() {
+                let name = d.name.trim().to_owned();
+                match d.rename {
+                    Some(refname) => self.run_op(ctx, "Rename saved changes", move |p| changesets::rename(p, &refname, &name)),
+                    None => {
+                        let untracked = d.include_untracked;
+                        self.run_op(ctx, "Save changes", move |p| changesets::save(p, &name, untracked))
+                    }
+                }
             }
         }
     }
@@ -776,6 +853,14 @@ impl RepoTab {
                     "Delete stash",
                     format!("Permanently delete stash {i}? Its changes will be lost."),
                 ),
+                Confirm::DeleteChangeSet(_, n) => (
+                    "Delete saved changes",
+                    format!("Delete the saved set '{n}'? Your current working changes are not affected."),
+                ),
+                Confirm::UpdateChangeSet(n) => (
+                    "Update saved changes",
+                    format!("Replace what '{n}' holds with your current uncommitted changes (including new files)?"),
+                ),
                 Confirm::DeleteFile(p) => (
                     "Delete file",
                     format!("Delete '{p}' from your working folder? Files git doesn't track yet can't be recovered."),
@@ -798,6 +883,7 @@ impl RepoTab {
                     ),
                 ),
             };
+            let button = if matches!(c, Confirm::UpdateChangeSet(_)) { "Update" } else { "Delete" };
             egui::Window::new(title)
                 .collapsible(false)
                 .resizable(false)
@@ -805,7 +891,7 @@ impl RepoTab {
                 .show(ctx, |ui| {
                     ui.label(text);
                     ui.horizontal(|ui| {
-                        confirmed = ui.button("Delete").clicked();
+                        confirmed = ui.button(button).clicked();
                         cancel = ui.button("Cancel").clicked();
                     });
                 });
@@ -842,6 +928,12 @@ impl RepoTab {
                     }
                     Some(Confirm::DropStash(i)) => {
                         self.run_op(ctx, "Drop stash", move |p| stash::drop(p, i))
+                    }
+                    Some(Confirm::DeleteChangeSet(refname, _)) => {
+                        self.run_op(ctx, "Delete saved changes", move |p| changesets::delete(p, &refname))
+                    }
+                    Some(Confirm::UpdateChangeSet(name)) => {
+                        self.run_op(ctx, "Update saved changes", move |p| changesets::save(p, &name, true))
                     }
                     None => {}
                 }

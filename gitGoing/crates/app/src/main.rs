@@ -13,6 +13,7 @@ mod filerows;
 mod filetree;
 mod icons;
 mod intro;
+mod linehist;
 mod settings;
 mod sidebar;
 mod startup;

@@ -4,6 +4,7 @@ use crate::filetree::{self, Node};
 use crate::icons::{self, Icon};
 use eframe::egui::{self, Color32, Pos2, Rect, Response, Sense, Stroke, Vec2};
 use gitgoing_core::history::{RefKind, RepoInfo};
+use gitgoing_core::changesets::ChangeSet;
 use gitgoing_core::stash::StashEntry;
 use gitgoing_core::Oid;
 use std::collections::{BTreeMap, BTreeSet};
@@ -50,6 +51,15 @@ pub enum SidebarAction {
     ApplyStash(usize),
     PopStash(usize),
     DropStash(usize),
+    /// Save the current changes as a named set (they stay in the working folder).
+    SaveChanges,
+    ShowChangeSet(Oid),
+    /// Apply a saved set (reference name).
+    ApplyChangeSet(String),
+    /// Replace a saved set's contents with the current changes (display name).
+    UpdateChangeSet(String),
+    RenameChangeSet(String, String),
+    DeleteChangeSet(String, String),
 }
 
 #[derive(Default)]
@@ -64,10 +74,11 @@ pub struct Sidebar {
     /// Scroll the local list to the current branch on the next frame.
     locate: bool,
     stashes: Vec<StashEntry>,
+    change_sets: Vec<ChangeSet>,
     /// Local branch -> number of files it would get from a pull.
     unpulled: BTreeMap<String, (usize, usize)>,
-    /// Local, remote, tags, stashes, pinned.
-    sections: [SectionState; 5],
+    /// Local, remote, tags, stashes, pinned, saved changes.
+    sections: [SectionState; 6],
 }
 
 /// Whether a section is expanded and how tall its scrolling list is.
@@ -86,6 +97,7 @@ impl Sidebar {
     pub fn from_info(info: &RepoInfo) -> Self {
         let mut s = Sidebar {
             stashes: info.stashes.clone(),
+            change_sets: info.change_sets.clone(),
             unpulled: info.unpulled.iter().map(|(k, v)| (k.clone(), *v)).collect(),
             ..Default::default()
         };
@@ -225,7 +237,7 @@ impl Sidebar {
 
             let total: usize = self.remotes.values().map(Vec::len).sum();
             let shown: usize = self.remotes.values().map(|v| v.iter().filter(|(n, _)| hit(n)).count()).sum();
-            if section(ui, "REMOTE", shown, total, HeaderButton::Add, &mut self.sections[1], |ui| {
+            if section(ui, "REMOTE", shown, total, HeaderButton::Add("Add a remote"), &mut self.sections[1], |ui| {
                 for (remote, branches) in &self.remotes {
                     let bs: Vec<_> = branches.iter().filter(|(n, _)| hit(n)).collect();
                     if bs.is_empty() && !q.is_empty() {
@@ -399,6 +411,62 @@ impl Sidebar {
                 }
             });
 
+            // SAVED CHANGES: named snapshots of uncommitted changes, re-applied at will.
+            let sets: Vec<_> = self.change_sets.iter().filter(|s| hit(&s.name)).collect();
+            let add_tip = "Save the current changes as a named set (they stay in your working folder)";
+            if section(ui, "SAVED CHANGES", sets.len(), self.change_sets.len(), HeaderButton::Add(add_tip), &mut self.sections[5], |ui| {
+                if self.change_sets.is_empty() {
+                    ui.add_space(2.0);
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(
+                                "  Click + to save your current changes as a named set you can re-apply whenever you like. \
+                                 Your changes stay where they are.",
+                            )
+                            .weak(),
+                        )
+                        .wrap(),
+                    );
+                }
+                let now = crate::timefmt::now();
+                for s in sets {
+                    let files = if s.files == 1 { "1 file".to_owned() } else { format!("{} files", s.files) };
+                    let on = if s.branch.is_empty() { String::new() } else { format!(" on {}", s.branch) };
+                    let tip = format!(
+                        "{files}, saved{on} {}\nClick to see the changes, double-click to apply them",
+                        crate::timefmt::relative(s.time, now)
+                    );
+                    let r = row(ui, 0, Icon::Stash, &s.name, false).on_hover_text(tip);
+                    if r.clicked() {
+                        act = Some(SidebarAction::ShowChangeSet(s.id));
+                    }
+                    if r.double_clicked() {
+                        act = Some(SidebarAction::ApplyChangeSet(s.refname.clone()));
+                    }
+                    r.context_menu(|ui| {
+                        if ui.button("Apply to working changes").clicked() {
+                            act = Some(SidebarAction::ApplyChangeSet(s.refname.clone()));
+                            ui.close_menu();
+                        }
+                        if ui.button("Update with current changes…").clicked() {
+                            act = Some(SidebarAction::UpdateChangeSet(s.name.clone()));
+                            ui.close_menu();
+                        }
+                        if ui.button("Rename…").clicked() {
+                            act = Some(SidebarAction::RenameChangeSet(s.refname.clone(), s.name.clone()));
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Delete…").clicked() {
+                            act = Some(SidebarAction::DeleteChangeSet(s.refname.clone(), s.name.clone()));
+                            ui.close_menu();
+                        }
+                    });
+                }
+            }) {
+                act = Some(SidebarAction::SaveChanges);
+            }
+
             ui.add_space(6.0);
             ui.add_enabled(false, egui::Label::new("SUBMODULES"));
         });
@@ -418,7 +486,8 @@ impl Sidebar {
 enum HeaderButton {
     None,
     Locate,
-    Add,
+    /// A + button with this tooltip.
+    Add(&'static str),
 }
 
 /// A collapsible section whose list scrolls vertically and can be resized by
@@ -461,7 +530,10 @@ fn section(
         let btn = Rect::from_center_size(Pos2::new(rect.right() - 62.0, rect.center().y), Vec2::splat(18.0));
         let r = ui
             .interact(btn, ui.id().with(("header_button", title)), Sense::click())
-            .on_hover_text(if button == HeaderButton::Locate { "Scroll to the current branch" } else { "Add a remote" });
+            .on_hover_text(match button {
+                HeaderButton::Add(tip) => tip,
+                _ => "Scroll to the current branch",
+            });
         let col = if r.hovered() { strong } else { weak };
         if button == HeaderButton::Locate {
             p.circle_stroke(btn.center(), 5.5, egui::Stroke::new(1.3_f32, col));

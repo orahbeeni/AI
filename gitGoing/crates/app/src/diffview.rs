@@ -7,6 +7,7 @@ use eframe::egui::{self, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, V
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use gitgoing_core::diff::{self, ChangeKind, DiffLine, FileDiff, LineKind};
+use gitgoing_core::origins::{Origin, Origins};
 
 static DEFAULT_SPLIT: AtomicBool = AtomicBool::new(false);
 static DEFAULT_IGNORE_WS: AtomicBool = AtomicBool::new(false);
@@ -34,6 +35,7 @@ impl Default for DiffOpts {
             current_hunk: 0,
             scroll_to_hunk: None,
             text_sel: None,
+            show_origins: true,
         }
     }
 }
@@ -52,6 +54,8 @@ pub struct DiffOpts {
     scroll_to_hunk: Option<usize>,
     /// Text highlighted by dragging, to copy.
     text_sel: Option<TextSel>,
+    /// Note on each removed line which commit added it.
+    pub show_origins: bool,
 }
 
 /// A drag-selected span of code text. Positions are (row, character column);
@@ -100,6 +104,8 @@ pub struct Header<'a> {
     pub edit_label: Option<&'a str>,
     /// Per-hunk button, if hunks can be (un)staged here.
     pub hunk_btn: Option<HunkBtn>,
+    /// Where the old side's lines came from, once loaded.
+    pub origins: Option<&'a Origins>,
 }
 
 #[derive(Default)]
@@ -114,6 +120,9 @@ pub struct Out {
     pub discard_hunk: Option<usize>,
     /// The selected lines were staged (or unstaged) via the selection bar.
     pub lines: Option<Vec<(u32, u32)>>,
+    /// Show the history of these old-side lines (first, last): a line's origin note or a
+    /// hunk's "Line History" button was clicked.
+    pub line_history: Option<(u32, u32)>,
 }
 
 pub fn show(
@@ -194,6 +203,12 @@ pub fn show(
             }
             ui.separator();
             icons::segmented(ui, &["Blame", "History"], None, false);
+            if h.origins.is_some() || opts.show_origins {
+                ui.separator();
+                ui.toggle_value(&mut opts.show_origins, "Origins").on_hover_text(
+                    "Show which commit last changed each removed line (click a note for that line's history)",
+                );
+            }
         });
     });
     ui.add_space(2.0);
@@ -232,9 +247,11 @@ pub fn show(
                 ui.weak("No textual changes.");
             } else {
                 let btn = if opts.file_view || opts.ignore_ws { None } else { h.hunk_btn };
-                let b = body(ui, opts, lines, BodyCfg { title: h.title, truncated: *truncated, max_chars: *max_chars, hunk_btn: btn, selectable });
-                out.hunk = b.0;
-                out.discard_hunk = b.1;
+                let origins = h.origins.filter(|_| opts.show_origins && !opts.file_view);
+                let b = body(ui, opts, lines, BodyCfg { title: h.title, truncated: *truncated, max_chars: *max_chars, hunk_btn: btn, selectable, origins });
+                out.hunk = b.hunk;
+                out.discard_hunk = b.discard;
+                out.line_history = b.line_history;
             }
         }
     }
@@ -322,6 +339,47 @@ struct BodyCfg<'a> {
     hunk_btn: Option<HunkBtn>,
     /// Lines can be ticked for line staging.
     selectable: bool,
+    origins: Option<&'a Origins>,
+}
+
+struct BodyOut {
+    hunk: Option<usize>,
+    discard: Option<usize>,
+    line_history: Option<(u32, u32)>,
+}
+
+/// The old-side line range (first, last) a hunk covers.
+fn hunk_old_range(lines: &[DiffLine], hunk: u32) -> Option<(u32, u32)> {
+    let nos = lines.iter().filter(|l| l.hunk == hunk && matches!(l.kind, LineKind::Del | LineKind::Context) && l.old_no > 0).map(|l| l.old_no);
+    let (mut lo, mut hi) = (u32::MAX, 0);
+    for n in nos {
+        lo = lo.min(n);
+        hi = hi.max(n);
+    }
+    (hi > 0).then_some((lo, hi))
+}
+
+/// Short text for a removed line's origin note.
+fn origin_label(o: &Origin, now: i64) -> String {
+    match o {
+        Origin::Staged => "staged, not committed yet".to_owned(),
+        Origin::Commit(c) => {
+            let when = crate::timefmt::relative(c.time, now);
+            let what = match &c.ticket {
+                Some(t) => t.clone(),
+                None => {
+                    let s: String = c.summary.chars().take(32).collect();
+                    if c.summary.chars().count() > 32 { format!("{s}…") } else { s }
+                }
+            };
+            format!("{what} · {} · {when}", c.author)
+        }
+    }
+}
+
+/// Whether a line came from a commit for a different ticket than the one being worked on.
+fn other_ticket(o: &Origin, ticket: Option<&str>) -> bool {
+    matches!(o, Origin::Commit(c) if ticket.is_some() && c.ticket.is_some() && c.ticket.as_deref() != ticket)
 }
 
 fn body(
@@ -329,8 +387,60 @@ fn body(
     opts: &mut DiffOpts,
     lines: &[DiffLine],
     cfg: BodyCfg,
-) -> (Option<usize>, Option<usize>) {
-    let BodyCfg { title, truncated, max_chars, hunk_btn, selectable } = cfg;
+) -> BodyOut {
+    let BodyCfg { title, truncated, max_chars, hunk_btn, selectable, origins } = cfg;
+    let now = crate::timefmt::now();
+    let mut line_history: Option<(u32, u32)> = None;
+    let note_font = FontId::proportional(11.5);
+    let warn_col = Color32::from_rgb(0xe0, 0xa0, 0x30);
+    let panel_bg = ui.visuals().panel_fill;
+    // A removed line's origin note, pinned to the right edge of what is visible of the line.
+    let note = |ui: &mut egui::Ui, row: Rect, right: f32, key: usize, old_no: u32, sel_line: &mut Option<(u32, u32)>| {
+        let Some(o) = origins.and_then(|o| o.lines.get(&old_no)) else { return };
+        let ticket = origins.and_then(|o| o.context_ticket.as_deref());
+        let warn = other_ticket(o, ticket);
+        let p = ui.painter_at(row);
+        let col = ui.visuals().weak_text_color();
+        let galley = p.layout_no_wrap(origin_label(o, now), note_font.clone(), col);
+        let w = galley.size().x + 12.0 + if warn { 16.0 } else { 0.0 };
+        let r = Rect::from_min_max(Pos2::new(right - w - 6.0, row.top() + 2.0), Pos2::new(right - 6.0, row.bottom() - 2.0));
+        let resp = ui.interact(r, ui.id().with(("origin_note", title, key)), Sense::click());
+        p.rect_filled(r, 4.0, panel_bg);
+        p.rect_filled(r, 4.0, tint(0xe5, 0x53, 0x4b, if resp.hovered() { 50 } else { 22 }));
+        let mut x = r.left() + 6.0;
+        if warn {
+            p.text(Pos2::new(x, row.center().y), egui::Align2::LEFT_CENTER, "⚠", note_font.clone(), warn_col);
+            x += 16.0;
+        }
+        p.galley(Pos2::new(x, row.center().y - galley.size().y / 2.0), galley, col);
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        let resp = resp.on_hover_ui(|ui| match o {
+            Origin::Staged => {
+                ui.label("This line is staged but was never committed, so it has no history yet.");
+            }
+            Origin::Commit(c) => {
+                ui.label(RichText::new(&c.summary).strong());
+                ui.label(format!("{} · {}", c.author, crate::timefmt::relative(c.time, now)));
+                ui.label(RichText::new(c.id.to_string()[..10].to_owned()).monospace().weak());
+                if warn {
+                    ui.colored_label(
+                        warn_col,
+                        format!(
+                            "Added for {}, not for {} (this branch). Check it is no longer needed.",
+                            c.ticket.as_deref().unwrap_or(""),
+                            ticket.unwrap_or("")
+                        ),
+                    );
+                }
+                ui.weak("Click to see this line's history");
+            }
+        });
+        if resp.clicked() {
+            *sel_line = Some((old_no, old_no));
+        }
+    };
     let font = FontId::monospace(13.5);
     let cw = ui.fonts(|f| f.glyph_width(&font, 'M'));
     let row_h = ui.fonts(|f| f.row_height(&font)) + 5.0;
@@ -481,29 +591,33 @@ fn body(
                 let l = &lines[hi];
                 p.hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0_f32, line_col));
                 // The text stops short of the buttons pinned to the visible right edge.
-                let labels: &[&str] = match hunk_btn {
-                    Some(HunkBtn::Stage) => &["Stage Hunk", "Discard Hunk"],
-                    Some(HunkBtn::Unstage) => &["Unstage Hunk"],
-                    None => &[],
+                let mut labels: Vec<&str> = match hunk_btn {
+                    Some(HunkBtn::Stage) => vec!["Stage Hunk", "Discard Hunk"],
+                    Some(HunkBtn::Unstage) => vec!["Unstage Hunk"],
+                    None => Vec::new(),
                 };
+                let history_range = origins.and_then(|_| hunk_old_range(lines, l.hunk));
+                if history_range.is_some() {
+                    labels.push("Line History");
+                }
                 let buttons_w: f32 = labels.iter().map(|t| cw * (t.len() as f32 + 2.0) + 8.0).sum();
                 let text_end = if labels.is_empty() { rect.right() } else { visible.right() - 18.0 - buttons_w - 4.0 };
                 let mut clip = p.clip_rect();
                 clip.max.x = clip.max.x.min(text_end);
                 p.with_clip_rect(clip).text(Pos2::new(rect.left() + 12.0, cy), egui::Align2::LEFT_CENTER, &*l.text, font.clone(), fg.gamma_multiply(0.8));
+                // Buttons are pinned to the visible right edge so they stay
+                // reachable when scrolled sideways.
+                let mut right = visible.right() - 18.0;
+                let mut button = |ui: &mut egui::Ui, label: &str, col: Color32| -> bool {
+                    let w = cw * (label.len() as f32 + 2.0);
+                    let btn = Rect::from_min_size(Pos2::new(right - w, rect.top() + 2.0), Vec2::new(w, row_h - 4.0));
+                    right -= w + 8.0;
+                    let b = egui::Button::new(RichText::new(label).color(col).size(12.0))
+                        .fill(Color32::TRANSPARENT)
+                        .stroke(Stroke::new(1.0_f32, col));
+                    ui.put(btn, b).clicked()
+                };
                 if let Some(kind) = hunk_btn {
-                    // Buttons are pinned to the visible right edge so they stay
-                    // reachable when scrolled sideways.
-                    let mut right = visible.right() - 18.0;
-                    let mut button = |ui: &mut egui::Ui, label: &str, col: Color32| -> bool {
-                        let w = cw * (label.len() as f32 + 2.0);
-                        let btn = Rect::from_min_size(Pos2::new(right - w, rect.top() + 2.0), Vec2::new(w, row_h - 4.0));
-                        right -= w + 8.0;
-                        let b = egui::Button::new(RichText::new(label).color(col).size(12.0))
-                            .fill(Color32::TRANSPARENT)
-                            .stroke(Stroke::new(1.0_f32, col));
-                        ui.put(btn, b).clicked()
-                    };
                     match kind {
                         HunkBtn::Stage => {
                             if button(ui, "Stage Hunk", sign_green) {
@@ -518,6 +632,12 @@ fn body(
                                 clicked = Some(l.hunk as usize);
                             }
                         }
+                    }
+                }
+                if let Some(range) = history_range {
+                    let col = Color32::from_rgb(0x4e, 0xa8, 0xde);
+                    if button(ui, "Line History", col) {
+                        line_history = Some(range);
                     }
                 }
                 continue;
@@ -591,6 +711,9 @@ fn body(
                     hp.text(Pos2::new(r.left() + 12.0 + num_w, cy), egui::Align2::RIGHT_CENTER, num(n), font.clone(), fg.gamma_multiply(0.8));
                     hp.vline(r.left() + half_gutter - 6.0, r.y_range(), Stroke::new(1.0_f32, line_col));
                     code(&hp, r, r.left() + half_gutter, k);
+                    if left && l.kind == LineKind::Del {
+                        note(ui, r, r.right().min(visible.right()), k, l.old_no, &mut line_history);
+                    }
                 }
                 p.vline(rect.left() + half_w, rect.y_range(), Stroke::new(1.0_f32, line_col));
             } else {
@@ -641,6 +764,9 @@ fn body(
                 }
                 p.vline(x0 + sep_x, rect.y_range(), Stroke::new(1.0_f32, line_col));
                 code(&p, rect, x0 + text_x, i);
+                if l.kind == LineKind::Del {
+                    note(ui, rect, visible.right().min(rect.right()), i, l.old_no, &mut line_history);
+                }
             }
         }
         // Extend the text selection while dragging, scrolling when the pointer leaves the view.
@@ -670,7 +796,7 @@ fn body(
             }
         }
     }
-    (clicked, discard)
+    BodyOut { hunk: clicked, discard, line_history }
 }
 
 #[cfg(test)]
@@ -708,5 +834,64 @@ mod tests {
                 [None, Some(8)],
             ]
         );
+    }
+}
+
+/// Renders a diff with origin notes offscreen to `$GITGOING_SHOTS/origins.png`, for a visual check.
+/// Run with: GITGOING_SHOTS=/some/dir cargo test -p gitgoing origin_notes_render -- --ignored
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+    use gitgoing_core::origins::LineOrigin;
+    use gitgoing_core::Oid;
+
+    #[test]
+    #[ignore]
+    fn origin_notes_render() {
+        let Ok(dir) = std::env::var("GITGOING_SHOTS") else { return };
+        let line = |kind, old_no, new_no, text: &str| DiffLine { kind, hunk: 0, old_no, new_no, text: text.into() };
+        let lines = vec![
+            line(LineKind::Hunk, 0, 0, "@@ -40,5 +40,4 @@ INSERT_UPDATE B2BCustomer"),
+            line(LineKind::Context, 40, 40, "$uid=uid[unique=true]"),
+            line(LineKind::Del, 41, 0, ";originalUid;email;emailAddress;mobileNumber;name;surname;groups(uid);loginDisabled;"),
+            line(LineKind::Del, 42, 0, ";defaultB2BUnit(uid);sessionCurrency(isocode)[default='ZAR']"),
+            line(LineKind::Del, 43, 0, ";approvers(uid)"),
+            line(LineKind::Add, 0, 41, ";originalUid;email;emailAddress;mobileNumber;name;surname;groups(uid);active;"),
+            line(LineKind::Context, 44, 42, ""),
+        ];
+        let commit = |ticket: Option<&str>, summary: &str, author: &str, days: i64| {
+            Origin::Commit(LineOrigin {
+                id: Oid::from_str("8f3c2a91d0b7e6f5a4c3b2a1908f7e6d5c4b3a29").unwrap(),
+                author: author.into(),
+                time: crate::timefmt::now() - days * 86_400,
+                summary: summary.into(),
+                ticket: ticket.map(str::to_owned),
+            })
+        };
+        let mut origins = Origins { context_ticket: Some("ECOMD-5610".into()), ..Default::default() };
+        origins.lines.insert(41, commit(Some("ECOMD-4821"), "ECOMD-4821 disable B2B logins on import", "Jane Smith", 95));
+        origins.lines.insert(42, commit(Some("ECOMD-5610"), "ECOMD-5610 quick registration impex", "Omar", 2));
+        origins.lines.insert(43, commit(None, "initial B2B import", "Build Bot", 800));
+        origins.rev = Some(Oid::from_str("8f3c2a91d0b7e6f5a4c3b2a1908f7e6d5c4b3a29").unwrap());
+        let diff = Some(Ok(FileDiff::Text { lines, truncated: false, max_chars: 90 }));
+        let mut opts = DiffOpts { split: false, ..Default::default() };
+        let mut h = egui_kittest::Harness::builder().with_size([1300.0, 300.0]).build_ui(move |ui| {
+            show(
+                ui,
+                &mut opts,
+                &diff,
+                false,
+                &Header {
+                    title: "hybris/bin/custom/integration/hot-folder-spring.impex",
+                    kind: Some(ChangeKind::Modified),
+                    tag: "Staged",
+                    edit_label: Some("Edit in working directory"),
+                    hunk_btn: Some(HunkBtn::Unstage),
+                    origins: Some(&origins),
+                },
+            );
+        });
+        h.run();
+        h.render().unwrap().save(format!("{dir}/origins.png")).unwrap();
     }
 }
