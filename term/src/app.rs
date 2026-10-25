@@ -2312,6 +2312,7 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        crate::diag::frame(ctx.input(|i| i.events.len()));
         self.m = Some(Metrics::new(&ctx, &self.s));
         #[cfg(debug_assertions)]
         self.selftest_frame(&ctx);

@@ -3,6 +3,7 @@
 mod app;
 mod config;
 mod cwd;
+mod diag;
 mod fonts;
 mod input;
 mod integration;
@@ -67,6 +68,7 @@ fn icon() -> egui::IconData {
 
 fn main() -> eframe::Result {
     let args = parse_args();
+    diag::init();
     let size = session::load_session().and_then(|s| s.window_size).unwrap_or([1000.0, 640.0]);
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size(size)
@@ -76,6 +78,8 @@ fn main() -> eframe::Result {
         .with_icon(icon());
     #[allow(unused_mut)]
     let mut options = eframe::NativeOptions { viewport, ..Default::default() };
+    // When the GPU does not hand over a frame, retry and rebuild instead of freezing on the last picture.
+    options.wgpu_options.on_surface_status = std::sync::Arc::new(diag::surface_status);
     // macOS: the standard app menu quits at once on ⌘Q. Without it, ⌘Q reaches term, which asks
     // first (⌘H and ⌘M, also from that menu, are handled by term too).
     #[cfg(target_os = "macos")]

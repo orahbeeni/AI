@@ -316,6 +316,7 @@ fn visual() {
             ],
         ),
         ("layout", &["layout:LAYOUT", "new_tab", "next_tab"]),
+        ("about", &["about"]),
         ("workflow", &["prefs_page:Workflow"]),
         ("goto", &["run:cd /etc", "split_vertical", "new_tab", "alert", "goto"]),
         ("searches", &["addsearch:ERROR!", "addsearch:Exception in thread", "addsearch:Started Application", "edit_searches"]),

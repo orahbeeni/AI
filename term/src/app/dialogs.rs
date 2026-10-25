@@ -1827,6 +1827,20 @@ impl App {
                 .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
                     ui.heading(format!("term {}", env!("CARGO_PKG_VERSION")));
+                    let build = format!("Build {}", env!("TERM_BUILD_NUMBER"));
+                    let commit = env!("TERM_BUILD_COMMIT");
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(&build).strong());
+                        if !commit.is_empty() {
+                            ui.label(RichText::new(format!("({commit})")).weak());
+                        }
+                        if ui.small_button("Copy").on_hover_text("Copy the build number").clicked() {
+                            let text = if commit.is_empty() { build.clone() } else { format!("{build} ({commit})") };
+                            ui.ctx().copy_text(text);
+                        }
+                    });
+                    ui.label(RichText::new(format!("Built {}", env!("TERM_BUILD_TIME"))).weak());
+                    ui.add_space(4.0);
                     ui.label("A fast split-pane terminal for macOS, Linux and Windows.");
                     ui.label(format!("Settings and layouts: {}", crate::config::config_dir().display()));
                 });
