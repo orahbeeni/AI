@@ -95,7 +95,7 @@ function simulate(job: Job) {
 
 export async function call(cmd: string, a: Record<string, any> = {}): Promise<unknown> {
   switch (cmd) {
-    case 'app_info': return { version: '0.1.0', os: 'linux', arch: 'x64', portable: false, dataDir: '/home/you/.local/share/ytgrab', binDir: '/home/you/.local/share/ytgrab/bin', defaultDownloadDir: '/home/you/Downloads', bins } satisfies AppInfo;
+    case 'app_info': return { version: '0.1.0', buildNumber: '20261025.1200', buildTime: '2026-10-25 12:00 UTC', buildCommit: 'abc1234', os: 'linux', arch: 'x64', portable: false, dataDir: '/home/you/.local/share/ytgrab', binDir: '/home/you/.local/share/ytgrab/bin', defaultDownloadDir: '/home/you/Downloads', bins } satisfies AppInfo;
     case 'install_tools':
       for (const n of a.names as string[]) {
         for (let i = 0; i <= 10; i++) { emit('binary-progress', { name: n, stage: 'downloading', downloaded: i * 8e6, total: 8e7 }); await sleep(120); }

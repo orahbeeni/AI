@@ -243,6 +243,7 @@ Run as `bin/hotdrop <command>` (Linux, macOS) or `bin\hotdrop.cmd <command>` (Wi
 | `rescan` | Re-read the source tree (after a big git operation). |
 | `stop` | Stop the watcher. |
 | `doctor` | Check the setup and explain what is missing. |
+| `about` | Show the build number (`YYYYMMDD.HHMM`), the build time and the git commit. Also `--version`. |
 
 ## 10. Options reference
 Source options (`start`, `swap`, `doctor`):

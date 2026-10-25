@@ -32,6 +32,9 @@ type ApiResult<T> = Result<T, ApiError>;
 #[serde(rename_all = "camelCase")]
 pub struct AppInfo {
     pub version: String,
+    pub build_number: String,
+    pub build_time: String,
+    pub build_commit: String,
     pub os: String,
     pub arch: String,
     pub portable: bool,
@@ -46,6 +49,9 @@ pub async fn app_info(st: State<'_, Shared>) -> ApiResult<AppInfo> {
     let settings = st.settings();
     Ok(AppInfo {
         version: env!("CARGO_PKG_VERSION").into(),
+        build_number: env!("YTGRAB_BUILD_NUMBER").into(),
+        build_time: env!("YTGRAB_BUILD_TIME").into(),
+        build_commit: env!("YTGRAB_BUILD_COMMIT").into(),
         os: format!("{:?}", platform::os()).to_lowercase(),
         arch: format!("{:?}", platform::arch()).to_lowercase(),
         portable: st.paths.portable,

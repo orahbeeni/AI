@@ -3,6 +3,8 @@ import javax.tools.ToolProvider;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -34,12 +36,36 @@ public class Build {
         javac(root.resolve("agent"), agentOut, protocolOut, "-Xlint:all");
         javac(root.resolve("daemon"), daemonOut, protocolOut, "-Xlint:all,-processing");
 
+        stamp(root, daemonOut.resolve("hotdrop-build.properties"));
+
         jar(build.resolve("hotdrop-agent.jar"), build.resolve("agent.mf"),
                 "Premain-Class: hotdrop.agent.HotDropAgent\nAgent-Class: hotdrop.agent.HotDropAgent\n"
                         + "Can-Redefine-Classes: true\nCan-Retransform-Classes: true\n", agentOut, protocolOut);
         jar(build.resolve("hotdrop-daemon.jar"), build.resolve("daemon.mf"),
                 "Main-Class: hotdrop.daemon.Main\n", daemonOut, protocolOut);
         System.out.println("built: " + build.resolve("hotdrop-agent.jar") + " " + build.resolve("hotdrop-daemon.jar"));
+    }
+
+    /** Writes the build number (yyyyMMdd.HHmm, local time), the readable time and the git commit for `hotdrop about`. */
+    static void stamp(Path root, Path file) throws IOException {
+        ZonedDateTime now = ZonedDateTime.now();
+        String commit = git(root, "rev-parse", "--short", "HEAD");
+        if (!commit.isEmpty() && !git(root, "status", "--porcelain", "--", ".").isEmpty()) commit += "+changes";
+        Files.writeString(file, "number=" + now.format(DateTimeFormatter.ofPattern("yyyyMMdd.HHmm")) + "\n"
+                + "time=" + now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm z")) + "\n"
+                + "commit=" + commit + "\n");
+    }
+
+    private static String git(Path dir, String... args) {
+        List<String> cmd = new ArrayList<>(List.of("git"));
+        cmd.addAll(List.of(args));
+        try {
+            Process p = new ProcessBuilder(cmd).directory(dir.toFile()).redirectErrorStream(true).start();
+            String out = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8).trim();
+            return p.waitFor() == 0 ? out : "";
+        } catch (IOException | InterruptedException e) {
+            return "";
+        }
     }
 
     static void javac(Path srcDir, Path out, Path classpath, String lint) throws IOException {

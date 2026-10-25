@@ -118,6 +118,9 @@ export interface BinInfo {
 
 export interface AppInfo {
   version: string;
+  buildNumber: string;
+  buildTime: string;
+  buildCommit: string;
   os: string;
   arch: string;
   portable: boolean;

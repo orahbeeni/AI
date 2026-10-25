@@ -6,6 +6,7 @@
   import QueuePage from './lib/pages/QueuePage.svelte';
   import SubscriptionsPage from './lib/pages/SubscriptionsPage.svelte';
   import SettingsPage from './lib/pages/SettingsPage.svelte';
+  import AboutPage from './lib/pages/AboutPage.svelte';
   import { app, init, type Page } from './lib/state.svelte';
   import { extractUrls, isActive } from './lib/format';
 
@@ -14,6 +15,7 @@
     { id: 'queue', label: 'Queue', icon: 'queue' },
     { id: 'subs', label: 'Subscriptions', icon: 'rss' },
     { id: 'settings', label: 'Settings', icon: 'settings' },
+    { id: 'about', label: 'About', icon: 'info' },
   ];
 
   const activeCount = $derived(app.jobs.filter(j => isActive(j) || j.status === 'queued').length);
@@ -53,7 +55,7 @@
     </nav>
     <div class="side-foot muted small">
       {#if app.info?.portable}<span class="pill accent"><Icon name="usb" size={12} /> Portable</span>{/if}
-      <span>v{app.info?.version ?? ''}</span>
+      <span>v{app.info?.version ?? ''} · {app.info?.buildNumber ?? ''}</span>
     </div>
   </aside>
 
@@ -66,6 +68,7 @@
       <div class="page" hidden={app.page !== 'queue'}><QueuePage /></div>
       <div class="page" hidden={app.page !== 'subs'}><SubscriptionsPage /></div>
       <div class="page" hidden={app.page !== 'settings'}><SettingsPage /></div>
+      <div class="page" hidden={app.page !== 'about'}><AboutPage /></div>
     {/if}
   </main>
 

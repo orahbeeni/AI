@@ -34,6 +34,7 @@ public final class Main {
               flush [file]   compile now, skipping the debounce window
               pause | resume | rescan | stop
               doctor   check the setup
+              about    show the build number and build time (also --version)
 
             source options (start, swap, doctor):
               --hybris <dir>        the hybris directory (contains bin/ and config/)
@@ -64,6 +65,10 @@ public final class Main {
             return;
         }
         String cmd = args[0];
+        if (cmd.equals("about") || cmd.equals("--version") || cmd.equals("-v")) {
+            About.print();
+            return;
+        }
         Config cfg = new Config();
         List<String> positional = new ArrayList<>();
         List<String> rawArgs = List.of(args).subList(1, args.length);

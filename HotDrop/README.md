@@ -55,7 +55,7 @@ Produces `build/hotdrop-agent.jar` and `build/hotdrop-daemon.jar`.
    ```
 
 ### Other commands
-`swap <files>` compile and swap once, then exit - `attach` - `status` - `flush [file]` - `pause` / `resume` - `rescan` - `stop` - `doctor`.
+`swap <files>` compile and swap once, then exit - `attach` - `status` - `flush [file]` - `pause` / `resume` - `rescan` - `stop` - `doctor` - `about` (build number and time).
 `doctor` checks the JDK, the Hybris settings, whether the agent is in `wrapper.conf`, and the connected server.
 
 ## In the server log

@@ -24,6 +24,7 @@
     refresh: 'M21 12a9 9 0 1 1-3-6.7L21 8m0-5v5h-5',
     external: 'M14 3h7v7M10 14 21 3M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5',
     plus: 'M12 5v14M5 12h14',
+    info: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 16v-5m0-3h.01',
     clipboard: 'M9 4h6v3H9zM7 5H5v16h14V5h-2',
     pause: 'M8 5v14M16 5v14',
     shield: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z',

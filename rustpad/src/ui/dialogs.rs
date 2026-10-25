@@ -661,6 +661,19 @@ impl App {
         egui::Window::new("About RustPad").open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
             ui.heading("RustPad");
             ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+            let build = format!("Build {}", env!("RUSTPAD_BUILD_NUMBER"));
+            let commit = env!("RUSTPAD_BUILD_COMMIT");
+            ui.horizontal(|ui| {
+                ui.strong(&build);
+                if !commit.is_empty() {
+                    ui.weak(format!("({commit})"));
+                }
+                if ui.small_button("Copy").on_hover_text("Copy the build number").clicked() {
+                    let text = if commit.is_empty() { build.clone() } else { format!("{build} ({commit})") };
+                    ui.ctx().copy_text(text);
+                }
+            });
+            ui.weak(format!("Built {}", env!("RUSTPAD_BUILD_TIME")));
             ui.label("A cross-platform source code editor written in Rust.");
             ui.label("Built on egui / eframe, ropey, regex and encoding_rs.");
             ui.separator();

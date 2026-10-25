@@ -1,3 +1,4 @@
+use crate::about::AboutWindow;
 use crate::assets::{self, Assets};
 use crate::changes::{self, Changes};
 use crate::clonedlg;
@@ -1484,6 +1485,7 @@ pub struct App {
     intro_frame: Option<usize>,
     settings: Settings,
     settings_win: SettingsWindow,
+    about_win: AboutWindow,
     console: Console,
     /// A problem to show the user (e.g. a failed init).
     app_error: Option<String>,
@@ -1529,6 +1531,7 @@ impl App {
             intro_frame: None,
             settings,
             settings_win: SettingsWindow::default(),
+            about_win: AboutWindow::default(),
             console: Console::default(),
             app_error: None,
             widths: PanelWidths {
@@ -1640,6 +1643,12 @@ impl App {
                         if icons::icon_button(ui, Icon::Gear, self.settings_win.open, "Settings", true).clicked() {
                             self.settings_win.open = !self.settings_win.open;
                         }
+                        ui.menu_button("Help", |ui| {
+                            if ui.button("About gitGoing").clicked() {
+                                self.about_win.open = true;
+                                ui.close_menu();
+                            }
+                        });
                     });
                 });
                 // A line under the bar, broken where the selected tab joins the toolbar.
@@ -1866,6 +1875,7 @@ impl eframe::App for App {
         }
         self.console.show(ctx);
         self.tab_bar(ctx);
+        self.about_win.show(ctx);
         if self.settings_win.show(ctx, &mut self.settings) {
             self.settings.apply(ctx);
             startup::set_intro_enabled(self.settings.show_intro);

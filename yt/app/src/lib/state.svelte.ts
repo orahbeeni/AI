@@ -3,7 +3,7 @@ import { BUILTIN_PRESETS } from './defaults';
 import { isUrl } from './format';
 import type { ApiError, AppInfo, BinaryProgress, Job, Preset, Settings, Subscription } from './types';
 
-export type Page = 'download' | 'queue' | 'subs' | 'settings';
+export type Page = 'download' | 'queue' | 'subs' | 'settings' | 'about';
 
 export interface Toast {
   id: number;
