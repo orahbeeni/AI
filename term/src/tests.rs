@@ -317,6 +317,7 @@ fn visual() {
         ),
         ("layout", &["layout:LAYOUT", "new_tab", "next_tab"]),
         ("about", &["about"]),
+        ("short_menu", &["main_menu_preview"]),
         ("workflow", &["prefs_page:Workflow"]),
         ("goto", &["run:cd /etc", "split_vertical", "new_tab", "alert", "goto"]),
         ("searches", &["addsearch:ERROR!", "addsearch:Exception in thread", "addsearch:Started Application", "edit_searches"]),
@@ -338,7 +339,8 @@ fn visual() {
         if only.as_deref().is_some_and(|o| o != *name) {
             continue;
         }
-        let mut h = egui_kittest::Harness::builder().with_size([1100.0, 640.0]).build_eframe(|cc| {
+        let size = if *name == "short_menu" { [700.0, 330.0] } else { [1100.0, 640.0] };
+        let mut h = egui_kittest::Harness::builder().with_size(size).build_eframe(|cc| {
             crate::app::App::new(
                 cc,
                 crate::Args { layout: None, run: false, fresh: true, dir: (*name != "launcher").then(|| "/Users".into()) },

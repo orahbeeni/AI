@@ -125,6 +125,8 @@ pub struct App {
     /// Self-tests: draw the focused terminal's saved-commands menu as if opened.
     #[cfg(any(test, debug_assertions))]
     preview_menu: bool,
+    #[cfg(any(test, debug_assertions))]
+    preview_main_menu: bool,
 }
 
 /// Debug builds only: `TERM_SELFTEST=out.ppm` runs `TERM_SELFTEST_ACTIONS` (comma separated, an
@@ -174,6 +176,8 @@ impl App {
             drag_pane: None,
             #[cfg(any(test, debug_assertions))]
             preview_menu: false,
+            #[cfg(any(test, debug_assertions))]
+            preview_main_menu: false,
             #[cfg(debug_assertions)]
             selftest: std::env::var("TERM_SELFTEST").ok().map(|out| SelfTest {
                 out,
@@ -1697,8 +1701,14 @@ impl App {
         }
     }
 
+    /// The window menu. It is drawn inside the window, so it scrolls when the window is shorter than it.
     fn main_menu(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(240.0);
+        let max_height = (ui.ctx().content_rect().height() - 56.0).max(120.0);
+        egui::ScrollArea::vertical().max_height(max_height).auto_shrink([true, true]).show(ui, |ui| self.main_menu_items(ui));
+    }
+
+    fn main_menu_items(&mut self, ui: &mut egui::Ui) {
         self.item(ui, "New tab", "new_tab");
         self.item(ui, "Split horizontally", "split_horizontal");
         self.item(ui, "Split vertically", "split_vertical");
@@ -1720,33 +1730,38 @@ impl App {
             }
         });
         ui.separator();
-        self.item(ui, "Save layout…", "save_layout");
-        self.item(ui, "Layouts…", "layouts");
-        let names = session::list_layouts();
-        ui.add_enabled_ui(!names.is_empty(), |ui| {
-            ui.menu_button("Open layout", |ui| {
-                for n in names {
-                    if ui.button(&n).clicked() {
-                        self.acts.push(Act::OpenLayout(n, false, true));
-                        ui.close();
-                    }
+        ui.menu_button("Layouts", |ui| {
+            ui.set_min_width(220.0);
+            self.item(ui, "Save layout…", "save_layout");
+            self.item(ui, "Manage layouts…", "layouts");
+            let names = session::list_layouts();
+            if !names.is_empty() {
+                ui.separator();
+                ui.weak("Open (in new tabs)");
+            }
+            for n in names {
+                if ui.button(&n).clicked() {
+                    self.acts.push(Act::OpenLayout(n, false, true));
+                    ui.close();
                 }
-            });
+            }
         });
         ui.separator();
         self.item(ui, "Preferences…", "preferences");
-        if ui.button("Shell integration…").clicked() {
-            self.acts.push(Act::Action("shell_integration"));
-            ui.close();
-        }
-        if ui.button("Export settings & layouts…").clicked() {
-            self.acts.push(Act::Action("export"));
-            ui.close();
-        }
-        if ui.button("Import settings & layouts…").clicked() {
-            self.acts.push(Act::Action("import"));
-            ui.close();
-        }
+        ui.menu_button("More", |ui| {
+            if ui.button("Shell integration…").clicked() {
+                self.acts.push(Act::Action("shell_integration"));
+                ui.close();
+            }
+            if ui.button("Export settings & layouts…").clicked() {
+                self.acts.push(Act::Action("export"));
+                ui.close();
+            }
+            if ui.button("Import settings & layouts…").clicked() {
+                self.acts.push(Act::Action("import"));
+                ui.close();
+            }
+        });
         self.item(ui, "Full screen", "fullscreen");
         if ui.button("About term").clicked() {
             self.acts.push(Act::Action("about"));
@@ -2351,6 +2366,15 @@ impl eframe::App for App {
                 });
             });
         }
+        #[cfg(any(test, debug_assertions))]
+        if self.preview_main_menu {
+            egui::Area::new(egui::Id::new("main_menu_preview")).fixed_pos(pos2(300.0, 36.0)).show(&ctx, |ui| {
+                egui::Frame::menu(ui.style()).show(ui, |ui| {
+                    ui.style_mut().visuals.button_frame = false;
+                    self.main_menu(ui);
+                });
+            });
+        }
         self.run_acts();
 
         if self.s.cursor_blink {
@@ -2510,6 +2534,8 @@ impl App {
             if let Some(p) = self.focused().and_then(|id| self.panes.get_mut(&id)) {
                 p.alert = true;
             }
+        } else if step == "main_menu_preview" {
+            self.preview_main_menu = true;
         } else if step == "menu_preview" {
             self.preview_menu = true;
         } else if let Some(cmd) = step.strip_prefix("insert:") {
