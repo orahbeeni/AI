@@ -221,6 +221,12 @@ pub fn draw(p: &egui::Painter, c: Pos2, icon: Icon, scale: f32, color: Color32) 
 
 /// A toolbar button: small caption on top, icon below. Returns the click response.
 pub fn tool_button(ui: &mut egui::Ui, caption: &str, icon: Icon, enabled: bool) -> Response {
+    tool_button_busy(ui, caption, icon, enabled, false)
+}
+
+/// A toolbar button that can show its operation is running: the icon is replaced by a
+/// spinner and the caption turns accent-coloured.
+pub fn tool_button_busy(ui: &mut egui::Ui, caption: &str, icon: Icon, enabled: bool, busy: bool) -> Response {
     let size = Vec2::new(54.0, 50.0);
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, resp) = ui.allocate_exact_size(size, sense);
@@ -237,14 +243,20 @@ pub fn tool_button(ui: &mut egui::Ui, caption: &str, icon: Icon, enabled: bool) 
         visuals.text_color()
     };
     let font = egui::TextStyle::Small.resolve(ui.style());
+    let accent = Color32::from_rgb(0x6c, 0x9d, 0xf2);
     p.text(
         Pos2::new(rect.center().x, rect.top() + 9.0),
         egui::Align2::CENTER_CENTER,
         caption,
         font,
-        visuals.weak_text_color().gamma_multiply(if enabled { 1.0 } else { 0.7 }),
+        if busy { accent } else { visuals.weak_text_color().gamma_multiply(if enabled { 1.0 } else { 0.7 }) },
     );
-    draw(&p, Pos2::new(rect.center().x, rect.top() + 31.0), icon, 1.45, color);
+    if busy {
+        let spin = Rect::from_center_size(Pos2::new(rect.center().x, rect.top() + 31.0), Vec2::splat(22.0));
+        egui::Spinner::new().color(accent).paint_at(ui, spin);
+    } else {
+        draw(&p, Pos2::new(rect.center().x, rect.top() + 31.0), icon, 1.45, color);
+    }
     resp
 }
 

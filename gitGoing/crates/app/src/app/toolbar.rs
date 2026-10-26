@@ -52,17 +52,19 @@ impl RepoTab {
                 }
 
                 let can = self.repo.as_ref().is_some_and(|l| l.info.is_some()) && self.op_rx.is_none();
+                // The button of the operation that is running shows a spinner instead of its icon.
+                let running = |names: &[&str]| self.op_rx.is_some() && names.contains(&self.op_label);
                 let tip = |v: &[UndoEntry], verb: &str| {
                     v.last().map_or_else(|| format!("Nothing to {}", verb.to_lowercase()), |e| format!("{verb} {}", e.label))
                 };
-                if icons::tool_button(ui, "Undo", Icon::Undo, can && !self.undo.is_empty())
+                if icons::tool_button_busy(ui, if running(&["Undo"]) { "Undoing…" } else { "Undo" }, Icon::Undo, can && !self.undo.is_empty(), running(&["Undo"]))
                     .on_hover_text(tip(&self.undo, "Undo"))
                     .on_disabled_hover_text(tip(&self.undo, "Undo"))
                     .clicked()
                 {
                     out.undo = true;
                 }
-                if icons::tool_button(ui, "Redo", Icon::Redo, can && !self.redo.is_empty())
+                if icons::tool_button_busy(ui, if running(&["Redo"]) { "Redoing…" } else { "Redo" }, Icon::Redo, can && !self.redo.is_empty(), running(&["Redo"]))
                     .on_hover_text(tip(&self.redo, "Redo"))
                     .on_disabled_hover_text(tip(&self.redo, "Redo"))
                     .clicked()
@@ -70,10 +72,10 @@ impl RepoTab {
                     out.redo = true;
                 }
                 ui.separator();
-                if icons::tool_button(ui, "Fetch", Icon::Fetch, can).on_hover_text("Fetch all remotes and prune").clicked() {
+                if icons::tool_button_busy(ui, if running(&["Fetch"]) { "Fetching…" } else { "Fetch" }, Icon::Fetch, can, running(&["Fetch"])).on_hover_text("Fetch all remotes and prune").clicked() {
                     out.remote = Some(("Fetch", Box::new(remote::fetch)));
                 }
-                if icons::tool_button(ui, "Pull", Icon::Pull, can).on_hover_text(pull_mode.label()).clicked() {
+                if icons::tool_button_busy(ui, if running(&["Pull"]) { "Pulling…" } else { "Pull" }, Icon::Pull, can, running(&["Pull"])).on_hover_text(pull_mode.label()).clicked() {
                     out.pull = Some(pull_mode);
                 }
                 // Drop-down next to Pull to choose how to integrate for this one pull.
@@ -102,7 +104,7 @@ impl RepoTab {
                     Stroke::NONE,
                 ));
                 ui.spacing_mut().item_spacing.x = 4.0;
-                if icons::tool_button(ui, "Push", Icon::Push, can).on_hover_text("Push the current branch").clicked() {
+                if icons::tool_button_busy(ui, if running(&["Push", "Force push"]) { "Pushing…" } else { "Push" }, Icon::Push, can, running(&["Push", "Force push"])).on_hover_text("Push the current branch").clicked() {
                     out.remote = Some(("Push", Box::new(remote::push)));
                 }
                 // Drop-down next to Push: the force push needed after rewriting pushed history.
@@ -137,7 +139,7 @@ impl RepoTab {
                 ));
                 ui.spacing_mut().item_spacing.x = 4.0;
                 ui.separator();
-                if icons::tool_button(ui, "Branch", Icon::Branch, can).on_hover_text("Create a branch").clicked() {
+                if icons::tool_button_busy(ui, "Branch", Icon::Branch, can, running(&["Create branch"])).on_hover_text("Create a branch").clicked() {
                     self.new_branch = Some(String::new());
                 }
                 let has_stash = self
@@ -145,10 +147,10 @@ impl RepoTab {
                     .as_ref()
                     .and_then(|l| l.info.as_ref())
                     .is_some_and(|i| !i.stashes.is_empty());
-                if icons::tool_button(ui, "Stash", Icon::Stash, can).on_hover_text("Stash changes…").clicked() {
+                if icons::tool_button_busy(ui, if running(&["Stash", "Save changes"]) { "Stashing…" } else { "Stash" }, Icon::Stash, can, running(&["Stash", "Save changes"])).on_hover_text("Stash changes…").clicked() {
                     out.stash = Some(StashOp::Save);
                 }
-                if icons::tool_button(ui, "Pop", Icon::Pop, can && has_stash).on_hover_text("Apply and remove the latest stash").clicked() {
+                if icons::tool_button_busy(ui, "Pop", Icon::Pop, can && has_stash, running(&["Pop stash"])).on_hover_text("Apply and remove the latest stash").clicked() {
                     out.stash = Some(StashOp::Pop(0));
                 }
                 ui.separator();
@@ -190,7 +192,10 @@ impl RepoTab {
                 if let Some(mark) = crate::assets::mark(ctx) {
                     ui.add(egui::Image::new(&mark).fit_to_exact_size(Vec2::splat(16.0))).on_hover_text("gitgoing");
                 }
-                if let Some((n, is_err)) = &self.notice {
+                if self.op_rx.is_some() {
+                    ui.spinner();
+                    ui.label(egui::RichText::new(format!("{}…", self.op_label)).strong());
+                } else if let Some((n, is_err)) = &self.notice {
                     if *is_err {
                         ui.colored_label(Color32::LIGHT_RED, n.lines().last().unwrap_or(n)).on_hover_text(n);
                     } else {

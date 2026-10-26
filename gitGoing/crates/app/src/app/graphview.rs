@@ -40,9 +40,7 @@ pub(super) fn history_view(
         .map_or((0, 0), |r| (r.graph.node_col, r.graph.node_color));
     // Highest lane index that still fits; wider lanes are squeezed into it.
     let max_col = (((graph_w - 12.0) / LANE_W).floor() as u16).max(1) - 1;
-    let wip = l.has_wip() as usize;
     let wip_count = l.changes.as_ref().and_then(Changes::count).unwrap_or(0);
-    let total = l.rows.len() + wip;
     let visuals = ui.visuals().clone();
     let text_color = visuals.text_color();
     let weak = visuals.weak_text_color();
@@ -62,11 +60,27 @@ pub(super) fn history_view(
     if !ctx.wants_keyboard_input() && !l.rows.is_empty() {
         let (up, down) = ctx.input(|i| (i.key_pressed(egui::Key::ArrowUp), i.key_pressed(egui::Key::ArrowDown)));
         let last = l.rows.len() - 1;
-        let next = match (l.selected, up, down) {
-            (None, true, _) | (None, _, true) => Some(0),
-            (Some(i), true, _) => Some(i.saturating_sub(1)),
-            (Some(i), _, true) => Some((i + 1).min(last)),
-            _ => None,
+        let next = if l.search.filtering() {
+            // Arrow keys step through the matches shown.
+            let m = &l.search.matches;
+            let pos = l.selected.map(|s| m.partition_point(|&x| (x as usize) < s));
+            match (pos, up, down) {
+                _ if m.is_empty() => None,
+                (None, true, _) | (None, _, true) => Some(m[0] as usize),
+                (Some(p), true, _) => Some(m[p.saturating_sub(1).min(m.len() - 1)] as usize),
+                (Some(p), _, true) => {
+                    let on = m.get(p).is_some_and(|&x| Some(x as usize) == l.selected);
+                    Some(m[(p + on as usize).min(m.len() - 1)] as usize)
+                }
+                _ => None,
+            }
+        } else {
+            match (l.selected, up, down) {
+                (None, true, _) | (None, _, true) => Some(0),
+                (Some(i), true, _) => Some(i.saturating_sub(1)),
+                (Some(i), _, true) => Some((i + 1).min(last)),
+                _ => None,
+            }
         };
         if let Some(n) = next.filter(|n| Some(*n) != l.selected) {
             pending = Some((n, true));
@@ -92,6 +106,8 @@ pub(super) fn history_view(
             .button("HEAD")
             .on_hover_text("Scroll to the current commit")
             .clicked();
+        ui.checkbox(&mut l.search.only, "Only matches")
+            .on_hover_text("Hide every commit that doesn't match the search. Clear the search to see them all again.");
         let n = l.search.matches.len();
         if !l.search.text.trim().is_empty() {
             if n == 0 {
@@ -110,9 +126,28 @@ pub(super) fn history_view(
             }
         }
     });
+    // The list is filtered while a search is typed and "only matches" is ticked.
+    let filtering = l.search.filtering();
+    if filtering != l.search.was_filtering {
+        l.search.was_filtering = filtering;
+        let target = if filtering {
+            l.search.matches.first().map(|&m| m as usize)
+        } else {
+            l.selected
+        };
+        match target {
+            Some(t) => l.reveal(t, true),
+            None => l.scroll_to = Some((0, false)),
+        }
+    }
+    let wip = if filtering { 0 } else { l.has_wip() as usize };
+    let total = if filtering { l.search.matches.len() } else { l.rows.len() + wip };
     if goto_head {
         let head = l.info.as_ref().and_then(|i| i.head_oid);
-        if let Some(idx) = head.and_then(|h| l.rows.iter().position(|r| r.id == h)) {
+        if let Some(idx) = head
+            .and_then(|h| l.rows.iter().position(|r| r.id == h))
+            .filter(|&i| l.display_of(i).is_some())
+        {
             l.reveal(idx, true);
             pending = Some((idx, false));
         }
@@ -187,6 +222,8 @@ pub(super) fn history_view(
         };
         area = area.vertical_scroll_offset(offset.max(0.0));
     }
+    // The matches are read-only while drawing; taking them out avoids borrowing `l` twice.
+    let matches = std::mem::take(&mut l.search.matches);
     area.show_rows(ui, ROW_H, total, |ui, range| {
             l.visible = range.clone();
             for i in range {
@@ -234,7 +271,7 @@ pub(super) fn history_view(
                     continue;
                 }
 
-                let idx = i - wip;
+                let idx = if filtering { matches[i] as usize } else { i - wip };
                 let row = &l.rows[idx];
                 if resp.clicked() {
                     let m = ui.input(|i| i.modifiers);
@@ -292,7 +329,7 @@ pub(super) fn history_view(
                         pick(CommitAction::CopySha(id), ui);
                     }
                 });
-                if l.search.matches.binary_search(&(idx as u32)).is_ok() {
+                if matches.binary_search(&(idx as u32)).is_ok() {
                     p.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(0xe5, 0xc0, 0x7b, 40));
                 }
                 if l.selected == Some(idx) || l.multi.contains(&idx) {
@@ -306,7 +343,8 @@ pub(super) fn history_view(
                     .flatten()
                     .filter(|&h| idx <= h)
                     .map(|h| (wip_lane.0, wip_lane.1, idx == h));
-                draw_graph(&p, rect, GraphCols { x: graph_x, width: graph_w, max_col }, row, l.info.as_ref().map(|i| &i.refs), wip_line);
+                // Filtered rows are not neighbours, so their connecting lines would mislead: dots only.
+                draw_graph(&p, rect, GraphCols { x: graph_x, width: graph_w, max_col }, row, l.info.as_ref().map(|i| &i.refs), wip_line, !filtering);
 
                 // Right-aligned fixed columns, flexible message in between.
                 let date_x = rect.right() - DATE_W;
@@ -377,10 +415,12 @@ pub(super) fn history_view(
             }
         });
 
+    l.search.matches = matches;
     if let Some((idx, cmd, shift)) = mclick {
         if shift {
             let from = l.anchor.or(l.selected).unwrap_or(idx);
-            l.multi = (from.min(idx)..=from.max(idx)).collect();
+            // A range over a filtered list covers only the commits shown.
+            l.multi = (from.min(idx)..=from.max(idx)).filter(|&i| !filtering || l.display_of(i).is_some()).collect();
         } else if cmd {
             if l.multi.is_empty() {
                 l.multi.extend(l.selected);
@@ -469,6 +509,7 @@ fn draw_graph(
     row: &CommitRow,
     refs: Option<&std::collections::HashMap<gitgoing_core::Oid, Vec<history::RefLabel>>>,
     wip_line: Option<(u16, u8, bool)>,
+    lines: bool,
 ) {
     let GraphCols { x: graph_x, width: graph_w, max_col } = cols;
     let clip = Rect::from_min_size(Pos2::new(graph_x, rect.top()), Vec2::new(graph_w, ROW_H));
@@ -486,7 +527,7 @@ fn draw_graph(
         dashed_vline(&p, cx(col), top, if ends_here { mid - 6.0 } else { bot }, c);
     }
 
-    for s in &row.graph.segs {
+    for s in row.graph.segs.iter().filter(|_| lines) {
         let stroke = Stroke::new(2.0_f32, color(s.color));
         let (a, b) = match s.kind {
             SegKind::Pass => (Pos2::new(cx(s.from), top), Pos2::new(cx(s.to), bot)),

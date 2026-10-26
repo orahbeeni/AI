@@ -82,9 +82,18 @@ struct Search {
     matches: Vec<u32>,
     /// Position in `matches` of the current result.
     cursor: usize,
+    /// Show only the matching commits in the list.
+    only: bool,
+    /// Whether the list was filtered last frame, to notice when that changes.
+    was_filtering: bool,
 }
 
 impl Search {
+    /// The list shows only the matches (a search is typed and "only matches" is ticked).
+    fn filtering(&self) -> bool {
+        self.only && !self.text.trim().is_empty()
+    }
+
     /// Bring `matches` up to date with the text and any newly loaded rows.
     /// Returns true if the text changed (so the view should jump to a result).
     fn update(&mut self, rows: &[CommitRow]) -> bool {
@@ -146,8 +155,17 @@ impl Loaded {
     }
 
     /// Scroll so commit `idx` is visible (centred if `center`).
+    /// The list row a commit is shown in: its own row, or its place among the matches when filtering.
+    fn display_of(&self, idx: usize) -> Option<usize> {
+        if self.search.filtering() {
+            self.search.matches.binary_search(&(idx as u32)).ok()
+        } else {
+            Some(idx + self.has_wip() as usize)
+        }
+    }
+
     fn reveal(&mut self, idx: usize, center: bool) {
-        let disp = idx + self.has_wip() as usize;
+        let Some(disp) = self.display_of(idx) else { return };
         let inside = disp > self.visible.start && disp + 1 < self.visible.end;
         if center || !inside {
             self.scroll_to = Some((disp, center));
@@ -765,9 +783,9 @@ impl RepoTab {
         let (selected, search, mut ch, show) = match self.repo.take() {
             Some(l) => {
                 self.carry_sidebar = l.sidebar;
-                (l.selected.and_then(|i| l.rows.get(i)).map(|r| r.id), l.search.text, l.changes, l.show_changes)
+                (l.selected.and_then(|i| l.rows.get(i)).map(|r| r.id), (l.search.text, l.search.only), l.changes, l.show_changes)
             }
-            None => (None, String::new(), None, false),
+            None => (None, (String::new(), false), None, false),
         };
         if let Some(c) = &mut ch {
             c.refresh(ctx);
@@ -775,7 +793,7 @@ impl RepoTab {
         self.open_with(path, ch, show);
         if let Some(l) = &mut self.repo {
             l.restore = selected;
-            l.search.text = search;
+            (l.search.text, l.search.only) = search;
         }
     }
 
@@ -2050,5 +2068,15 @@ mod tests {
         s.text.clear();
         s.update(&rows);
         assert!(s.matches.is_empty());
+    }
+
+    #[test]
+    fn only_matches_filters_just_while_a_search_is_typed() {
+        let mut s = Search { text: "bob".into(), ..Default::default() };
+        assert!(!s.filtering(), "off until ticked");
+        s.only = true;
+        assert!(s.filtering());
+        s.text = "  ".into();
+        assert!(!s.filtering(), "an empty search shows every commit again");
     }
 }
