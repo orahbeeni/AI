@@ -400,6 +400,11 @@ impl App {
                     ui.add_space(8.0);
                     ui.heading("Behaviour");
                     ui.checkbox(&mut d.scroll_on_keystroke, "Scroll to the bottom when typing");
+                    if cfg!(target_os = "linux") {
+                        ui.checkbox(&mut d.force_x11, "Use X11 (XWayland) in a Wayland session (restart to apply)").on_hover_text(
+                            "Native Wayland can stop redrawing the window for good with some GPU drivers: it still moves and resizes, but the contents are frozen. X11 does not have that problem.",
+                        );
+                    }
                     if cfg!(target_os = "macos") {
                         ui.checkbox(&mut d.option_as_meta, "Option key acts as Meta (Alt)");
                     }

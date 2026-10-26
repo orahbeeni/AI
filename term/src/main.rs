@@ -80,6 +80,20 @@ fn main() -> eframe::Result {
     let mut options = eframe::NativeOptions { viewport, ..Default::default() };
     // When the GPU does not hand over a frame, retry and rebuild instead of freezing on the last picture.
     options.wgpu_options.on_surface_status = std::sync::Arc::new(diag::surface_status);
+    // Linux: native Wayland can stop redrawing the window for good, so use X11 (XWayland) unless told not to.
+    #[cfg(target_os = "linux")]
+    {
+        let set = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
+        if config::Settings::load().force_x11 && set("WAYLAND_DISPLAY") && set("DISPLAY") {
+            diag::log("window system: X11 (XWayland); Preferences → General switches to native Wayland");
+            options.event_loop_builder = Some(Box::new(|b| {
+                use winit::platform::x11::EventLoopBuilderExtX11;
+                b.with_x11();
+            }));
+        } else {
+            diag::log("window system: automatic");
+        }
+    }
     // macOS: the standard app menu quits at once on ⌘Q. Without it, ⌘Q reaches term, which asks
     // first (⌘H and ⌘M, also from that menu, are handled by term too).
     #[cfg(target_os = "macos")]

@@ -421,6 +421,7 @@ impl Pane {
                         shared.activity.store(true, Ordering::Relaxed);
                         shared.got_output.store(true, Ordering::Relaxed);
                         shared.last_output_ms.store(started.elapsed().as_millis() as u64, Ordering::Relaxed);
+                        crate::diag::repaint_requested();
                         ctx.request_repaint();
                     }
                     shared.exited.store(true, Ordering::Relaxed);

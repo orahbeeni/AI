@@ -168,6 +168,15 @@ work as `Ctrl+<key>` (unless that key is bound to something else). `Ctrl+C` copi
 is selected (and clears the selection), otherwise it still interrupts. The shell no longer sees
 those Ctrl keys, so readline's `Ctrl+W`, `Ctrl+R`, `Ctrl+L` etc. are taken by term.
 
+## If the window stops redrawing (Linux)
+
+Native Wayland can stop redrawing a window for good when the compositor loses a frame callback
+(seen with NVIDIA's driver): the window frame still moves and resizes, but the contents are frozen
+and nothing helps. By default term therefore runs through X11 (XWayland) when started in a Wayland
+session; switch it in **Preferences → General** (takes effect after a restart). `term.log` in the
+settings folder notes which window system was used and logs a `STALL:` line if output keeps arriving
+but no frame is drawn.
+
 ## Customising
 
 Preferences (☰ menu) cover the shell, font and size, line height, padding, cursor, colours

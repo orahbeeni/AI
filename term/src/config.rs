@@ -460,6 +460,9 @@ pub struct Settings {
     pub alert_sound_file: String,
     /// Colour bars beside each command's output and a status badge in the title bar (needs shell integration).
     pub command_marks: bool,
+    /// Linux: run through X11 (XWayland) even in a Wayland session. Native Wayland can stop redrawing the
+    /// window for good (a lost frame callback with some GPU drivers), which looks like a frozen window.
+    pub force_x11: bool,
     /// Let programs read the clipboard through OSC 52. Off: a remote host cannot read what you copied.
     pub osc52_read: bool,
     /// Write every terminal's output to a text file as it arrives.
@@ -522,6 +525,7 @@ impl Default for Settings {
             alert_sound: false,
             alert_sound_file: String::new(),
             command_marks: true,
+            force_x11: true,
             osc52_read: false,
             record_output: false,
             record_dir: String::new(),
