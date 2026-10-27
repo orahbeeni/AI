@@ -442,6 +442,9 @@ pub struct Settings {
     /// Not used on macOS.
     #[serde(alias = "plain_copy_paste")]
     pub ctrl_without_shift: bool,
+    /// Letters that "without Shift" never takes over: Ctrl+<letter> always goes to the program.
+    /// Ctrl+R (history search in every shell) is the standard example.
+    pub shell_keys: String,
     pub right_click_menu: bool,
     /// Ctrl+click (⌘+click on macOS) opens URLs and file paths in the output.
     pub clickable_links: bool,
@@ -515,6 +518,7 @@ impl Default for Settings {
             lock_on_select: true,
             middle_click_paste: true,
             ctrl_without_shift: false,
+            shell_keys: "R".into(),
             right_click_menu: true,
             clickable_links: true,
             editor_command: String::new(),
@@ -593,6 +597,12 @@ impl Settings {
         if let Ok(t) = serde_json::to_string_pretty(self) {
             let _ = std::fs::write(Self::path(), t);
         }
+    }
+
+    /// Whether plain Ctrl+`key` is reserved for the program (see `shell_keys`).
+    pub fn is_shell_key(&self, key: egui::Key) -> bool {
+        let name = key.name();
+        self.shell_keys.split(|c: char| c.is_whitespace() || c == ',' || c == '+').filter(|k| !k.is_empty()).any(|k| k.eq_ignore_ascii_case(name))
     }
 
     pub fn reset_keybindings(&mut self) {

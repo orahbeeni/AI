@@ -652,7 +652,7 @@ impl App {
         if let Some((a, _)) = self.combos.iter().find(|(_, c)| c.matches(key, m)) {
             return Some(a.clone());
         }
-        if !self.s.ctrl_without_shift || cfg!(target_os = "macos") || !m.ctrl || m.shift || m.alt {
+        if !self.s.ctrl_without_shift || cfg!(target_os = "macos") || !m.ctrl || m.shift || m.alt || self.s.is_shell_key(key) {
             return None;
         }
         let shifted = Modifiers { shift: true, ..m };

@@ -942,3 +942,19 @@ fn osc52_clipboard_store_arrives() {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+#[test]
+fn shell_keys_stay_with_the_shell() {
+    let mut s = Settings::default();
+    assert!(s.is_shell_key(Key::R), "Ctrl+R is reserved by default");
+    assert!(!s.is_shell_key(Key::T));
+    s.shell_keys = "r, w E".into();
+    assert!(s.is_shell_key(Key::W) && s.is_shell_key(Key::E) && s.is_shell_key(Key::R));
+    assert!(!s.is_shell_key(Key::A));
+    // And the key really reaches the shell as Ctrl+R (0x12).
+    let ctrl = Modifiers { ctrl: true, ..Modifiers::NONE };
+    assert_eq!(key_bytes(Key::R, ctrl, TermMode::empty(), true), Some(vec![0x12]));
+    // Settings saved before this existed pick up the default.
+    let old: Settings = serde_json::from_str(r#"{"ctrl_without_shift": true}"#).unwrap();
+    assert!(old.is_shell_key(Key::R));
+}

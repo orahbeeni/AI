@@ -396,6 +396,18 @@ impl App {
                              The program no longer receives these Ctrl keys (e.g. readline's Ctrl+W, Ctrl+R, Ctrl+L).",
                         );
                     }
+                    if !cfg!(target_os = "macos") {
+                        ui.add_enabled_ui(d.ctrl_without_shift, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("   …except these keys, which always go to the shell:");
+                                ui.add(egui::TextEdit::singleline(&mut d.shell_keys).desired_width(120.0).hint_text("R"));
+                            })
+                            .response
+                            .on_hover_text(
+                                "Ctrl+R is the history search in bash, zsh and fish. Others people keep: A and E (start and end of line), W (delete word), K, U, L.",
+                            );
+                        });
+                    }
                     ui.checkbox(&mut d.right_click_menu, "Right-click opens a menu (otherwise it pastes)");
                     ui.add_space(8.0);
                     ui.heading("Behaviour");
