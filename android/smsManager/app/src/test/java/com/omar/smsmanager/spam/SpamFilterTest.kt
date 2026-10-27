@@ -216,4 +216,24 @@ class SpamFilterTest {
         assertEquals("back\\\\slash", PatternMatcher.wildcardToLike("back\\\\slash"))
         assertEquals("trailing\\\\", PatternMatcher.wildcardToLike("trailing\\"))
     }
+
+    // ---- escaping a selection ----
+
+    @Test fun escapedSelectionMatchesItselfLiterally() {
+        val sel = PatternMatcher.escapeWildcards("50* off, really?")
+        assertEquals("50\\* off, really\\?", sel)
+        assertTrue(blocked(listOf(text(sel)), "x", "Today 50* off, really? yes"))
+        assertFalse(blocked(listOf(text(sel)), "x", "Today 50xx off, really!"))
+        assertTrue(blocked(listOf(text(sel, loose = true)), "x", "TODAY 50 OFF REALLY"))
+    }
+
+    @Test fun escapedBackslashSurvives() {
+        val sel = PatternMatcher.escapeWildcards("a\\b")
+        assertTrue(blocked(listOf(text(sel)), "x", "see a\\b here"))
+        assertFalse(blocked(listOf(text(sel)), "x", "see ab here"))
+    }
+
+    @Test fun plainSelectionIsUnchanged() {
+        assertEquals("free gift", PatternMatcher.escapeWildcards("free gift"))
+    }
 }

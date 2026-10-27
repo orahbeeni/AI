@@ -3,7 +3,9 @@
 An Android SMS app built to be the default messaging app, with spam blocking as the main feature.
 
 - Normal SMS: conversation list, threads, new message with contact suggestions, search (with `*` and `?` wildcards), delete, notifications with inline reply and mark-as-read, retry for failed sends, "reply with message" from the call screen.
+- **Select and copy part of a message**: touch and hold a word in any message, drag the handles, tap Copy. Tapping a message opens options for the whole message (copy all, delete, block the number, retry a failed send).
 - **Blocking** by sender and by message text, in three match modes: wildcard, loose, or regular expression.
+- **Make a rule from a message**: tap the small filter icon beside any incoming message, touch and hold a word and drag the handles to select a phrase, and it becomes a rule. A live line says whether it catches the message and how many messages already in your inbox it matches, so a rule that's too broad is obvious before you save it.
 - **Allow rules** that beat block rules, and an option to never block your contacts.
 - Blocked messages are never written to your inbox. They sit in the **Blocked** tab for 7/30/90 days or forever, where you can restore them ("Not spam" also adds an allow rule for the sender) or delete them.
 - **Copy button for one-time codes**: a message with a code gets a heads-up notification with a "Copy 482913" button (and a Copy button under the message in the thread). Switch it off in Settings.
@@ -45,12 +47,18 @@ Everything is case-insensitive.
 
 Rules tab, Scan old: pick a range, the app lists how many received messages would have been blocked (grouped by rule), and "Move to Blocked" copies each into the Blocked tab and then deletes it from the inbox. The copy is made first, so a failure can't lose a message. It needs the default-SMS role, since only that app may delete. Moved messages are kept for the retention period counted from the move, not from when they were sent.
 
-## Backup and restore
+## Backup, export and import
 
-Settings, Backup: choose a file once (Downloads, Drive, anywhere the system file picker offers). Rules and settings are written to it as JSON a few seconds after every change. Blocked messages are not included, since they are private and the file may sit in cloud storage.
+Settings, Backup has two buttons and one switch:
+
+- **Export…** saves your rules and settings once to a file you pick (Downloads, Drive, anywhere), with no ongoing link. Use it to move to another phone or share a rule set.
+- **Import…** loads such a file: rules you don't already have are added (duplicates skipped) and settings are replaced. If automatic backup is off, it then offers to keep that file up to date.
+- **Keep a backup file up to date** is a switch. Turning it on asks for a file once; after that the file is rewritten a few seconds after every change. Turning it off stops and releases the file.
+
+Blocked messages are never included, since they are private and the file may sit in cloud storage.
 
 - Installing a new version over the old one keeps all data. No backup is needed for that.
-- Uninstalling wipes app data. After reinstalling, tap **Restore…**, pick the file, and rules are merged in (duplicates skipped), settings replaced, and automatic backup resumes to the same file.
+- Uninstalling wipes app data. After reinstalling, tap **Import…**, pick your backup file, and say yes to keep it updated.
 - Android's own cloud backup is switched off for the app so blocked message text never goes to Google's servers.
 
 ## Reporting spam

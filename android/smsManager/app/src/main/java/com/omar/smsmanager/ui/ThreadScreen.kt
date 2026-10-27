@@ -6,7 +6,8 @@ import android.content.Context
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -26,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -93,6 +96,7 @@ fun ThreadScreen(threadId: Long, address: String, onBack: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<Message?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var ruleFor by remember { mutableStateOf<Message?>(null) }
 
     val name by produceState<String?>(null, address) { value = withContext(Dispatchers.IO) { Contacts.name(ctx, address) } }
     val data by produceState(ThreadData(emptyList(), threadId, loaded = false), tick) {
@@ -175,20 +179,14 @@ fun ThreadScreen(threadId: Long, address: String, onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 items(data.messages.asReversed(), key = { it.id }) { m ->
-                    Bubble(
-                        m,
-                        onClick = {
-                            if (m.failed) scope.launch(Dispatchers.IO) {
-                                SmsStore.deleteMessage(ctx, m.id)
-                                SmsSender.send(ctx, address, m.body)
-                            }
-                        },
-                        onLongClick = { selected = m },
-                    )
+                    // Long-press on the text selects part of it. A tap opens the options for the whole message.
+                    Bubble(m, onClick = { selected = m }, onMakeRule = { ruleFor = m })
                 }
             }
         }
     }
+
+    ruleFor?.let { m -> RuleFromMessageSheet(sender = address, body = m.body, onDismiss = { ruleFor = null }) }
 
     selected?.let { m ->
         AlertDialog(
@@ -196,10 +194,19 @@ fun ThreadScreen(threadId: Long, address: String, onBack: () -> Unit) {
             title = { Text(formatFull(ctx, m.date)) },
             text = {
                 Column {
+                    if (m.failed) {
+                        TextButton(onClick = {
+                            selected = null
+                            scope.launch(Dispatchers.IO) {
+                                SmsStore.deleteMessage(ctx, m.id)
+                                SmsSender.send(ctx, address, m.body)
+                            }
+                        }) { Text("Retry sending") }
+                    }
                     TextButton(onClick = {
                         ctx.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("message", m.body))
                         selected = null
-                    }) { Text("Copy text") }
+                    }) { Text("Copy whole message") }
                     TextButton(onClick = {
                         selected = null
                         scope.launch(Dispatchers.IO) { SmsStore.deleteMessage(ctx, m.id) }
@@ -233,11 +240,14 @@ fun ThreadScreen(threadId: Long, address: String, onBack: () -> Unit) {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Bubble(m: Message, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun Bubble(m: Message, onClick: () -> Unit, onMakeRule: () -> Unit) {
     val ctx = LocalContext.current
-    Box(Modifier.fillMaxWidth(), contentAlignment = if (m.outgoing) Alignment.CenterEnd else Alignment.CenterStart) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = if (m.outgoing) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Surface(
             shape = RoundedCornerShape(16.dp),
             color = when {
@@ -245,10 +255,10 @@ private fun Bubble(m: Message, onClick: () -> Unit, onLongClick: () -> Unit) {
                 m.outgoing -> MaterialTheme.colorScheme.primaryContainer
                 else -> MaterialTheme.colorScheme.surfaceVariant
             },
-            modifier = Modifier.widthIn(max = 300.dp).combinedClickable(onClick = onClick, onLongClick = onLongClick),
+            modifier = Modifier.widthIn(max = 280.dp).clickable(onClick = onClick),
         ) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                Text(m.body)
+                SelectionContainer { Text(m.body) }
                 val code = remember(m.body) { if (m.outgoing) null else OtpExtractor.extract(m.body) }
                 if (code != null) {
                     TextButton(onClick = {
@@ -257,11 +267,19 @@ private fun Bubble(m: Message, onClick: () -> Unit, onLongClick: () -> Unit) {
                     }) { Text("Copy $code") }
                 }
                 val status = when {
-                    m.failed -> "Not sent. Tap to retry"
+                    m.failed -> "Not sent. Tap for options"
                     m.sending -> "Sending…"
                     else -> formatWhen(ctx, m.date)
                 }
                 Text(status, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (!m.outgoing) {
+            IconButton(onClick = onMakeRule, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    Icons.Filled.FilterAlt, "Make a rule from this message", Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                )
             }
         }
     }

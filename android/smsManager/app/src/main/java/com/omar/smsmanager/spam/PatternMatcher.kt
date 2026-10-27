@@ -46,6 +46,16 @@ object PatternMatcher {
 
     fun isValid(pattern: String, mode: MatchMode, target: RuleTarget) = compile(pattern, mode, target) != null
 
+    /** Makes [s] match itself literally in Wildcard or Loose mode, by escaping `\`, `*` and `?`. */
+    fun escapeWildcards(s: String): String {
+        val sb = StringBuilder()
+        for (c in s) {
+            if (c == '\\' || c == '*' || c == '?') sb.append('\\')
+            sb.append(c)
+        }
+        return sb.toString()
+    }
+
     // ---- search box ----
 
     /** True when a search query uses `*` or `?`, so it should be matched as a wildcard rather than as plain text. */

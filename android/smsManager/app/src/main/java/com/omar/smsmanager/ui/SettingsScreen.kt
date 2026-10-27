@@ -10,13 +10,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
@@ -26,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.omar.smsmanager.BuildConfig
@@ -44,36 +46,52 @@ fun SettingsScreen() {
     var contactsAllowed by remember { mutableStateOf(settings.contactsAlwaysAllowed) }
     var retention by remember { mutableStateOf(settings.retentionDays) }
     var offerOtp by remember { mutableStateOf(settings.offerOtpCopy) }
+    var offerKeep by remember { mutableStateOf<android.net.Uri?>(null) } // a just-imported file we may keep updating
     val tick by Ticker.tick.collectAsState() // refreshes the backup status line
     val scope = rememberCoroutineScope()
 
     val persistFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
         Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+    val rw = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
     fun keepAccess(uri: android.net.Uri): Boolean = try {
-        ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        ctx.contentResolver.takePersistableUriPermission(uri, rw)
         true
     } catch (_: Exception) {
         false
     }
 
-    val chooseFile = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
-        val uri = r.data?.data ?: return@rememberLauncherForActivityResult
-        if (!keepAccess(uri)) return@rememberLauncherForActivityResult toast(ctx, "Couldn't get write access to that file")
+    /** Makes [uri] the file that is kept up to date, and writes it now. */
+    fun startKeepingUpdated(uri: android.net.Uri) {
+        if (!keepAccess(uri)) return toast(ctx, "Couldn't get write access to that file")
         AutoBackup.setTarget(ctx, uri)
         scope.launch {
             val ok = withContext(Dispatchers.IO) { AutoBackup.writeIfChanged(ctx, force = true) }
             toast(ctx, if (ok) "Backup saved. It will update automatically." else "Couldn't write the file")
         }
     }
-    val restoreFile = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+
+    val pickBackupFile = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        r.data?.data?.let(::startKeepingUpdated)
+    }
+    val importFile = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         val uri = r.data?.data ?: return@rememberLauncherForActivityResult
         scope.launch {
             val res = withContext(Dispatchers.IO) { Backup.readText(ctx, uri)?.let { Backup.restore(ctx, it) } }
-            if (res == null) return@launch toast(ctx, "That isn't an SmsManager backup file")
+            if (res == null) return@launch toast(ctx, "That isn't an SmsManager settings file")
             contactsAllowed = settings.contactsAlwaysAllowed; retention = settings.retentionDays; offerOtp = settings.offerOtpCopy
-            // Keep saving to the same file from now on, if the provider lets us write to it.
-            val resumed = keepAccess(uri).also { if (it) AutoBackup.setTarget(ctx, uri) }
-            toast(ctx, "Restored ${res.rulesAdded} rule(s)" + (if (res.rulesAlreadyThere > 0) ", ${res.rulesAlreadyThere} already there" else "") + if (resumed) ". Automatic backup resumed." else "")
+            toast(
+                ctx,
+                "Imported ${res.rulesAdded} rule(s)" + if (res.rulesAlreadyThere > 0) ", ${res.rulesAlreadyThere} already there" else "",
+            )
+            // After a reinstall this is the moment to carry on with the same file.
+            if (AutoBackup.target(ctx) == null) offerKeep = uri
+        }
+    }
+    val exportFile = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val uri = r.data?.data ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val n = withContext(Dispatchers.IO) { Backup.exportTo(ctx, uri) }
+            toast(ctx, if (n != null) "Exported $n rule(s) and your settings" else "Couldn't write the file")
         }
     }
 
@@ -97,46 +115,53 @@ fun SettingsScreen() {
 
         HorizontalDivider()
         Section("Backup")
-        val backupUri = remember(tick) { AutoBackup.target(ctx) }
-        val fileName = remember(backupUri) { backupUri?.let { Backup.displayName(ctx, it) } }
         Text(
-            "Saves your rules and settings to a file you choose and keeps it up to date. If you ever uninstall the app, " +
-                "restore from that file. (Installing a new version over the old one keeps everything without this.) " +
-                "Blocked messages aren't included.",
+            "Export saves your rules and settings to a file, for example to move to another phone. Import loads one: " +
+                "rules you don't already have are added and your settings are replaced. Blocked messages aren't included. " +
+                "After uninstalling and reinstalling, use Import with your backup file. " +
+                "(Installing a new version over the old one keeps everything without any of this.)",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        val last = remember(tick) { settings.backupLast }
-        val error = remember(tick) { settings.backupError }
-        Text(
-            when {
-                backupUri == null -> "Automatic backup: not set up"
-                error.isNotEmpty() -> "Automatic backup to ${fileName ?: "file"} is failing: $error"
-                last > 0 -> "Automatic backup: ${fileName ?: "file"}, saved ${formatFull(ctx, last)}"
-                else -> "Automatic backup: ${fileName ?: "file"}"
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (error.isNotEmpty() && backupUri != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = {
-                chooseFile.launch(
+                exportFile.launch(
+                    Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/json")
+                        .putExtra(Intent.EXTRA_TITLE, "smsmanager-settings.json")
+                )
+            }) { Text("Export…") }
+            OutlinedButton(onClick = {
+                importFile.launch(
+                    Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").addFlags(persistFlags)
+                )
+            }) { Text("Import…") }
+        }
+
+        val backupUri = remember(tick) { AutoBackup.target(ctx) }
+        val fileName = remember(backupUri) { backupUri?.let { Backup.displayName(ctx, it) } }
+        val last = remember(tick) { settings.backupLast }
+        val error = remember(tick) { settings.backupError }
+        val failing = backupUri != null && error.isNotEmpty()
+        ToggleRow(
+            "Keep a backup file up to date",
+            when {
+                backupUri == null -> "Saves to a file you choose after every change, so an uninstall doesn't cost you your rules."
+                failing -> "Can't write to ${fileName ?: "the file"}: $error. Switch off and on to pick another file."
+                last > 0 -> "Saving to ${fileName ?: "the file"}. Last saved ${formatFull(ctx, last)}."
+                else -> "Saving to ${fileName ?: "the file"}."
+            },
+            checked = backupUri != null,
+            subtitleColor = if (failing) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        ) { on ->
+            if (on) {
+                pickBackupFile.launch(
                     Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/json")
                         .putExtra(Intent.EXTRA_TITLE, "smsmanager-backup.json").addFlags(persistFlags)
                 )
-            }) { Text(if (backupUri == null) "Choose file…" else "Change file…") }
-            OutlinedButton(onClick = {
-                restoreFile.launch(
-                    Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").addFlags(persistFlags)
-                )
-            }) { Text("Restore…") }
-        }
-        if (backupUri != null) {
-            OutlinedButton(onClick = {
-                scope.launch {
-                    val ok = withContext(Dispatchers.IO) { AutoBackup.writeIfChanged(ctx, force = true) }
-                    toast(ctx, if (ok) "Backup saved" else "Couldn't write the file")
-                }
-            }) { Text("Back up now") }
+            } else {
+                backupUri?.let { try { ctx.contentResolver.releasePersistableUriPermission(it, rw) } catch (_: Exception) {} }
+                AutoBackup.setTarget(ctx, null)
+                Ticker.bump()
+            }
         }
 
         HorizontalDivider()
@@ -147,17 +172,33 @@ fun SettingsScreen() {
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+
+    offerKeep?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { offerKeep = null },
+            title = { Text("Keep this file up to date?") },
+            text = { Text("From now on SmsManager can save your rules and settings back to this file after every change. That's the usual choice after a reinstall.") },
+            confirmButton = { TextButton(onClick = { offerKeep = null; startKeepingUpdated(uri) }) { Text("Yes, keep it updated") } },
+            dismissButton = { TextButton(onClick = { offerKeep = null }) { Text("No thanks") } },
+        )
+    }
 }
 
 @Composable
 private fun Section(title: String) = Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
 
 @Composable
-private fun ToggleRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun ToggleRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    subtitleColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    onChange: (Boolean) -> Unit,
+) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = subtitleColor)
         }
         Switch(checked, onChange)
     }

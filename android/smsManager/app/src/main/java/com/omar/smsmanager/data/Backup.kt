@@ -82,6 +82,19 @@ object Backup {
         return RestoreResult(added, incoming.size - added)
     }
 
+    /** Writes the current rules and settings to [uri] once. Returns the number of rules written, or null on failure. */
+    fun exportTo(ctx: Context, uri: Uri): Int? = try {
+        val text = toJson(ctx, System.currentTimeMillis())
+        val out = try {
+            ctx.contentResolver.openOutputStream(uri, "wt")
+        } catch (_: Exception) {
+            ctx.contentResolver.openOutputStream(uri, "w") // some providers reject truncate mode
+        }
+        if (out == null) null else { out.use { it.write(text.toByteArray()) }; Db.get(ctx).rules().size }
+    } catch (_: Exception) {
+        null
+    }
+
     fun readText(ctx: Context, uri: Uri): String? = try {
         ctx.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
     } catch (_: Exception) {
