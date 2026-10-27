@@ -41,6 +41,7 @@ object Backup {
                 JSONObject()
                     .put("contactsAlwaysAllowed", s.contactsAlwaysAllowed)
                     .put("retentionDays", s.retentionDays)
+                    .put("offerOtpCopy", s.offerOtpCopy)
             )
             put("rules", rules)
         }.toString(2)
@@ -55,6 +56,7 @@ object Backup {
             val s = Settings(ctx)
             s.contactsAlwaysAllowed = st.optBoolean("contactsAlwaysAllowed", s.contactsAlwaysAllowed)
             s.retentionDays = st.optInt("retentionDays", s.retentionDays).coerceAtLeast(0)
+            s.offerOtpCopy = st.optBoolean("offerOtpCopy", s.offerOtpCopy)
         }
 
         val incoming = ArrayList<Rule>()

@@ -59,7 +59,9 @@ import com.omar.smsmanager.data.Db
 import com.omar.smsmanager.data.Message
 import com.omar.smsmanager.data.SmsStore
 import com.omar.smsmanager.data.Ticker
+import com.omar.smsmanager.sms.ClipboardCopy
 import com.omar.smsmanager.sms.Notifier
+import com.omar.smsmanager.sms.OtpExtractor
 import com.omar.smsmanager.sms.SmsSender
 import com.omar.smsmanager.spam.Rule
 import com.omar.smsmanager.spam.RuleAction
@@ -247,6 +249,13 @@ private fun Bubble(m: Message, onClick: () -> Unit, onLongClick: () -> Unit) {
         ) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                 Text(m.body)
+                val code = remember(m.body) { if (m.outgoing) null else OtpExtractor.extract(m.body) }
+                if (code != null) {
+                    TextButton(onClick = {
+                        ClipboardCopy.copyCode(ctx, code)
+                        toast(ctx, "Copied $code")
+                    }) { Text("Copy $code") }
+                }
                 val status = when {
                     m.failed -> "Not sent. Tap to retry"
                     m.sending -> "Sending…"

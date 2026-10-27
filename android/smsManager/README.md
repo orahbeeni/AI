@@ -6,6 +6,7 @@ An Android SMS app built to be the default messaging app, with spam blocking as 
 - **Blocking** by sender and by message text, in three match modes: wildcard, loose, or regular expression.
 - **Allow rules** that beat block rules, and an option to never block your contacts.
 - Blocked messages are never written to your inbox. They sit in the **Blocked** tab for 7/30/90 days or forever, where you can restore them ("Not spam" also adds an allow rule for the sender) or delete them.
+- **Copy button for one-time codes**: a message with a code gets a heads-up notification with a "Copy 482913" button (and a Copy button under the message in the thread). Switch it off in Settings.
 - **Scan old messages** applies your rules to what's already in the inbox, over 1 week, 1 month, 1 year, 5 years, 10 years or all time, with a preview before anything moves.
 - **Backup file** for rules and settings, kept up to date automatically, so an uninstall doesn't cost you your filters.
 
@@ -36,6 +37,7 @@ Everything is case-insensitive.
 - **Loose** mode uses the same `*` and `?`, but `?` means zero or one character, and spaces, punctuation, accents and case are ignored on both sides. `opt?out` matches "Opt-out", "O.P.T out", "OPT OUT" and "optout". Because separators are removed before matching, a loose pattern can also match across word boundaries (`free gift` matches "FREE-GIFT").
 - **Regex** mode is full Java regex (same whole-sender / anywhere-in-text behaviour). Here `?` makes the previous character optional, so use `opt[- ]?out` for the same effect as above.
 - Order of evaluation: allow rules, then contacts, then block rules. Use an allow rule like `your code is*` (text) to keep one-time codes flowing from an otherwise blocked sender.
+- The Blocked tab has the same search (sender, text and the rule that matched).
 - The **Test** button on the Rules tab runs a made-up message through your rules.
 - The Messages search box takes the same `*` and `?` (anywhere-in-text, so `lun*noon` finds "Lunch at noon"; `\*` and `\?` are literal).
 

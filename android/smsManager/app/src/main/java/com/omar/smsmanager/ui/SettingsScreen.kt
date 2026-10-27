@@ -43,6 +43,7 @@ fun SettingsScreen() {
     val settings = remember { Settings(ctx) }
     var contactsAllowed by remember { mutableStateOf(settings.contactsAlwaysAllowed) }
     var retention by remember { mutableStateOf(settings.retentionDays) }
+    var offerOtp by remember { mutableStateOf(settings.offerOtpCopy) }
     val tick by Ticker.tick.collectAsState() // refreshes the backup status line
     val scope = rememberCoroutineScope()
 
@@ -69,7 +70,7 @@ fun SettingsScreen() {
         scope.launch {
             val res = withContext(Dispatchers.IO) { Backup.readText(ctx, uri)?.let { Backup.restore(ctx, it) } }
             if (res == null) return@launch toast(ctx, "That isn't an SmsManager backup file")
-            contactsAllowed = settings.contactsAlwaysAllowed; retention = settings.retentionDays
+            contactsAllowed = settings.contactsAlwaysAllowed; retention = settings.retentionDays; offerOtp = settings.offerOtpCopy
             // Keep saving to the same file from now on, if the provider lets us write to it.
             val resumed = keepAccess(uri).also { if (it) AutoBackup.setTarget(ctx, uri) }
             toast(ctx, "Restored ${res.rulesAdded} rule(s)" + (if (res.rulesAlreadyThere > 0) ", ${res.rulesAlreadyThere} already there" else "") + if (resumed) ". Automatic backup resumed." else "")
@@ -86,6 +87,12 @@ fun SettingsScreen() {
             listOf(7 to "7 days", 30 to "30 days", 90 to "90 days", 0 to "Forever").forEach { (days, label) ->
                 FilterChip(retention == days, { retention = days; settings.retentionDays = days }, { Text(label) })
             }
+        }
+
+        HorizontalDivider()
+        Section("Notifications")
+        ToggleRow("Copy button for one-time codes", "When a message contains a code, the notification shows a button like \"Copy 482913\".", offerOtp) {
+            offerOtp = it; settings.offerOtpCopy = it
         }
 
         HorizontalDivider()

@@ -12,6 +12,7 @@ import androidx.core.app.RemoteInput
 import com.omar.smsmanager.MainActivity
 import com.omar.smsmanager.R
 import com.omar.smsmanager.data.Contacts
+import com.omar.smsmanager.data.Settings
 
 object Notifier {
     private const val CHANNEL = "messages"
@@ -63,18 +64,27 @@ object Notifier {
         ).addRemoteInput(RemoteInput.Builder(KEY_REPLY).setLabel("Reply").build()).build()
         val markRead = NotificationCompat.Action.Builder(R.drawable.ic_stat_message, "Mark as read", readPi).build()
 
-        val n = NotificationCompat.Builder(ctx, CHANNEL)
+        val builder = NotificationCompat.Builder(ctx, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_message)
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_HIGH) // heads-up banner
             .setContentIntent(openPi)
             .setAutoCancel(true)
-            .addAction(reply)
-            .addAction(markRead)
-            .build()
-        nm.notify(id, n)
+
+        // A one-time code gets a button with the code on it, first in line, so one tap on the banner copies it.
+        val code = if (Settings(ctx).offerOtpCopy) OtpExtractor.extract(body) else null
+        if (code != null) {
+            val copyPi = PendingIntent.getBroadcast(
+                ctx, id, actionIntent(NotificationActionReceiver.ACTION_COPY).putExtra(NotificationActionReceiver.EXTRA_CODE, code),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            builder.addAction(NotificationCompat.Action.Builder(R.drawable.ic_stat_message, "Copy $code", copyPi).build())
+        }
+
+        nm.notify(id, builder.addAction(reply).addAction(markRead).build())
     }
 
     @SuppressLint("MissingPermission")

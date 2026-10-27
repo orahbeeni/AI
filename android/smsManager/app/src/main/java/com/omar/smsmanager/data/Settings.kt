@@ -10,6 +10,11 @@ class Settings(ctx: Context) {
         get() = p.getBoolean("contacts_allowed", true)
         set(v) { p.edit().putBoolean("contacts_allowed", v).apply(); Ticker.bump() }
 
+    /** Adds a "Copy 482913" button to the notification when a message contains a one-time code. */
+    var offerOtpCopy: Boolean
+        get() = p.getBoolean("offer_otp_copy", true)
+        set(v) { p.edit().putBoolean("offer_otp_copy", v).apply(); Ticker.bump() }
+
     /** Days to keep blocked messages. 0 = forever. */
     var retentionDays: Int
         get() = p.getInt("retention_days", 30)

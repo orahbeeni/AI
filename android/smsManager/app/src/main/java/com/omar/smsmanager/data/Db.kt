@@ -129,6 +129,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "smsmanager.d
     fun deleteBlockedIds(ids: List<Long>) {
         if (ids.isEmpty()) return
         writableDatabase.delete("blocked", "id IN (${ids.joinToString(",")})", null)
+        Ticker.bump()
     }
 
     fun addHits(ruleId: Long, n: Int) {
