@@ -36,6 +36,8 @@ data class BlockedMessage(
     val ruleLabel: String,
 )
 
+data class OutboxItem(val id: Long, val sender: String, val body: String, val date: Long)
+
 /** Bumped whenever the SMS provider or our own database changes; screens reload on it. */
 object Ticker {
     val tick = kotlinx.coroutines.flow.MutableStateFlow(0)

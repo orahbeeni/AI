@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Telephony
 import com.omar.smsmanager.data.Contacts
+import com.omar.smsmanager.forward.Forwarder
 import com.omar.smsmanager.data.Db
 import com.omar.smsmanager.data.Settings
 import com.omar.smsmanager.data.SmsStore
@@ -52,6 +53,7 @@ object Inbound {
                 val uri = SmsStore.insertInbox(ctx, sender, body, sentAt, subscription, read = false) ?: return
                 if (verdict is Verdict.Allowed && verdict.rule != null) db.bumpHit(verdict.rule.id)
                 Notifier.showMessage(ctx, sender, body, SmsStore.threadIdOf(ctx, uri))
+                Forwarder.onReceived(ctx, sender, body, sentAt)
             }
         }
     }

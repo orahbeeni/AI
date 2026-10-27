@@ -11,7 +11,7 @@ import com.omar.smsmanager.spam.RuleAction
 import com.omar.smsmanager.spam.RuleTarget
 
 /** Our own storage: block/allow rules and the quarantine of blocked messages. */
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "smsmanager.db", null, 2) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "smsmanager.db", null, 3) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -28,6 +28,16 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "smsmanager.d
                 rule_id INTEGER NOT NULL, rule_label TEXT NOT NULL,
                 blocked_at INTEGER NOT NULL DEFAULT 0)"""
         )
+        createOutbox(db)
+    }
+
+    private fun createOutbox(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sender TEXT NOT NULL, body TEXT NOT NULL, date INTEGER NOT NULL,
+                queued_at INTEGER NOT NULL)"""
+        )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -39,6 +49,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "smsmanager.d
             db.execSQL("ALTER TABLE blocked ADD COLUMN blocked_at INTEGER NOT NULL DEFAULT 0")
             db.execSQL("UPDATE blocked SET blocked_at = date")
         }
+        if (oldVersion < 3) createOutbox(db)
     }
 
     // ---- rules ----
@@ -171,6 +182,42 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "smsmanager.d
     fun purgeBlocked(olderThan: Long) {
         if (writableDatabase.delete("blocked", "blocked_at < ?", arrayOf(olderThan.toString())) > 0) Ticker.bump()
     }
+
+    // ---- outbox: messages waiting to be forwarded by email ----
+
+    fun enqueueOutbox(sender: String, body: String, date: Long) {
+        val v = ContentValues().apply {
+            put("sender", sender); put("body", body); put("date", date); put("queued_at", System.currentTimeMillis())
+        }
+        writableDatabase.insertOrThrow("outbox", null, v)
+        Ticker.bump()
+    }
+
+    fun outbox(limit: Int = 50): List<OutboxItem> =
+        readableDatabase.query("outbox", null, null, null, null, null, "id ASC", limit.toString()).use { c ->
+            buildList {
+                while (c.moveToNext()) add(
+                    OutboxItem(
+                        id = c.getLong(c.getColumnIndexOrThrow("id")),
+                        sender = c.getString(c.getColumnIndexOrThrow("sender")),
+                        body = c.getString(c.getColumnIndexOrThrow("body")),
+                        date = c.getLong(c.getColumnIndexOrThrow("date")),
+                    )
+                )
+            }
+        }
+
+    fun outboxCount(): Int =
+        readableDatabase.rawQuery("SELECT COUNT(*) FROM outbox", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+
+    fun deleteOutbox(id: Long) {
+        writableDatabase.delete("outbox", "id=?", arrayOf(id.toString()))
+        Ticker.bump()
+    }
+
+    /** Drops what has been waiting longer than the caller is willing to keep trying. Returns how many were dropped. */
+    fun purgeOutbox(queuedBefore: Long): Int =
+        writableDatabase.delete("outbox", "queued_at < ?", arrayOf(queuedBefore.toString())).also { if (it > 0) Ticker.bump() }
 
     private fun Cursor.toRule() = Rule(
         id = getLong(getColumnIndexOrThrow("id")),

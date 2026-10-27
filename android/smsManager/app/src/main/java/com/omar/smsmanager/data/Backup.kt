@@ -42,6 +42,12 @@ object Backup {
                     .put("contactsAlwaysAllowed", s.contactsAlwaysAllowed)
                     .put("retentionDays", s.retentionDays)
                     .put("offerOtpCopy", s.offerOtpCopy)
+                    // The bot token is deliberately left out: the file may live in cloud storage.
+                    .put("forwardEnabled", s.forwardEnabled)
+                    .put("forwardChatId", s.forwardChatId)
+                    .put("forwardChatName", s.forwardChatName)
+                    .put("forwardOnlySenders", s.forwardOnlySenders)
+                    .put("forwardSkipCodes", s.forwardSkipCodes)
             )
             put("rules", rules)
         }.toString(2)
@@ -57,6 +63,11 @@ object Backup {
             s.contactsAlwaysAllowed = st.optBoolean("contactsAlwaysAllowed", s.contactsAlwaysAllowed)
             s.retentionDays = st.optInt("retentionDays", s.retentionDays).coerceAtLeast(0)
             s.offerOtpCopy = st.optBoolean("offerOtpCopy", s.offerOtpCopy)
+            s.forwardEnabled = st.optBoolean("forwardEnabled", s.forwardEnabled)
+            s.forwardChatId = st.optString("forwardChatId", s.forwardChatId)
+            s.forwardChatName = st.optString("forwardChatName", s.forwardChatName)
+            s.forwardOnlySenders = st.optString("forwardOnlySenders", s.forwardOnlySenders)
+            s.forwardSkipCodes = st.optBoolean("forwardSkipCodes", s.forwardSkipCodes)
         }
 
         val incoming = ArrayList<Rule>()

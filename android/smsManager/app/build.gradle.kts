@@ -12,8 +12,8 @@ android {
         applicationId = "com.omar.smsmanager"
         minSdk = 29
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.5.1"
+        versionCode = 10
+        versionName = "0.6.0"
     }
 
     buildTypes {
@@ -51,4 +51,5 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303") // the Android one is a stub in unit tests
 }
