@@ -467,6 +467,8 @@ pub struct RepoTab {
     /// The previous sidebar, whose filter and layout the next one inherits.
     carry_sidebar: Option<Sidebar>,
     conflict: Option<ConflictEditor>,
+    /// What the conflict editor reported last frame.
+    conflict_outcome: Option<conflictwin::Outcome>,
     compare: Option<CompareWin>,
     confirm: Option<Confirm>,
     undo: Vec<UndoEntry>,
@@ -521,6 +523,7 @@ impl RepoTab {
             edit: None,
             file_bg: Vec::new(),
             conflict: None,
+            conflict_outcome: None,
             compare: None,
             confirm: None,
             undo: Vec::new(),
@@ -1251,6 +1254,10 @@ impl RepoTab {
             if let Some(e) = &self.error {
                 ui.colored_label(Color32::LIGHT_RED, e);
             }
+            if let Some(ed) = self.conflict.as_mut().filter(|e| !e.popped()) {
+                self.conflict_outcome = Some(ed.ui(ui));
+                return;
+            }
             let Some(l) = &mut self.repo else {
                 if self.error.is_none() {
                     ui.label("Open a repository to begin.");
@@ -1291,9 +1298,12 @@ impl RepoTab {
                 }
             }
         }
-        // The conflict editor lives in its own window.
-        if let Some(ed) = &mut self.conflict {
-            match ed.show(ctx) {
+        // The conflict editor is drawn in the centre pane (above) or in a window of its own.
+        if let Some(ed) = self.conflict.as_mut().filter(|e| e.popped()) {
+            self.conflict_outcome = Some(ed.window(ctx));
+        }
+        if let Some(outcome) = self.conflict_outcome.take() {
+            match outcome {
                 conflictwin::Outcome::Open => {}
                 conflictwin::Outcome::Cancelled => self.conflict = None,
                 conflictwin::Outcome::Resolved => {

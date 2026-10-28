@@ -20,7 +20,7 @@ pub fn set_defaults(split: bool, ignore_ws: bool) {
 
 /// A see-through colour that blends in plain sRGB. `Color32::from_rgba_unmultiplied`
 /// premultiplies in linear space, which makes low alphas far stronger than they read.
-fn tint(r: u8, g: u8, b: u8, a: u8) -> Color32 {
+pub(crate) fn tint(r: u8, g: u8, b: u8, a: u8) -> Color32 {
     let m = |c: u8| (c as u16 * a as u16 / 255) as u8;
     Color32::from_rgba_premultiplied(m(r), m(g), m(b), a)
 }

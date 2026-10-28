@@ -235,6 +235,62 @@ impl Resolution {
     }
 }
 
+/// Follow line ranges `(start, len)` of `old` through an edit that turned it into `new`.
+/// Lines typed inside a range (or replacing lines of it) stay part of it; lines added just
+/// before or after a range don't, unless the range is empty (then they fill it).
+pub fn remap_ranges(old: &[&str], new: &[&str], ranges: &mut [(usize, usize)]) {
+    let ops = similar::capture_diff_slices(Algorithm::Myers, old, new);
+    // (old start, old len, new start, new len, equal?) of every op, in order.
+    let spans: Vec<(usize, usize, usize, usize, bool)> = ops
+        .iter()
+        .map(|op| match *op {
+            DiffOp::Equal { old_index, new_index, len } => (old_index, len, new_index, len, true),
+            DiffOp::Delete { old_index, old_len, new_index } => (old_index, old_len, new_index, 0, false),
+            DiffOp::Insert { old_index, new_index, new_len } => (old_index, 0, new_index, new_len, false),
+            DiffOp::Replace { old_index, old_len, new_index, new_len } => (old_index, old_len, new_index, new_len, false),
+        })
+        .collect();
+    let start_of = |b: usize, grow: bool| -> usize {
+        for &(oi, ol, ni, _, eq) in &spans {
+            if ol == 0 {
+                if oi == b && grow {
+                    return ni; // an empty range takes in what is typed at its place
+                }
+                continue;
+            }
+            if b >= oi && b < oi + ol {
+                return if eq { ni + (b - oi) } else { ni };
+            }
+        }
+        new.len()
+    };
+    let end_of = |b: usize, grow: bool| -> usize {
+        if grow {
+            if let Some(&(_, _, ni, nl, _)) = spans.iter().find(|s| s.1 == 0 && s.0 == b) {
+                return ni + nl;
+            }
+        }
+        if b == 0 {
+            return 0;
+        }
+        for &(oi, ol, ni, nl, eq) in &spans {
+            if ol == 0 {
+                continue;
+            }
+            if b > oi && b <= oi + ol {
+                return if eq { ni + (b - oi) } else { ni + nl };
+            }
+        }
+        new.len()
+    };
+    for r in ranges.iter_mut() {
+        let grow = r.1 == 0;
+        let s = start_of(r.0, grow);
+        let e = end_of(r.0 + r.1, grow).max(s);
+        *r = (s, e - s);
+    }
+}
+
 /// Join lines back into file text using the file's own conventions.
 pub fn to_text(lines: &[String], crlf: bool, final_newline: bool) -> String {
     let eol = if crlf { "\r\n" } else { "\n" };
@@ -463,6 +519,28 @@ mod tests {
         let lines: Vec<_> = res.result().into_iter().map(|(l, _)| l).collect();
         assert_eq!(lines, ["a", "T1", "c"]);
         assert_eq!(res.unresolved_count(), 0);
+    }
+
+    #[test]
+    fn ranges_follow_edits() {
+        let old = ["a", "x1", "x2", "b", "c", "y", "d"];
+        // Edit inside the first range, add a line above it, delete "c".
+        let new = ["new", "a", "x1!", "x2", "b", "y", "d"];
+        let mut r = [(1, 2), (5, 1)];
+        remap_ranges(&old, &new, &mut r);
+        assert_eq!(r, [(2, 2), (5, 1)]);
+        // Lines typed into an empty range become part of it.
+        let old = ["a", "b"];
+        let new = ["a", "typed", "b"];
+        let mut r = [(1, 0)];
+        remap_ranges(&old, &new, &mut r);
+        assert_eq!(r, [(1, 1)]);
+        // Deleting a whole range leaves it empty where it was.
+        let old = ["a", "x", "b"];
+        let new = ["a", "b"];
+        let mut r = [(1, 1)];
+        remap_ranges(&old, &new, &mut r);
+        assert_eq!(r, [(1, 0)]);
     }
 
     #[test]
