@@ -51,6 +51,7 @@ impl App {
             (d.read_only, d.enc, d.eol, d.lang)
         };
         let s = self.settings.clone();
+        let unlocked = matches!(self.doc_ref().vault, crate::vault::Vault::Unlocked(_));
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
                 item(ui, cmds, "New", Cmd::New);
@@ -313,6 +314,13 @@ impl App {
                     ui.menu_button(k.name(), |ui| {
                         item(ui, cmds, "Generate from selection / document", Cmd::Hash(k));
                         item(ui, cmds, "Generate from files...", Cmd::HashFiles(k));
+                    });
+                }
+                if !s.hide_vault_menu {
+                    ui.separator();
+                    ui.menu_button("Hidden Document", |ui| {
+                        item(ui, cmds, if unlocked { "Save and Lock" } else { "Reveal Hidden Content..." }, Cmd::VaultToggle);
+                        item(ui, cmds, if unlocked { "Settings..." } else { "Protect This Document..." }, Cmd::VaultProtect);
                     });
                 }
             });
@@ -589,6 +597,7 @@ impl App {
             (lang::name(d.lang), d.len_chars(), d.len_lines(), l + 1, dcol, head + 1, sel_chars, sel_lines, d.eol, d.enc, d.overwrite, d.read_only)
         };
         let recording = self.recording;
+        let unlocked = matches!(self.doc_ref().vault, crate::vault::Vault::Unlocked(_));
         let msg = self.status_msg.as_ref().map(|(m, _)| m.clone());
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
@@ -607,6 +616,10 @@ impl App {
             if recording {
                 ui.separator();
                 ui.label(RichText::new("● REC").color(Color32::from_rgb(0xe0, 0x30, 0x30)).strong());
+            }
+            if unlocked {
+                ui.separator();
+                ui.label(RichText::new("HIDDEN").color(Color32::from_rgb(0xd0, 0x80, 0x20)).strong());
             }
             if let Some(m) = msg {
                 ui.separator();

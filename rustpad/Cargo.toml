@@ -16,11 +16,14 @@ icon = ["packaging/rustpad.png"]
 
 [dependencies]
 arboard = "3.6.1"
+argon2 = "0.6.0"
+chacha20poly1305 = "0.11.0"
 chardetng = "1.0.0"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 dirs = "7.0.0"
 eframe = "0.36.2"
 encoding_rs = "0.8.42"
+getrandom = "0.4.3"
 globset = "0.4.20"
 md-5 = "0.11.0"
 png = "0.18.1"
@@ -35,6 +38,7 @@ unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
 walkdir = "2.5.0"
 wry = "0.57.0"
+zeroize = "1.9.1"
 
 # wry's WebKitGTK backend needs GTK initialised and pumped alongside the winit loop.
 [target.'cfg(target_os = "linux")'.dependencies]

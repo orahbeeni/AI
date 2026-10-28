@@ -3,6 +3,8 @@
 #
 #   ./deb_build.sh            build the release binary, then the .deb
 #   ./deb_build.sh --no-build reuse the existing target/release/rustpad
+#   ./deb_build.sh --install  also install the package (asks for sudo)
+#   (options can be combined)
 #
 # Needs: cargo, dpkg-deb (package "dpkg-dev" or "dpkg").
 set -euo pipefail
@@ -18,9 +20,17 @@ ARCH=$(dpkg --print-architecture)
 PKG="target/deb/${NAME}_${VERSION}_${ARCH}"
 DEB="$PKG.deb"
 
-if [ "${1:-}" != "--no-build" ]; then
-    cargo build --release
-fi
+BUILD=1
+INSTALL=0
+for a in "$@"; do
+    case "$a" in
+        --no-build) BUILD=0 ;;
+        --install) INSTALL=1 ;;
+        *) echo "unknown option: $a" >&2; exit 1 ;;
+    esac
+done
+
+[ "$BUILD" = 1 ] && cargo build --release
 BIN=target/release/$NAME
 [ -x "$BIN" ] || { echo "$BIN not found; run without --no-build" >&2; exit 1; }
 
@@ -55,4 +65,8 @@ dpkg-deb --build --root-owner-group "$PKG" "$DEB"
 
 echo
 echo "Built $DEB"
-echo "Install with: sudo dpkg -i $DEB"
+if [ "$INSTALL" = 1 ]; then
+    sudo apt-get install -y "./$DEB"
+else
+    echo "Install with: sudo apt install ./$DEB   (or rerun with --install)"
+fi

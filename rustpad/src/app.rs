@@ -16,6 +16,8 @@ use crate::search::{self, FifQuery, FileHits, Mode, Query};
 use crate::settings::{SavedMacro, Settings};
 use crate::theme::{self, Theme};
 use crate::ui::dialogs::Dialogs;
+use crate::vault::{self, Vault};
+use zeroize::Zeroizing;
 
 pub struct ResultFile {
     pub path: Option<PathBuf>,
@@ -47,6 +49,10 @@ pub enum Pending {
     Rename { doc: u64, name: String },
     ConfirmTrash(u64),
     Hash { title: String, text: String },
+    /// Password prompt for a protected document; `failed` after a wrong try.
+    VaultReveal { doc: u64, password: Zeroizing<String>, failed: bool },
+    /// Protect a document (or edit the settings of an unlocked one).
+    VaultProtect { doc: u64, decoy: String, password: Zeroizing<String>, repeat: Zeroizing<String>, error: String },
 }
 
 pub struct Closed {
@@ -308,9 +314,12 @@ impl App {
     pub fn load_file(&self, path: &Path) -> Result<Doc, String> {
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         let decoded = encoding::decode_auto(&bytes);
-        let eol = Eol::detect(&decoded.text).unwrap_or_else(|| self.default_eol());
-        let mut d = Doc::from_text(&decoded.text, decoded.enc, eol);
-        let first: String = decoded.text.lines().next().unwrap_or("").chars().take(200).collect();
+        // a protected file shows only its decoy; the encrypted payload rides along invisibly
+        let (shown, blob) = vault::split(&decoded.text);
+        let eol = Eol::detect(shown).unwrap_or_else(|| self.default_eol());
+        let mut d = Doc::from_text(shown, decoded.enc, eol);
+        d.vault = blob.map_or(Vault::None, Vault::Locked);
+        let first: String = shown.lines().next().unwrap_or("").chars().take(200).collect();
         d.lang = lang::detect(Some(path), &first);
         d.path = Some(path.to_path_buf());
         d.disk_mtime = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
@@ -357,7 +366,11 @@ impl App {
         }
         let d = &mut self.tabs[idx];
         let path = d.path.clone().unwrap();
-        let text = d.text_string();
+        // the payload is made of zero-width characters, which legacy code pages cannot hold
+        if !d.vault.is_none() && matches!(d.enc, Enc::Legacy(_)) {
+            d.enc = Enc::Utf8;
+        }
+        let text = d.file_text();
         let bytes = encoding::encode(&text, d.enc);
         match std::fs::write(&path, bytes) {
             Ok(()) => {
@@ -371,6 +384,95 @@ impl App {
                 self.pending = Some(Pending::Message(format!("Failed to save {}:\n{e}", path.display())));
                 false
             }
+        }
+    }
+
+    /// Try a password on a locked document; on success it swaps to its real text. A wrong password and a
+    /// document with nothing hidden are deliberately indistinguishable.
+    pub fn vault_reveal(&mut self, id: u64, password: &str) -> bool {
+        let Some(d) = self.tabs.iter_mut().find(|d| d.id == id) else { return false };
+        let Vault::Locked(blob) = &d.vault else { return false };
+        let Some((real, key, salt)) = vault::open(password, blob) else { return false };
+        // unsaved edits of the decoy are kept (and still count as unsaved)
+        let decoy = d.text_string().to_string();
+        let dirty = d.is_modified();
+        d.reset_text(&real);
+        d.drop_text_cache();
+        if let Some(e) = Eol::detect(&real) {
+            d.eol = e;
+        }
+        d.vault = Vault::Unlocked(Box::new(vault::Unlocked { key, salt, decoy }));
+        d.html_view = false;
+        d.scroll_row = 0.0;
+        if dirty {
+            d.mark_modified();
+        } else {
+            d.mark_saved();
+        }
+        true
+    }
+
+    /// Save (encrypted) and go back to showing the decoy. False if the save did not happen.
+    pub fn vault_lock(&mut self, idx: usize) -> bool {
+        if !matches!(self.tabs[idx].vault, Vault::Unlocked(_)) {
+            return true;
+        }
+        if (self.tabs[idx].is_modified() || self.tabs[idx].path.is_none()) && !self.save_doc(idx, false) {
+            return false;
+        }
+        let d = &mut self.tabs[idx];
+        let Vault::Unlocked(u) = std::mem::take(&mut d.vault) else { return false };
+        let blob = vault::seal(&u.key, &u.salt, &d.text_string());
+        d.reset_text(&u.decoy);
+        d.drop_text_cache();
+        if let Some(e) = Eol::detect(&u.decoy) {
+            d.eol = e;
+        }
+        d.vault = Vault::Locked(blob);
+        d.scroll_row = 0.0;
+        d.mark_saved();
+        // nothing derived from the real text may stay on screen
+        let (path, name) = (d.path.clone(), d.display_name());
+        self.results.retain(|r| !r.files.iter().any(|f| f.path == path && (path.is_some() || f.name == name)));
+        self.fn_list_cache = None;
+        self.ed.ac = None;
+        self.ed2.ac = None;
+        true
+    }
+
+    /// Protect the document (its current text becomes the hidden one) or change an unlocked one's decoy and
+    /// password (`password` empty keeps the old one). Saves at once so the disk never keeps the plain text.
+    pub fn vault_protect(&mut self, id: u64, decoy: &str, password: &str) {
+        let Some(idx) = self.tabs.iter().position(|d| d.id == id) else { return };
+        let d = &mut self.tabs[idx];
+        let eol = d.eol.as_str();
+        let decoy = decoy.replace("\r\n", "\n").replace('\r', "\n").replace('\n', eol);
+        match &mut d.vault {
+            Vault::Unlocked(u) => {
+                u.decoy = decoy;
+                if !password.is_empty() {
+                    (u.key, u.salt) = vault::new_key(password);
+                }
+            }
+            Vault::None => {
+                let (key, salt) = vault::new_key(password);
+                d.vault = Vault::Unlocked(Box::new(vault::Unlocked { key, salt, decoy }));
+            }
+            Vault::Locked(_) => return,
+        }
+        d.mark_modified();
+        if self.save_doc(idx, false) {
+            self.set_status("Protected: the file now shows only the decoy");
+        }
+    }
+
+    /// Turn a protected document back into an ordinary one (the plain text is written on the next save).
+    pub fn vault_remove(&mut self, id: u64) {
+        let Some(d) = self.tabs.iter_mut().find(|d| d.id == id) else { return };
+        if matches!(d.vault, Vault::Unlocked(_)) {
+            d.vault = Vault::None;
+            d.mark_modified();
+            self.set_status("Protection removed: save to write the plain text");
         }
     }
 
@@ -483,7 +585,8 @@ impl App {
     // ----------------------------------------------------------- command exec
 
     pub fn exec(&mut self, ctx: &egui::Context, cmd: Cmd) {
-        if self.recording && !self.playing && cmd.recordable() {
+        // typed text of a hidden document must not end up in a macro
+        if self.recording && !self.playing && cmd.recordable() && self.doc_ref().vault.is_none() {
             self.macro_buf.push(cmd.clone());
         }
         let metrics = editor::view_metrics(&self.tabs[self.active.min(self.tabs.len() - 1)], &self.ed, &self.settings);
@@ -995,6 +1098,31 @@ impl App {
                 let steps = self.last_macro.clone();
                 self.play_macro(ctx, &steps, 1);
             }
+            Cmd::VaultToggle => {
+                let idx = self.active;
+                if matches!(self.tabs[idx].vault, Vault::Unlocked(_)) {
+                    if self.vault_lock(idx) {
+                        self.set_status("Locked");
+                    }
+                } else {
+                    self.pending = Some(Pending::VaultReveal { doc: self.tabs[idx].id, password: Default::default(), failed: false });
+                }
+            }
+            Cmd::VaultProtect => {
+                let d = self.doc_ref();
+                self.pending = Some(match &d.vault {
+                    // a locked document has nothing to configure until it is revealed
+                    Vault::Locked(_) => Pending::VaultReveal { doc: d.id, password: Default::default(), failed: false },
+                    Vault::Unlocked(u) => Pending::VaultProtect {
+                        doc: d.id,
+                        decoy: u.decoy.replace("\r\n", "\n").replace('\r', "\n"),
+                        password: Default::default(),
+                        repeat: Default::default(),
+                        error: String::new(),
+                    },
+                    Vault::None => Pending::VaultProtect { doc: d.id, decoy: String::new(), password: Default::default(), repeat: Default::default(), error: String::new() },
+                });
+            }
             Cmd::OpenUtils => {
                 let utils = utils_html_path();
                 if self.open_path(&utils) {
@@ -1084,10 +1212,14 @@ impl App {
                     }
                 };
                 let mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
-                let eol = Eol::detect(&text);
+                // whatever was unlocked is dropped: the file on disk is the truth, and it comes back locked
+                let (text, blob) = vault::split(&text);
+                let eol = Eol::detect(text);
                 let d = self.doc();
                 let caret = d.caret();
-                d.reset_text(&text);
+                d.vault = blob.map_or(Vault::None, Vault::Locked);
+                d.drop_text_cache();
+                d.reset_text(text);
                 d.enc = enc;
                 if let Some(e) = eol {
                     d.eol = e;

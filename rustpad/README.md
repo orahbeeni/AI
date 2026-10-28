@@ -31,6 +31,11 @@ It runs on **Windows, macOS and Linux** from a single code base (egui/eframe for
 - Hot-exit: unsaved buffers, caret positions and tabs are restored on the next launch
 - Detects files changed or deleted on disk; recent files; drag & drop to open; `-nLINE` command-line option
 
+**Hidden encrypted documents**
+- Protect a document (Tools > Hidden Document > Protect This Document) with a password and a decoy text. The file on disk is just the decoy, in any editor, followed by the real text encrypted (Argon2id + XChaCha20-Poly1305) and written as invisible zero-width characters
+- Opened normally, RustPad shows only the decoy, and you can edit and save it without touching the hidden part. `Ctrl+Alt+H` asks for the password and swaps in the real text; saving re-encrypts it; `Ctrl+Alt+H` again, closing the tab or restarting brings the decoy back
+- Hot-exit backups of a protected document are encrypted too. There is no password recovery
+
 **Search**
 - Find / Replace / Find in Files / Mark dialogs; Normal, Extended (`\n \t \xNN …`) and Regular-expression modes (capture groups via `$1` or `\1`), whole-word, match-case, wrap-around, in-selection
 - Find All (current document / all open documents / files on disk) with a clickable results panel, Replace in Files, incremental search, bookmarks and marks

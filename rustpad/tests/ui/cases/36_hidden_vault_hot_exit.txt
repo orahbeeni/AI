@@ -1,0 +1,37 @@
+# Unsaved edits to an unlocked hidden document survive a restart, but only encrypted.
+# file real.txt :: the real secret\n
+# session
+wait 8
+cmd "VaultProtect"
+wait 5
+click 550 330
+text innocent note
+click 517 417
+text pw1
+click 517 457
+text pw1
+key enter
+wait 8
+press 300 300
+release 300 300
+text UNSAVEDTEXT
+wait 3
+cmd "Exit"
+wait 10
+# --- second run
+wait 8
+dump $OUT/b_decoy.txt
+state $OUT/b.json
+cmd "VaultToggle"
+wait 3
+text pw1
+key enter
+wait 8
+dump $OUT/b_real.txt
+state $OUT/b2.json
+# expect dump b_decoy.txt == innocent note
+# expect state b.json modified=true
+# expect dump b_real.txt == the real secret\nUNSAVEDTEXT
+# expect state b2.json modified=true
+# expect absent real.txt :: secret
+# expect absent real.txt :: UNSAVEDTEXT

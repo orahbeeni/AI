@@ -16,6 +16,8 @@ src/
   rowmap.rs     Logical-line ⇄ visual-row mapping for word wrap and folded lines.
   util.rs       Display columns (tabs, wide chars), wrap breaking, small string helpers.
   hash.rs       Digests for the Tools menu.
+  vault.rs      Hidden encrypted documents: decoy text + payload of zero-width characters, key derivation,
+                encryption, and `Doc::file_text` (what gets written to disk and to session backups).
   cmd.rs        The `Cmd` enum — every user action — plus the editable shortcut table.
   settings.rs   JSON settings.     theme.rs   Colour themes.     session.rs  Hot-exit snapshots.
   fonts.rs      Optional user font + CJK/symbol fallbacks.
@@ -53,6 +55,11 @@ src/
 - **Adding a language**: add a `LangDef` to `lang::LANGS` (generic kinds need only data; special
   kinds live in `lexer.rs`). **Adding a command**: add a `Cmd` variant, handle it in `App::exec`,
   add a menu entry and optionally a default shortcut in `cmd::default_bindings`.
+
+- **Hidden documents**: `Doc::vault` is `None`, `Locked(blob)` (the buffer holds the decoy) or `Unlocked`
+  (the buffer holds the real text; the derived key and the decoy are kept for saving). Anything that
+  writes a document out goes through `Doc::file_text`, so the real text only ever reaches disk encrypted,
+  including session backups. Locking drops the real text, history and caches.
 
 ## Testing
 

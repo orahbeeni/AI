@@ -853,6 +853,7 @@ impl App {
                         ui.checkbox(&mut s.watch_files, "Detect files modified outside the editor");
                         ui.checkbox(&mut s.trim_on_save, "Trim trailing spaces when saving");
                         ui.checkbox(&mut s.final_newline_on_save, "Ensure a final newline when saving");
+                        ui.checkbox(&mut s.hide_vault_menu, "Hide the Hidden Document menu (its shortcuts keep working)");
                         egui::ComboBox::from_label("Default line ending for new files")
                             .selected_text(match s.default_eol.as_str() {
                                 "crlf" => Eol::CrLf.label(),
@@ -1123,6 +1124,98 @@ impl App {
                     }
                     1 => {}
                     _ => keep = Some(Pending::Hash { title, text }),
+                }
+            }
+            Pending::VaultReveal { doc, mut password, failed } => {
+                let mut choice = 0;
+                let mut failed = failed;
+                egui::Window::new("Reveal hidden content").collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                    ui.label("Password:");
+                    let r = ui.add(egui::TextEdit::singleline(&mut *password).password(true).desired_width(260.0));
+                    // read before re-requesting focus, which would cancel the focus loss Enter causes
+                    let entered = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                    r.request_focus();
+                    if failed {
+                        ui.colored_label(egui::Color32::from_rgb(0xd0, 0x40, 0x40), "Nothing to reveal with that password.");
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("Reveal").clicked() || entered {
+                            choice = 1;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            choice = 2;
+                        }
+                    });
+                });
+                if ctx.input(|i| i.key_pressed(Key::Escape)) {
+                    choice = 2;
+                }
+                match choice {
+                    1 => {
+                        if !self.vault_reveal(doc, &password) {
+                            password.clear();
+                            failed = true;
+                            keep = Some(Pending::VaultReveal { doc, password, failed });
+                        }
+                    }
+                    2 => {}
+                    _ => keep = Some(Pending::VaultReveal { doc, password, failed }),
+                }
+            }
+            Pending::VaultProtect { doc, mut decoy, mut password, mut repeat, mut error } => {
+                let Some(unlocked) = self.tabs.iter().find(|d| d.id == doc).map(|d| matches!(d.vault, crate::vault::Vault::Unlocked(_))) else { return };
+                let mut choice = 0;
+                let title = if unlocked { "Hidden document settings" } else { "Protect with hidden encryption" };
+                egui::Window::new(title).collapsible(false).resizable(true).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                    if unlocked {
+                        ui.label("This document is unlocked. Saving encrypts what you see here.");
+                    } else {
+                        ui.label("What you see now becomes the hidden text. Anyone opening the file sees only the decoy.");
+                    }
+                    ui.add_space(4.0);
+                    ui.label("Decoy text shown to everyone else:");
+                    egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                        ui.add(egui::TextEdit::multiline(&mut decoy).desired_rows(6).desired_width(420.0).code_editor());
+                    });
+                    ui.add_space(4.0);
+                    ui.label(if unlocked { "New password (leave empty to keep the current one):" } else { "Password:" });
+                    ui.add(egui::TextEdit::singleline(&mut *password).password(true).desired_width(260.0));
+                    ui.label("Repeat password:");
+                    let r = ui.add(egui::TextEdit::singleline(&mut *repeat).password(true).desired_width(260.0));
+                    if !error.is_empty() {
+                        ui.colored_label(egui::Color32::from_rgb(0xd0, 0x40, 0x40), error.as_str());
+                    }
+                    ui.label(RichText::new("There is no password recovery: lose it and the hidden text is gone.").weak());
+                    ui.horizontal(|ui| {
+                        if ui.button(if unlocked { "Apply" } else { "Protect" }).clicked() || (r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))) {
+                            choice = 1;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            choice = 2;
+                        }
+                        if unlocked && ui.button("Remove protection").clicked() {
+                            choice = 3;
+                        }
+                    });
+                });
+                if ctx.input(|i| i.key_pressed(Key::Escape)) {
+                    choice = 2;
+                }
+                match choice {
+                    1 => {
+                        if *password != *repeat {
+                            error = "The two passwords differ.".into();
+                        } else if password.is_empty() && !unlocked {
+                            error = "Choose a password.".into();
+                        } else {
+                            self.vault_protect(doc, &decoy, &password);
+                            return;
+                        }
+                        keep = Some(Pending::VaultProtect { doc, decoy, password, repeat, error });
+                    }
+                    3 => self.vault_remove(doc),
+                    2 => {}
+                    _ => keep = Some(Pending::VaultProtect { doc, decoy, password, repeat, error }),
                 }
             }
             Pending::ConfirmTrash(id) => {

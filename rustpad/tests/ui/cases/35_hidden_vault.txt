@@ -1,0 +1,75 @@
+# Hidden encryption: protect, relock, honeypot edit, reveal, edit + save re-encrypts.
+# file real.txt :: the real secret\n
+# session
+# args-again
+wait 8
+cmd "VaultProtect"
+wait 5
+click 550 330
+text grocery list
+click 517 417
+text pw1
+click 517 457
+text pw1
+key enter
+wait 8
+dump $OUT/a_real.txt
+cmd "VaultToggle"
+wait 5
+dump $OUT/a_decoy.txt
+state $OUT/a.json
+# --- second run
+wait 8
+dump $OUT/b_decoy.txt
+cmd "VaultToggle"
+wait 3
+text wrongpw
+key enter
+wait 8
+dump $OUT/b_still_decoy.txt
+key escape
+wait 3
+press 300 300
+release 300 300
+text X
+key ctrl+s
+wait 5
+# --- second run
+wait 8
+dump $OUT/c_decoy.txt
+cmd "VaultToggle"
+wait 3
+text pw1
+key enter
+wait 8
+dump $OUT/c_real.txt
+state $OUT/c.json
+press 300 300
+release 300 300
+text !
+key ctrl+s
+wait 5
+cmd "VaultToggle"
+wait 5
+dump $OUT/c_locked.txt
+# --- second run
+wait 8
+cmd "VaultToggle"
+wait 3
+text pw1
+key enter
+wait 8
+dump $OUT/d_real.txt
+# expect dump a_real.txt == the real secret\n
+# expect dump a_decoy.txt == grocery list
+# expect state a.json modified=false
+# expect dump b_decoy.txt == grocery list
+# expect dump b_still_decoy.txt == grocery list
+# expect dump c_decoy.txt == grocery listX
+# expect dump c_real.txt == the real secret\n
+# expect state c.json modified=false
+# expect dump c_locked.txt == grocery listX
+# expect dump d_real.txt == the real secret\n!
+# expect absent real.txt :: secret
+# expect absent real.txt :: !
+# expect present real.txt :: grocery listX

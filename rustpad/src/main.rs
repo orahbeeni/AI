@@ -22,6 +22,7 @@ mod settings;
 mod theme;
 mod ui;
 mod util;
+mod vault;
 
 use eframe::egui;
 

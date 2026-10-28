@@ -224,6 +224,8 @@ pub struct Doc {
     pub read_only: bool,
     /// Tab shows the file rendered in an embedded web view instead of the text editor.
     pub html_view: bool,
+    /// Hidden-encryption state; see `vault.rs`.
+    pub vault: crate::vault::Vault,
     pub overwrite: bool,
     pub opts: EditOpts,
     pub bookmarks: BTreeSet<usize>,
@@ -312,6 +314,7 @@ impl Doc {
             version: 1,
             read_only: false,
             html_view: false,
+            vault: Default::default(),
             overwrite: false,
             opts: EditOpts::default(),
             bookmarks: BTreeSet::new(),
@@ -357,6 +360,11 @@ impl Doc {
     pub fn len_lines(&self) -> usize {
         self.rope.len_lines()
     }
+    /// Forget the cached full-text copy (it may hold text that must not outlive a lock).
+    pub fn drop_text_cache(&mut self) {
+        *self.text_cache.borrow_mut() = None;
+    }
+
     pub fn is_modified(&self) -> bool {
         self.force_modified || self.saved_idx != Some(self.hist_idx)
     }

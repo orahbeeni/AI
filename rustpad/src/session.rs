@@ -10,6 +10,7 @@ use crate::doc::{Doc, Eol};
 use crate::encoding::Enc;
 use crate::lang;
 use crate::settings::config_dir;
+use crate::vault::{self, Vault};
 
 #[derive(Serialize, Deserialize, Default)]
 struct SessionDoc {
@@ -31,6 +32,12 @@ struct SessionDoc {
 struct Session {
     docs: Vec<SessionDoc>,
     active: usize,
+}
+
+/// What a backup file is written from.
+enum Backup {
+    Rope(ropey::Rope),
+    Text(String),
 }
 
 fn session_path() -> PathBuf {
@@ -66,15 +73,17 @@ pub fn save(app: &mut App, wait: bool) {
     }
     let mut session = Session { active: app.active, docs: Vec::new() };
     let mut keep: Vec<String> = Vec::new();
-    let mut writes: Vec<(String, ropey::Rope)> = Vec::new();
+    let mut writes: Vec<(String, Backup)> = Vec::new();
     for (i, d) in app.tabs.iter_mut().enumerate() {
         let needs_backup = d.is_modified() || (d.path.is_none() && d.len_chars() > 0);
         let mut backup = None;
         if needs_backup {
             let name = format!("doc{}-{}.bak", i, d.id);
             if d.backup_ver != d.version || !dir.join(&name).exists() {
-                // ropes clone in O(1); the file is written off the UI thread
-                writes.push((name.clone(), d.rope.clone()));
+                // ropes clone in O(1); the file is written off the UI thread. A protected document is
+                // backed up the way it is saved (decoy + encrypted payload), never as its real text.
+                let data = if d.vault.is_none() { Backup::Rope(d.rope.clone()) } else { Backup::Text(d.file_text().to_string()) };
+                writes.push((name.clone(), data));
                 d.backup_ver = d.version;
             }
             keep.push(name.clone());
@@ -101,10 +110,13 @@ pub fn save(app: &mut App, wait: bool) {
     let json = serde_json::to_string(&session).unwrap_or_default();
     let handle = std::thread::spawn(move || {
         use std::io::Write;
-        for (name, rope) in writes {
+        for (name, data) in writes {
             if let Ok(f) = std::fs::File::create(dir.join(&name)) {
                 let mut w = std::io::BufWriter::new(f);
-                let _ = rope.write_to(&mut w);
+                let _ = match data {
+                    Backup::Rope(rope) => rope.write_to(&mut w),
+                    Backup::Text(text) => w.write_all(text.as_bytes()),
+                };
                 let _ = w.flush();
             }
         }
@@ -140,8 +152,10 @@ pub fn restore(app: &mut App) {
             (Some(p), Some(text)) => {
                 let path = PathBuf::from(p);
                 let enc = Enc::from_label(&sd.enc).unwrap_or(Enc::Utf8);
-                let eol = Eol::detect(&text).unwrap_or(Eol::Lf);
-                let mut d = Doc::from_text(&text, enc, eol);
+                let (text, blob) = vault::split(&text);
+                let eol = Eol::detect(text).unwrap_or(Eol::Lf);
+                let mut d = Doc::from_text(text, enc, eol);
+                d.vault = blob.map_or(Vault::None, Vault::Locked);
                 d.path = Some(path.clone());
                 d.disk_mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
                 d.mark_modified();
@@ -153,8 +167,10 @@ pub fn restore(app: &mut App) {
             }
             (None, Some(text)) => {
                 let enc = Enc::from_label(&sd.enc).unwrap_or(Enc::Utf8);
-                let eol = Eol::detect(&text).unwrap_or(Eol::Lf);
-                let mut d = Doc::from_text(&text, enc, eol);
+                let (text, blob) = vault::split(&text);
+                let eol = Eol::detect(text).unwrap_or(Eol::Lf);
+                let mut d = Doc::from_text(text, enc, eol);
+                d.vault = blob.map_or(Vault::None, Vault::Locked);
                 d.untitled_no = sd.untitled_no;
                 d.mark_modified();
                 Some(d)

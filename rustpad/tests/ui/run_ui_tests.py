@@ -92,6 +92,12 @@ def run_case(path: pathlib.Path) -> tuple[bool, str]:
                 want = json.loads(v)
                 if st.get(k) != want:
                     problems.append(f"state {fname}.{k}: want {want!r} got {st.get(k)!r}")
+        elif kind in ("present", "absent"):   # present|absent <file> :: <text> (checked in the raw file bytes)
+            fname, _, text = rest.partition(" :: ")
+            got_p = work / fname
+            raw = got_p.read_bytes() if got_p.exists() else b""
+            if (text.encode() in raw) != (kind == "present"):
+                problems.append(f"{kind} {fname}: {text!r}")
         elif kind == "exists":
             if not (work / rest.strip()).exists():
                 problems.append(f"missing {rest}")
