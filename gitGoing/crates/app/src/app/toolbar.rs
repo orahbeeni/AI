@@ -53,6 +53,8 @@ impl RepoTab {
 
                 let can = self.repo.as_ref().is_some_and(|l| l.info.is_some()) && self.op_rx.is_none();
                 // The button of the operation that is running shows a spinner instead of its icon.
+                const PULLS: [&str; 3] = ["Pull", "Stash and pull", "Stash, pull and pop"];
+                const STASHES: [&str; 4] = ["Stash", "Save changes", "Stash and check out", "Stash, check out and pop"];
                 let running = |names: &[&str]| self.op_rx.is_some() && names.contains(&self.op_label);
                 let tip = |v: &[UndoEntry], verb: &str| {
                     v.last().map_or_else(|| format!("Nothing to {}", verb.to_lowercase()), |e| format!("{verb} {}", e.label))
@@ -75,7 +77,7 @@ impl RepoTab {
                 if icons::tool_button_busy(ui, if running(&["Fetch"]) { "Fetching…" } else { "Fetch" }, Icon::Fetch, can, running(&["Fetch"])).on_hover_text("Fetch all remotes and prune").clicked() {
                     out.remote = Some(("Fetch", Box::new(remote::fetch)));
                 }
-                if icons::tool_button_busy(ui, if running(&["Pull"]) { "Pulling…" } else { "Pull" }, Icon::Pull, can, running(&["Pull"])).on_hover_text(pull_mode.label()).clicked() {
+                if icons::tool_button_busy(ui, if running(&PULLS) { "Pulling…" } else { "Pull" }, Icon::Pull, can, running(&PULLS)).on_hover_text(pull_mode.label()).clicked() {
                     out.pull = Some(pull_mode);
                 }
                 // Drop-down next to Pull to choose how to integrate for this one pull.
@@ -147,7 +149,7 @@ impl RepoTab {
                     .as_ref()
                     .and_then(|l| l.info.as_ref())
                     .is_some_and(|i| !i.stashes.is_empty());
-                if icons::tool_button_busy(ui, if running(&["Stash", "Save changes"]) { "Stashing…" } else { "Stash" }, Icon::Stash, can, running(&["Stash", "Save changes"])).on_hover_text("Stash changes…").clicked() {
+                if icons::tool_button_busy(ui, if running(&STASHES) { "Stashing…" } else { "Stash" }, Icon::Stash, can, running(&STASHES)).on_hover_text("Stash changes…").clicked() {
                     out.stash = Some(StashOp::Save);
                 }
                 if icons::tool_button_busy(ui, "Pop", Icon::Pop, can && has_stash, running(&["Pop stash"])).on_hover_text("Apply and remove the latest stash").clicked() {

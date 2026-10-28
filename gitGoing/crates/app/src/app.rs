@@ -415,6 +415,8 @@ pub struct RepoTab {
     notice: Option<(String, bool)>,
     /// What the running operation is called, for the toolbar.
     op_label: &'static str,
+    /// The local branch the running operation is checking out, if any.
+    op_branch: Option<String>,
     /// Set by the running operation when it moved any reference (branch, remote-tracking branch, tag).
     refs_moved: Arc<AtomicBool>,
     /// Transient notifications in the bottom-left corner.
@@ -495,6 +497,7 @@ impl RepoTab {
             op_rx: None,
             notice: None,
             op_label: "",
+            op_branch: None,
             refs_moved: Arc::new(AtomicBool::new(true)),
             toasts: Toasts::default(),
             new_branch: None,
@@ -834,6 +837,7 @@ impl RepoTab {
         let Some(rx) = &self.op_rx else { return };
         if let Ok(r) = rx.try_recv() {
             self.op_rx = None;
+            self.op_branch = None;
             let pending = self.pending.take();
             match r {
                 Ok(entry) => {
@@ -1026,6 +1030,7 @@ impl RepoTab {
                 .exact_width(widths.sidebar)
                 .show(ctx, |ui| {
                     if let Some(s) = &mut l.sidebar {
+                        s.busy_branch = self.op_rx.as_ref().and(self.op_branch.clone());
                         let head = l.info.as_ref().and_then(|i| i.head_branch.as_deref());
                         branch_act = s.show(ui, &self.hidden, &self.pinned, &self.comments, head);
                     }
@@ -1073,11 +1078,13 @@ impl RepoTab {
         if self.op_rx.is_none() {
             match branch_act {
                 Some(SidebarAction::Checkout(n)) => {
+                    self.op_branch = Some(n.clone());
                     self.retry = Some(Retry::Checkout(n.clone()));
                     let flag = self.blocked.clone();
                     self.run_op(ctx, "Checkout", move |p| branches::checkout(p, &n).map_err(|e| note_blocked(&flag, e)))
                 }
                 Some(SidebarAction::CheckoutRemote(n)) => {
+                    self.op_branch = n.split_once('/').map(|(_, b)| b.to_owned());
                     self.retry = Some(Retry::CheckoutRemote(n.clone()));
                     let flag = self.blocked.clone();
                     self.run_op(ctx, "Checkout", move |p| {

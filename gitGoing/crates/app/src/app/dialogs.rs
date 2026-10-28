@@ -127,6 +127,11 @@ impl RepoTab {
                     (false, false) => "Stash and check out",
                 };
                 let done = if pulling { "Pulled" } else { "Checked out" };
+                self.op_branch = match &retry {
+                    Retry::Checkout(n) => Some(n.clone()),
+                    Retry::CheckoutRemote(n) => n.split_once('/').map(|(_, b)| b.to_owned()),
+                    Retry::Pull(_) => None,
+                };
                 self.run_op(ctx, label, move |p| {
                     stash::save(p).map_err(|e| e.message().to_owned())?;
                     let r = match retry {

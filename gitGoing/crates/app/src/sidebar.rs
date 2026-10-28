@@ -73,6 +73,8 @@ pub struct Sidebar {
     remote_urls: BTreeMap<String, String>,
     /// Scroll the local list to the current branch on the next frame.
     locate: bool,
+    /// The local branch being checked out right now (its row shows a spinner).
+    pub busy_branch: Option<String>,
     stashes: Vec<StashEntry>,
     change_sets: Vec<ChangeSet>,
     /// Local branch -> number of files it would get from a pull.
@@ -182,7 +184,7 @@ impl Sidebar {
 
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             let force_open = !q.is_empty();
-            let bc = BranchCtx { hidden, pinned, comments, head_full: head_full.as_deref(), unpulled: &self.unpulled };
+            let bc = BranchCtx { hidden, pinned, comments, head_full: head_full.as_deref(), unpulled: &self.unpulled, busy: self.busy_branch.as_deref() };
 
             // PINNED: the branches the user keeps an eye on, in the order they were pinned.
             let pinned_rows: Vec<_> = pinned
@@ -740,6 +742,7 @@ struct BranchCtx<'a> {
     head_full: Option<&'a str>,
     /// (commits to push, files to pull) per local branch, by short name.
     unpulled: &'a BTreeMap<String, (usize, usize)>,
+    busy: Option<&'a str>,
 }
 
 /// One local branch row, used by both the PINNED and LOCAL sections.
@@ -772,7 +775,14 @@ fn local_branch_row(
             badge.push((files, false));
         }
     }
-    let (r, clicks) = row_full(ui, depth, Icon::Branch, label, &badge, current, (!current).then_some(hid), Some(is_pinned || honorary), slot.is_some());
+    let busy = bc.busy == Some(full);
+    let icon = if busy { Icon::None } else { Icon::Branch };
+    let (r, clicks) = row_full(ui, depth, icon, label, &badge, current, (!current).then_some(hid), Some(is_pinned || honorary), slot.is_some());
+    if busy {
+        // Checking this branch out: a spinner where its icon was.
+        let at = Pos2::new(r.rect.left() + 34.0 + depth as f32 * INDENT + 7.0, r.rect.center().y);
+        egui::Spinner::new().size(14.0).paint_at(ui, Rect::from_center_size(at, Vec2::splat(14.0)));
+    }
     if clicks.eye {
         *act = Some(SidebarAction::SetHidden(vec![full_ref], !hid));
         return;
