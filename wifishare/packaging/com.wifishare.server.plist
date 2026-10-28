@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd agent for the macOS server. Install:
+    sudo cp target/release/wifishare /usr/local/bin/
+    cp packaging/com.wifishare.server.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.wifishare.server.plist
+  Then add /usr/local/bin/wifishare under System Settings > Privacy & Security > Accessibility
+  (when launchd starts it, the binary itself needs the permission, not your terminal).
+  Pair new clients from a terminal first (`wifishare server` there), since approval needs one.
+  Logs: tail -f /tmp/wifishare-server.log
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wifishare.server</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/wifishare</string>
+        <string>server</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/wifishare-server.log</string>
+</dict>
+</plist>

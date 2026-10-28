@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# End-to-end checks against a paired server/client in work dir $2 (see run_e2e.sh), using
+# file-backed clipboards and logged input so nothing touches the real desktop.
+set -u
+BIN=$1; T=$2
+export WIFISHARE_FAKE_INPUT=1
+pass=0; fail=0
+ok()   { echo "  PASS $1"; pass=$((pass+1)); }
+bad()  { echo "  FAIL $1"; fail=$((fail+1)); }
+# wait_until <seconds> <command...>
+wait_until() { local t=$1; shift; for _ in $(seq $((t*10))); do "$@" && return 0; sleep 0.1; done; return 1; }
+log_has() { grep -q -- "$2" "$1"; }
+
+start_server() { WIFISHARE_FAKE_CLIPBOARD=$T/SC $BIN --config-dir $T/S server --no-input >>$T/server.log 2>&1 & SPID=$!; }
+start_client() { WIFISHARE_FAKE_CLIPBOARD=$T/CC $BIN --config-dir $T/C client >>$T/client.log 2>&1 & CPID=$!; }
+connected_count() { grep -c "connected to test-S" $T/client.log; }
+more_connections() { [ "$(connected_count)" -gt "$before" ]; }
+
+: >$T/server.log; : >$T/client.log
+start_server; sleep 0.5; start_client
+echo "1. connect"
+wait_until 5 log_has $T/client.log "connected to test-S" && ok "client connected" || bad "client connected"
+
+echo "2. text, server -> client"
+rm -f $T/CC/text; echo -n "hello from the server" >$T/SC/text
+wait_until 3 grep -qsx "hello from the server" $T/CC/text && ok "text arrived" || bad "text arrived"
+
+echo "3. text, client -> server"
+sleep 0.3; echo -n "hello back" >$T/CC/text
+wait_until 3 grep -qx "hello back" $T/SC/text && ok "text arrived" || bad "text arrived"
+
+echo "4. large text goes over a bulk connection"
+python3 -c "print('x' * 400000, end='')" >$T/big.txt; cp $T/big.txt $T/SC/text
+wait_until 5 cmp -s $T/big.txt $T/CC/text && ok "400 KB text arrived intact" || bad "400 KB text"
+
+echo "5. files and folders, client -> server"
+rm -rf $T/src; mkdir -p "$T/src/My Folder/sub"; echo one >"$T/src/My Folder/a.txt"; head -c 3000000 /dev/urandom >"$T/src/My Folder/sub/blob.bin"
+chmod +x "$T/src/My Folder/a.txt"; echo solo >$T/src/note.md
+printf '%s\n%s\n' "$T/src/My Folder" "$T/src/note.md" >$T/CC/files
+if wait_until 10 test -s $T/SC/files; then
+  dest=$(head -1 $T/SC/files); note=$(sed -n 2p $T/SC/files)
+  diff -r "$T/src/My Folder" "$dest" >/dev/null && cmp -s $T/src/note.md "$note" && ok "files arrived intact ($dest)" || bad "file contents differ"
+  test -x "$dest/a.txt" && ok "exec bit kept" || bad "exec bit"
+else bad "files arrived"; fi
+
+echo "6. server frozen (like leaving Wi-Fi range) and back"
+before=$(connected_count)
+kill -STOP $SPID; sleep 7
+log_has $T/client.log "silent for" && ok "client noticed the dead link" || bad "dead link noticed"
+t0=$(date +%s.%N); kill -CONT $SPID
+if wait_until 10 more_connections; then
+  echo "     reconnected $(python3 -c "print(round($(date +%s.%N)-$t0,2))")s after the server came back"; ok "reconnected"
+else bad "reconnected"; fi
+sleep 0.5
+echo -n "after the outage" >$T/SC/text
+wait_until 3 grep -qx "after the outage" $T/CC/text && ok "clipboard works after reconnect" || bad "clipboard after reconnect"
+
+echo "7. server restart; copy made while the client was away is replayed"
+kill -INT $SPID; wait $SPID 2>/dev/null
+kill $CPID; wait $CPID 2>/dev/null
+start_server; sleep 0.5
+echo -n "copied while you were away" >$T/SC/text; sleep 0.5
+start_client
+wait_until 6 grep -qx "copied while you were away" $T/CC/text && ok "replayed on connect" || bad "replay on connect"
+
+echo "8. discovery: no address known, server found by its beacons"
+kill $CPID; wait $CPID 2>/dev/null
+sed -i '/^last_addr/d' $T/C/peers.toml
+before=$(connected_count)
+start_client
+wait_until 6 more_connections && ok "found via beacon: $(grep 'connected to test-S' $T/client.log | tail -1 | sed 's/.* at //')" || bad "discovery"
+
+kill $CPID $SPID 2>/dev/null; wait 2>/dev/null
+echo "passed $pass, failed $fail"
+[ "$fail" -eq 0 ]
