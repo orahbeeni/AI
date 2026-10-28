@@ -1,0 +1,38 @@
+name: wifishare
+
+on:
+  push:
+    paths: ['wifishare/**', '.github/workflows/wifishare.yml']
+  pull_request:
+    paths: ['wifishare/**', '.github/workflows/wifishare.yml']
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: wifishare
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Unit tests
+        run: cargo test
+      - name: Release build
+        run: cargo build --release
+      # Pairing, clipboard text/files both ways, dead-link detection, reconnect, replay and
+      # LAN discovery, with file-backed clipboards and logged input (no desktop needed).
+      - name: End-to-end
+        if: runner.os == 'Linux'
+        run: scripts/run_e2e.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wifishare-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            wifishare/target/release/wifishare
+            wifishare/target/release/wifishare.exe
+          if-no-files-found: ignore

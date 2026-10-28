@@ -1,0 +1,16 @@
+# systemd user service for the Linux client. Install:
+#   cp wifishare ~/.local/bin/ && cp packaging/wifishare-client.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now wifishare-client
+# Logs: journalctl --user -u wifishare-client -f
+[Unit]
+Description=wifishare client (keyboard, mouse and clipboard from the paired server)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/wifishare client
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
