@@ -87,7 +87,7 @@ impl Engine {
 
     /// Applies config changes that need no restart (the server's screen layout).
     pub fn reload(&self) {
-        self.hub.reload.notify_waiters();
+        self.hub.reload.send_modify(|v| *v += 1);
     }
 
     /// Pairs with the server at `target` (host or IP); the outcome shows up as a notice.

@@ -15,6 +15,7 @@ use anyhow::{Context, Result, bail};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinSet;
 
+use crate::audio::LinkAudio;
 use crate::clipboard;
 use crate::clipnet::{self, ClientCtx, ClipNet};
 use crate::config::{Config, Identity, Peer, Paths, Peers};
@@ -227,7 +228,7 @@ async fn follow(cfg: Config, paths: Paths, id: Identity, server_arg: Option<Stri
                     remember_addr(&paths, &server.key, addr);
                 }
                 let started = Instant::now();
-                session(&cfg, s, &inject, &mut screen, clip.as_ref(), &mut net_rx, &mut found_rx, &hub).await;
+                session(&cfg, &paths, s, &inject, &mut screen, clip.as_ref(), &mut net_rx, &mut found_rx, &hub).await;
                 inject.lock().unwrap().release_all();
                 if let Some(c) = clip.as_ref().and_then(|c| c.client_ctx()) {
                     *c.link.lock().unwrap() = None;
@@ -336,13 +337,14 @@ fn remember_addr(paths: &Paths, key: &str, addr: SocketAddr) {
 #[allow(clippy::too_many_arguments)]
 async fn session(
     cfg: &Config,
+    paths: &Paths,
     s: Secured,
     inject: &Arc<Mutex<InjectState>>,
     screen: &mut Screen,
     clip: Option<&Arc<ClipNet>>,
     net: &mut watch::Receiver<NetState>,
     found: &mut mpsc::UnboundedReceiver<(Beacon, SocketAddr)>,
-    hub: &Hub,
+    hub: &Arc<Hub>,
 ) {
     let (addr, local) = (s.peer_addr, s.local_addr);
     let mut link = Link::spawn(
@@ -376,13 +378,26 @@ async fn session(
         }
         c.on_link_up(&link.tx);
     }
+    let mut audio_cfg = cfg.audio.clone();
+    let mut audio = LinkAudio::new(&hello.name, addr.ip(), hub.clone(), paths.cache_dir.clone());
+    audio.apply(&audio_cfg, &link.tx, false);
+    let mut reload = hub.reload.subscribe();
 
     let mut screen_tick = tokio::time::interval(Duration::from_secs(3));
     screen_tick.tick().await;
     loop {
         tokio::select! {
+            r = reload.changed() => {
+                if r.is_ok() && let Ok(fresh) = Config::load(paths) {
+                    audio_cfg = fresh.audio;
+                    audio.apply(&audio_cfg, &link.tx, true);
+                }
+            }
             msg = link.rx.recv() => {
                 let Some(msg) = msg else { break };
+                if audio.handle(&msg, &audio_cfg, &link.tx) {
+                    continue;
+                }
                 match msg {
                     Msg::Clip(c) => {
                         if let Some(clip) = clip {

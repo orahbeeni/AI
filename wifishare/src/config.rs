@@ -60,7 +60,27 @@ pub struct Config {
     pub server: ServerCfg,
     pub client: ClientCfg,
     pub clipboard: ClipboardCfg,
+    pub audio: AudioCfg,
     pub gui: GuiCfg,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AudioCfg {
+    /// Play this computer's sound on the computer it is connected to.
+    pub send: bool,
+    /// While sending, keep playing the sound here as well.
+    pub play_here: bool,
+    /// Play sound that the other computer sends.
+    pub receive: bool,
+    /// Buffering on the receiving side; more survives worse Wi-Fi, less is snappier.
+    pub buffer_ms: u32,
+}
+
+impl Default for AudioCfg {
+    fn default() -> Self {
+        AudioCfg { send: false, play_here: false, receive: true, buffer_ms: 40 }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,6 +177,7 @@ impl Default for Config {
             server: ServerCfg::default(),
             client: ClientCfg::default(),
             clipboard: ClipboardCfg::default(),
+            audio: AudioCfg::default(),
             gui: GuiCfg::default(),
         }
     }
@@ -350,6 +371,12 @@ pub const SAMPLE_CONFIG: &str = r#"# wifishare settings. Every key is optional.
 # max_files_mb = 2048      # larger file copies are not sent
 # max_text_mb = 32
 # max_image_mb = 128
+
+[audio]
+# send = false             # play this computer's sound on the other computer (Linux so far)
+# play_here = false        # while sending, keep playing it here too
+# receive = true           # play sound the other computer sends
+# buffer_ms = 40           # receiving buffer: more rides out bad Wi-Fi, less is snappier
 
 [gui]
 # start_sharing = true     # start sharing when the window opens

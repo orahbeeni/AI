@@ -10,7 +10,7 @@ use crate::config::{Config, Mode, Paths, Peers, Role};
 use crate::engine::Engine;
 use crate::geom::{Rect, Screen, Side};
 use crate::proto::Os;
-use crate::status::{Approval, ClientInfo, ClipEvent, Discovered, Hub, LinkState, PairPrompt, Rtt};
+use crate::status::{Approval, AudioLink, ClientInfo, ClipEvent, Discovered, Hub, LinkState, PairPrompt, Rtt};
 
 fn paths(name: &str) -> Paths {
     let dir = std::env::temp_dir().join(format!("wifishare-gui-{name}-{}", std::process::id()));
@@ -74,11 +74,18 @@ fn screenshots() {
             rtt,
         }];
         s.active = Some("omar-ThinkPad-P50".into());
+        s.audio = vec![AudioLink {
+            peer: "omar-ThinkPad-P50".into(),
+            sending: false,
+            since: Instant::now() - Duration::from_secs(300),
+            packets: Arc::new(9990.into()),
+            lost: Arc::new(10.into()),
+        }];
         s.clipboard = Some(ClipEvent { text: "Received 2 files (2.9 MB)".into(), at: Instant::now() - Duration::from_secs(12) });
     });
     let done = hub.transfer("Sending \"Screenshots\"".into(), 40 << 20);
     done.add(13 << 20);
-    render("server", p.clone(), hub.clone(), [880.0, 760.0], false);
+    render("server", p.clone(), hub.clone(), [880.0, 900.0], false);
     render("server-dark", p.clone(), hub.clone(), [880.0, 760.0], true);
     let _answer = hub.ask_pair(PairPrompt {
         id: 0,
@@ -94,7 +101,9 @@ fn screenshots() {
 
     // The ThinkPad looking for its Mac after it left Wi-Fi range.
     let p = paths("client");
-    Config { mode: Some(Mode::Client), name: "omar-ThinkPad-P50".into(), ..Config::default() }.save(&p).unwrap();
+    let mut cfg = Config { mode: Some(Mode::Client), name: "omar-ThinkPad-P50".into(), ..Config::default() };
+    cfg.audio.send = true;
+    cfg.save(&p).unwrap();
     pin(&p, "Omars-MacBook-Pro", Role::Server, 3);
     let hub = Hub::new(Approval::Gui);
     hub.update(|s| {
@@ -121,9 +130,16 @@ fn screenshots() {
             addr: SocketAddr::from(([192, 168, 1, 25], 24900)),
             since: Instant::now() - Duration::from_secs(3600 * 2 + 600),
             rtt,
-        }
+        };
+        s.audio = vec![AudioLink {
+            peer: "Omars-MacBook-Pro".into(),
+            sending: true,
+            since: Instant::now() - Duration::from_secs(1500),
+            packets: Arc::default(),
+            lost: Arc::default(),
+        }];
     });
-    render("client-connected", p, hub, [880.0, 700.0], true);
+    render("client-connected", p, hub, [880.0, 820.0], true);
 
     // First run: nothing chosen yet.
     let p = paths("fresh");

@@ -1,7 +1,8 @@
 # wifishare
 
 Use one keyboard and mouse across computers on the same network, Deskflow/Synergy style, with
-the clipboard (text, rich text, images and files) shared both ways. It is built to survive
+the clipboard (text, rich text, images and files) shared both ways, and optionally one
+computer's sound played on the other. It is built to survive
 flaky Wi-Fi: take the server out of range, put it to sleep, or let it come back with a
 different IP, and the client reconnects on its own within a second of the server reappearing.
 
@@ -15,6 +16,8 @@ command line for scripting and headless machines.
 | Client (is controlled) | yes | yes | yes, via uinput |
 | Server (shares its keyboard/mouse) | yes | yes | not yet (clipboard-only) |
 | Clipboard sync | yes | yes | yes (X11/XWayland) |
+| Send its sound to the other | not yet | not yet | yes (PipeWire/PulseAudio) |
+| Play the other's sound | yes | yes | yes |
 
 Tested here: the Linux client (uinput injection, GNOME Wayland) plus every networking and
 clipboard path end to end. The macOS and Windows backends compile but have not run on real
@@ -104,6 +107,21 @@ pasting in Finder/Nautilus/Explorer copies them from there. Only the last three 
 are kept. A copy made while the machines were apart is re-sent when they reconnect, if it is
 newer than what the other side has.
 
+## Sound
+
+On Ubuntu, tick **Play this computer's sound on …** in the window's Sound card (or set
+`audio.send = true`). Everything Ubuntu plays then comes out of the Mac's speakers or
+headphones, typically 50–100 ms later. That is fine for music, videos and calls, though lip-sync
+may drift slightly.
+
+- While sending, Ubuntu's own output is switched to a virtual "wifishare" device, so its
+  speakers go quiet. Tick *Keep playing it here too* to hear it on both machines.
+- When sending stops, or the Mac leaves the network, Ubuntu's previous output comes back. A
+  small watchdog process restores it even if wifishare crashes.
+- The sound is uncompressed 48 kHz stereo (about 1.5 Mbit/s, nothing silent is sent) over UDP,
+  encrypted with a key agreed over the paired link. The Mac buffers `audio.buffer_ms` (40 ms by
+  default) to ride out Wi-Fi hiccups; raise it if the sound crackles on a busy network.
+
 ## Keyboard
 
 Keys are sent as physical key positions, so the receiving machine's keyboard layout decides
@@ -142,6 +160,8 @@ several instances on one machine.
 - macOS ignores event taps while a password field has Secure Input on. Typing a password on the
   Mac itself is unaffected, but keys do not reach the client during that time.
 - Media keys (volume, play) on the Mac keyboard still act on the Mac.
+- Sound goes from Linux to the others only. Sending a Mac's or a Windows PC's sound is not
+  built yet, and neither is microphone sharing.
 - The tray icon exists on Linux only. On macOS and Windows, closing the window quits; leave it
   open or minimized while sharing.
 

@@ -4,6 +4,7 @@
 // exercised by tests there; the macOS and Windows builds use all of it.
 #![cfg_attr(target_os = "linux", allow(dead_code))]
 
+mod audio;
 mod autostart;
 mod client;
 mod clipboard;

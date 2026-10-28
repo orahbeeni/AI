@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::geom::Screen;
 
 /// Bump when messages change incompatibly; peers with a different version refuse each other.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Os {
@@ -80,6 +80,13 @@ pub enum Msg {
     Key { code: u16, down: bool, repeat: bool },
 
     Clip(ClipMsg),
+
+    /// "I would like to play my sound on your machine": key and session for the UDP stream.
+    AudioOffer { session: u32, key: [u8; 32] },
+    /// Send the sound to this UDP port on my address.
+    AudioAccept { session: u32, port: u16 },
+    AudioRefuse { session: u32, reason: String },
+    AudioStop { session: u32 },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

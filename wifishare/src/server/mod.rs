@@ -11,6 +11,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
 use self::core::{ClientSettings, ServerCore};
+use crate::audio::LinkAudio;
 use crate::clipboard;
 use crate::clipnet::{self, ClipNet};
 use crate::config::{Config, Identity, Paths, Peers, Role};
@@ -164,8 +165,11 @@ async fn watch_local_screen(core: Arc<Mutex<ServerCore>>, hub: Arc<Hub>) {
 
 /// Re-reads the config when asked and applies layout changes to connected clients.
 async fn apply_reloads(sh: Arc<Shared>) {
+    let mut reload = sh.hub.reload.subscribe();
     loop {
-        sh.hub.reload.notified().await;
+        if reload.changed().await.is_err() {
+            return;
+        }
         let fresh = match Config::load(&sh.paths) {
             Ok(c) => c,
             Err(e) => {
@@ -284,7 +288,27 @@ async fn control(sh: Arc<Shared>, s: Secured, paired_name: String) {
     if let Some(clip) = &sh.clip {
         clip.on_link_up(&link.tx);
     }
-    while let Some(msg) = link.rx.recv().await {
+    let mut audio_cfg = sh.cfg.lock().unwrap().audio.clone();
+    let mut audio = LinkAudio::new(&name, addr.ip(), sh.hub.clone(), sh.paths.cache_dir.clone());
+    audio.apply(&audio_cfg, &link.tx, false);
+    let mut reload = sh.hub.reload.subscribe();
+    loop {
+        let msg = tokio::select! {
+            m = link.rx.recv() => match m {
+                Some(m) => m,
+                None => break,
+            },
+            r = reload.changed() => {
+                if r.is_ok() && let Ok(fresh) = Config::load(&sh.paths) {
+                    audio_cfg = fresh.audio;
+                    audio.apply(&audio_cfg, &link.tx, true);
+                }
+                continue;
+            }
+        };
+        if audio.handle(&msg, &audio_cfg, &link.tx) {
+            continue;
+        }
         match msg {
             Msg::Screen(s) => {
                 log::info!("{name}: desktop changed: {}", describe_screen(&s));

@@ -248,10 +248,12 @@ impl App {
             Some(Mode::Server) => {
                 self.server_overview(ui, st);
                 self.clipboard_card(ui, st);
+                self.sound_card(ui, st);
             }
             Some(Mode::Client) => {
                 self.client_overview(ui, st);
                 self.clipboard_card(ui, st);
+                self.sound_card(ui, st);
             }
         }
     }
@@ -490,6 +492,49 @@ impl App {
         });
     }
 
+    fn sound_card(&mut self, ui: &mut Ui, st: &Status) {
+        let peer = match self.mode() {
+            Some(Mode::Client) => self.peers.iter().rev().find(|p| p.role == Role::Server).map(|p| p.name.clone()),
+            _ => None,
+        }
+        .unwrap_or_else(|| "the other computer".into());
+        let mut cfg = self.saved.clone();
+        let mut changed = false;
+        card(ui, "Sound", |ui| {
+            if crate::audio::can_send() {
+                changed |= ui.checkbox(&mut cfg.audio.send, format!("Play this computer's sound on {peer}")).changed();
+                if cfg.audio.send {
+                    ui.indent("play_here", |ui| {
+                        changed |= ui.checkbox(&mut cfg.audio.play_here, "Keep playing it here too").changed();
+                    });
+                }
+            }
+            changed |= ui.checkbox(&mut cfg.audio.receive, "Play sound that other computers send here").changed();
+            for a in &st.audio {
+                ui.horizontal(|ui| {
+                    dot(ui, GREEN);
+                    let what = if a.sending { format!("Sending this computer's sound to {}", a.peer) } else { format!("Playing sound from {}", a.peer) };
+                    ui.label(what);
+                    let mut detail = format!("for {}", span(a.since.elapsed()));
+                    let (packets, lost) = (a.packets.load(Ordering::Relaxed), a.lost.load(Ordering::Relaxed));
+                    if !a.sending && lost > 0 {
+                        detail.push_str(&format!("  ·  {:.1}% lost", 100.0 * lost as f64 / (packets + lost).max(1) as f64));
+                    }
+                    ui.label(RichText::new(detail).weak());
+                });
+            }
+            if cfg.audio.send && !st.audio.iter().any(|a| a.sending) {
+                ui.label(RichText::new(if st.running { format!("Starts when {peer} is connected.") } else { "Starts when sharing is running.".into() }).weak());
+            }
+        });
+        if changed {
+            self.draft.audio = cfg.audio.clone();
+            if self.persist(cfg) {
+                self.engine().reload();
+            }
+        }
+    }
+
     fn settings(&mut self, ui: &mut Ui) {
         let d = &mut self.draft;
         section(ui, "This computer", |ui| {
@@ -548,6 +593,14 @@ impl App {
                 ui.end_row();
                 ui.label("Images up to");
                 ui.add(egui::DragValue::new(&mut d.clipboard.max_image_mb).range(1..=4096).suffix(" MB"));
+                ui.end_row();
+            });
+        });
+        section(ui, "Sound", |ui| {
+            egui::Grid::new("sound").num_columns(2).spacing(vec2(16.0, 8.0)).show(ui, |ui| {
+                ui.label("Buffer when playing sound from another computer");
+                ui.add(egui::DragValue::new(&mut d.audio.buffer_ms).range(10..=500).suffix(" ms"))
+                    .on_hover_text("More rides out bad Wi-Fi; less keeps the sound closer to the picture");
                 ui.end_row();
             });
         });

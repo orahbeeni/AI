@@ -11,8 +11,8 @@ bad()  { echo "  FAIL $1"; fail=$((fail+1)); }
 wait_until() { local t=$1; shift; for _ in $(seq $((t*10))); do "$@" && return 0; sleep 0.1; done; return 1; }
 log_has() { grep -q -- "$2" "$1"; }
 
-start_server() { WIFISHARE_FAKE_CLIPBOARD=$T/SC $BIN --config-dir $T/S server --no-input >>$T/server.log 2>&1 & SPID=$!; }
-start_client() { WIFISHARE_FAKE_CLIPBOARD=$T/CC $BIN --config-dir $T/C client >>$T/client.log 2>&1 & CPID=$!; }
+start_server() { WIFISHARE_FAKE_AUDIO=$T/SA WIFISHARE_FAKE_CLIPBOARD=$T/SC $BIN --config-dir $T/S server --no-input >>$T/server.log 2>&1 & SPID=$!; }
+start_client() { WIFISHARE_FAKE_AUDIO=$T/CA WIFISHARE_FAKE_CLIPBOARD=$T/CC $BIN --config-dir $T/C client >>$T/client.log 2>&1 & CPID=$!; }
 connected_count() { grep -c "connected to test-S" $T/client.log; }
 more_connections() { [ "$(connected_count)" -gt "$before" ]; }
 
@@ -20,6 +20,22 @@ more_connections() { [ "$(connected_count)" -gt "$before" ]; }
 start_server; sleep 0.5; start_client
 echo "1. connect"
 wait_until 5 log_has $T/client.log "connected to test-S" && ok "client connected" || bad "client connected"
+
+echo "1b. sound, client -> server (a 440 Hz test tone)"
+sound_ok() {
+  python3 -I - "$T/SA/received.raw" <<'PY'
+import struct, sys
+data = open(sys.argv[1], "rb").read()
+left = struct.unpack("<%dh" % (len(data) // 2), data[: len(data) // 2 * 2])[::2]
+last = left[-48000:]                       # the most recent second
+loud = sum(1 for v in last if abs(v) > 1000)
+crossings = sum(1 for a, b in zip(last, last[1:]) if (a < 0) != (b < 0))
+print(f"     {len(left) / 48000:.1f} s played, {crossings / 2:.0f} Hz, {loud / len(last):.0%} non-silent")
+sys.exit(0 if len(left) >= 72000 and 430 <= crossings / 2 <= 450 and loud > 0.5 * len(last) else 1)
+PY
+}
+sleep 2.5
+sound_ok && ok "tone arrived and plays in real time" || bad "sound"
 
 echo "2. text, server -> client"
 rm -f $T/CC/text; echo -n "hello from the server" >$T/SC/text

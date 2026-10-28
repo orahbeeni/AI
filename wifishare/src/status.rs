@@ -73,6 +73,17 @@ pub struct Discovered {
     pub seen: Instant,
 }
 
+/// A sound stream to or from the peer.
+#[derive(Clone, Debug)]
+pub struct AudioLink {
+    pub peer: String,
+    /// True: this machine's sound goes to `peer`; false: `peer`'s sound plays here.
+    pub sending: bool,
+    pub since: Instant,
+    pub packets: Arc<AtomicU64>,
+    pub lost: Arc<AtomicU64>,
+}
+
 #[derive(Clone, Debug)]
 pub struct ClipEvent {
     pub text: String,
@@ -103,6 +114,7 @@ pub struct Status {
     pub discovered: Vec<Discovered>,
     pub clipboard: Option<ClipEvent>,
     pub transfers: Vec<Transfer>,
+    pub audio: Vec<AudioLink>,
     /// A one-off message for the user (pairing finished, ...).
     pub notice: Option<(String, Instant)>,
 }
@@ -122,8 +134,9 @@ pub struct PairPrompt {
 type Listener = Arc<dyn Fn() + Send + Sync>;
 
 pub struct Hub {
-    /// Signalled when the config file changed in ways a running engine can apply live.
-    pub reload: tokio::sync::Notify,
+    /// Bumped when the config file changed in ways a running engine applies live
+    /// (`subscribe()` and wait for `changed()`).
+    pub reload: tokio::sync::watch::Sender<u64>,
     state: Mutex<Status>,
     listener: Mutex<Option<Listener>>,
     pub approval: Approval,
@@ -133,7 +146,7 @@ pub struct Hub {
 
 impl Hub {
     pub fn new(approval: Approval) -> Arc<Hub> {
-        Arc::new(Hub { reload: tokio::sync::Notify::new(), state: Mutex::default(), listener: Mutex::new(None), approval, prompts: Mutex::default(), next_prompt: AtomicU64::new(1) })
+        Arc::new(Hub { reload: tokio::sync::watch::Sender::new(0), state: Mutex::default(), listener: Mutex::new(None), approval, prompts: Mutex::default(), next_prompt: AtomicU64::new(1) })
     }
 
     /// Called after every change (the GUI uses it to repaint).
