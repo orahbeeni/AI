@@ -37,6 +37,17 @@ pub enum Nav {
     Right,
 }
 
+impl<L: Clone + PartialEq + std::fmt::Display> Node<L> {
+    /// The tree as text, e.g. `(1|(2/3))` (`|` side by side, `/` stacked), for tests.
+    #[cfg(test)]
+    pub fn shape(&self) -> String {
+        match self {
+            Node::Leaf(l) => l.to_string(),
+            Node::Split { dir, a, b, .. } => format!("({}{}{})", a.shape(), if *dir == Dir::Row { '|' } else { '/' }, b.shape()),
+        }
+    }
+}
+
 impl<L: Clone + PartialEq> Node<L> {
     pub fn leaves(&self) -> Vec<L> {
         let mut v = Vec::new();
@@ -71,6 +82,34 @@ impl<L: Clone + PartialEq> Node<L> {
             }
             Node::Leaf(_) => false,
             Node::Split { a, b, .. } => a.split(target, dir, new.clone()) || b.split(target, dir, new),
+        }
+    }
+
+    /// Replace leaf `target` with a split holding it and `new`, with `new` first when `before` is set.
+    pub fn insert_beside(&mut self, target: &L, dir: Dir, before: bool, new: L) -> bool {
+        match self {
+            Node::Leaf(l) if l == target => {
+                let old = Node::Leaf(l.clone());
+                let new = Node::Leaf(new);
+                let (a, b) = if before { (new, old) } else { (old, new) };
+                *self = Node::Split { dir, ratio: 0.5, a: Box::new(a), b: Box::new(b) };
+                true
+            }
+            Node::Leaf(_) => false,
+            Node::Split { a, b, .. } => a.insert_beside(target, dir, before, new.clone()) || b.insert_beside(target, dir, before, new),
+        }
+    }
+
+    /// Exchange the places of two leaves.
+    pub fn swap_leaves(&mut self, x: &L, y: &L) {
+        match self {
+            Node::Leaf(l) if l == x => *l = y.clone(),
+            Node::Leaf(l) if l == y => *l = x.clone(),
+            Node::Leaf(_) => {}
+            Node::Split { a, b, .. } => {
+                a.swap_leaves(x, y);
+                b.swap_leaves(x, y);
+            }
         }
     }
 
@@ -169,6 +208,41 @@ impl<L: Clone + PartialEq> Node<L> {
             Node::Split { dir, a, b, .. } if *dir == d => a.count_along(d) + b.count_along(d),
             _ => 1,
         }
+    }
+}
+
+/// Where on a terminal a dragged terminal is dropped.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Zone {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    /// The middle: the two terminals swap places.
+    Center,
+}
+
+/// The zone of `rect` that point `p` is in: the middle swaps, and near an edge the dropped
+/// terminal goes beside it on that side.
+pub fn drop_zone(rect: Rect, p: Pos2) -> Zone {
+    let fx = ((p.x - rect.min.x) / rect.width().max(1.0)).clamp(0.0, 1.0);
+    let fy = ((p.y - rect.min.y) / rect.height().max(1.0)).clamp(0.0, 1.0);
+    if (0.3..0.7).contains(&fx) && (0.3..0.7).contains(&fy) {
+        return Zone::Center;
+    }
+    let edges = [(fx, Zone::Left), (1.0 - fx, Zone::Right), (fy, Zone::Top), (1.0 - fy, Zone::Bottom)];
+    edges.into_iter().min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, z)| z).unwrap_or(Zone::Center)
+}
+
+/// The part of `rect` a drop in `zone` would occupy, for drawing the preview.
+pub fn zone_rect(rect: Rect, zone: Zone) -> Rect {
+    let c = rect.center();
+    match zone {
+        Zone::Left => Rect::from_min_max(rect.min, pos2(c.x, rect.max.y)),
+        Zone::Right => Rect::from_min_max(pos2(c.x, rect.min.y), rect.max),
+        Zone::Top => Rect::from_min_max(rect.min, pos2(rect.max.x, c.y)),
+        Zone::Bottom => Rect::from_min_max(pos2(rect.min.x, c.y), rect.max),
+        Zone::Center => rect.shrink2(rect.size() * 0.15),
     }
 }
 

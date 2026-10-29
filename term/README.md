@@ -116,6 +116,9 @@ links. Programs' own hyperlinks (OSC 8, e.g. `ls --hyperlink`) work too.
 
 - **Go to…** (`Ctrl+Shift+K`, `⌘⇧K`) is a fuzzy picker over every terminal, your saved layouts and the
   current terminal's saved commands.
+- **Rearrange the terminals of a tab** by dragging a terminal's title bar over another terminal of the
+  same tab: a highlight shows where it will land. Drop near an edge to put it beside that terminal on
+  that side (left, right, above or below), or in the middle to swap the two.
 - **Move a terminal to another tab** by dragging its title bar onto the tab (or onto +), or with
   right-click → *Move to tab*.
 - A new split or tab opens in the folder of the terminal you split.

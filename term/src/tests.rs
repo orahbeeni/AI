@@ -5,7 +5,7 @@ use eframe::egui::{Key, Modifiers, Rect, pos2};
 
 use crate::config::{Combo, Rgb, Settings, Theme};
 use crate::input::{MouseAction, key_bytes, mouse_report, paste_bytes};
-use crate::layout::{Dir, Nav, Node, neighbour};
+use crate::layout::{Dir, Nav, Node, Zone, drop_zone, neighbour, zone_rect};
 use crate::pane::SavedCommand;
 use crate::session::{LayoutFile, PaneSpec, TabSpec};
 
@@ -317,6 +317,7 @@ fn visual() {
         ),
         ("layout", &["layout:LAYOUT", "new_tab", "next_tab"]),
         ("about", &["about"]),
+        ("drop_preview", &["split_vertical", "split_horizontal", "run:echo dragging", "preview_drop:0:right"]),
         ("short_menu", &["main_menu_preview"]),
         ("workflow", &["prefs_page:Workflow"]),
         ("goto", &["run:cd /etc", "split_vertical", "new_tab", "alert", "goto"]),
@@ -957,4 +958,87 @@ fn shell_keys_stay_with_the_shell() {
     // Settings saved before this existed pick up the default.
     let old: Settings = serde_json::from_str(r#"{"ctrl_without_shift": true}"#).unwrap();
     assert!(old.is_shell_key(Key::R));
+}
+
+#[test]
+fn rearranging_a_split_tree() {
+    // 1 | (2 over 3)
+    let mut n = three_panes();
+    assert_eq!(n.shape(), "(1|(2/3))");
+
+    // Beside a terminal, on a chosen side.
+    let mut a = n.clone();
+    assert!(a.insert_beside(&1, Dir::Col, true, 9));
+    assert_eq!(a.shape(), "((9/1)|(2/3))");
+    let mut b = n.clone();
+    assert!(b.insert_beside(&3, Dir::Row, false, 9));
+    assert_eq!(b.shape(), "(1|(2/(3|9)))");
+    assert!(!b.insert_beside(&42, Dir::Row, false, 8), "an unknown target changes nothing");
+
+    // Moving 3 to the left of 1: take it out, then put it beside.
+    assert!(n.remove(&3));
+    assert!(n.insert_beside(&1, Dir::Row, true, 3));
+    assert_eq!(n.shape(), "((3|1)|2)");
+
+    // Swapping.
+    n.swap_leaves(&3, &2);
+    assert_eq!(n.shape(), "((2|1)|3)");
+}
+
+#[test]
+fn drop_zones() {
+    let r = Rect::from_min_max(pos2(100.0, 100.0), pos2(500.0, 300.0));
+    assert_eq!(drop_zone(r, pos2(300.0, 200.0)), Zone::Center);
+    assert_eq!(drop_zone(r, pos2(110.0, 200.0)), Zone::Left);
+    assert_eq!(drop_zone(r, pos2(490.0, 200.0)), Zone::Right);
+    assert_eq!(drop_zone(r, pos2(300.0, 105.0)), Zone::Top);
+    assert_eq!(drop_zone(r, pos2(300.0, 295.0)), Zone::Bottom);
+    // The preview covers the half the terminal would take.
+    assert_eq!(zone_rect(r, Zone::Left), Rect::from_min_max(pos2(100.0, 100.0), pos2(300.0, 300.0)));
+    assert_eq!(zone_rect(r, Zone::Bottom), Rect::from_min_max(pos2(100.0, 200.0), pos2(500.0, 300.0)));
+}
+
+/// Dropping a terminal elsewhere in the same tab.
+#[test]
+#[ignore]
+fn drag_and_drop_terminals_in_a_tab() {
+    let _guard = CONFIG_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let cfg = std::env::temp_dir().join(format!("term-drop-{}", std::process::id()));
+    // SAFETY: tests touching TERM_CONFIG_DIR hold CONFIG_DIR_LOCK.
+    unsafe { std::env::set_var("TERM_CONFIG_DIR", &cfg) };
+    let mut h = egui_kittest::Harness::builder()
+        .with_size([1100.0, 640.0])
+        .build_eframe(|cc| crate::app::App::new(cc, crate::Args { layout: None, run: false, fresh: true, dir: Some("/tmp".into()) }));
+    h.run_steps(2);
+    for step in ["split_vertical", "split_horizontal"] {
+        h.state_mut().script_step(step);
+        h.run_steps(2);
+    }
+    let ids = h.state().tab_leaves();
+    let (a, b, c) = (ids[0], ids[1], ids[2]);
+    assert_eq!(h.state().tab_shape(), format!("({a}|({b}/{c}))"));
+
+    // The last terminal onto the left edge of the first.
+    h.state_mut().script_step("drop_pane:2:0:left");
+    h.run_steps(2);
+    assert_eq!(h.state().tab_shape(), format!("(({c}|{a})|{b})"));
+
+    // The first onto the middle of the last: they swap.
+    h.state_mut().script_step("drop_pane:0:2:center");
+    h.run_steps(2);
+    assert_eq!(h.state().tab_shape(), format!("(({b}|{a})|{c})"));
+
+    // Below another one.
+    h.state_mut().script_step("drop_pane:2:0:bottom");
+    h.run_steps(2);
+    assert_eq!(h.state().tab_shape(), format!("(({b}/{c})|{a})"));
+    assert_eq!(h.state().tab_leaves().len(), 3, "nothing was lost");
+
+    // Dropping a terminal on itself does nothing.
+    h.state_mut().script_step("drop_pane:1:1:left");
+    h.run_steps(2);
+    assert_eq!(h.state().tab_shape(), format!("(({b}/{c})|{a})"));
+
+    unsafe { std::env::remove_var("TERM_CONFIG_DIR") };
+    let _ = std::fs::remove_dir_all(&cfg);
 }

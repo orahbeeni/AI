@@ -15,7 +15,7 @@ use eframe::egui::{self, Align, Color32, CursorIcon, Key, Layout, Modifiers, Rec
 use crate::Args;
 use crate::config::{Combo, QuitConfirm, Rgb, Settings, TabTitle, Theme};
 use crate::input;
-use crate::layout::{self, Dir, Nav, Node};
+use crate::layout::{self, Dir, Nav, Node, Zone};
 use crate::links::{self, Target};
 use crate::notify;
 use crate::pane::{Pane, PaneEvent, SavedCommand, SavedSearch, TermSize, all_text};
@@ -79,6 +79,8 @@ pub enum Act {
     Open(u64, Target),
     /// Move a terminal to the tab with this index, or to a new tab.
     MovePane(u64, Option<usize>),
+    /// Drop terminal `.0` onto terminal `.1` of the same tab, in the given zone.
+    DropPane(u64, u64, Zone),
     ToggleRecord(u64),
     Reconnect(u64),
     CancelReconnect(u64),
@@ -127,6 +129,9 @@ pub struct App {
     preview_menu: bool,
     #[cfg(any(test, debug_assertions))]
     preview_main_menu: bool,
+    /// Self-tests: draw the drop preview as if a terminal were being dragged over (target, zone).
+    #[cfg(any(test, debug_assertions))]
+    preview_drop: Option<(u64, Zone)>,
 }
 
 /// Debug builds only: `TERM_SELFTEST=out.ppm` runs `TERM_SELFTEST_ACTIONS` (comma separated, an
@@ -178,6 +183,8 @@ impl App {
             preview_menu: false,
             #[cfg(any(test, debug_assertions))]
             preview_main_menu: false,
+            #[cfg(any(test, debug_assertions))]
+            preview_drop: None,
             #[cfg(debug_assertions)]
             selftest: std::env::var("TERM_SELFTEST").ok().map(|out| SelfTest {
                 out,
@@ -928,6 +935,7 @@ impl App {
                 Act::EditSearches(id) => self.dlg.open_searches(id),
                 Act::Open(id, target) => self.open_link(id, target),
                 Act::MovePane(id, to) => self.move_pane(id, to),
+                Act::DropPane(id, target, zone) => self.drop_pane(id, target, zone),
                 Act::ToggleRecord(id) => {
                     let dir = record::record_dir(&self.s);
                     if let Some(p) = self.panes.get_mut(&id) {
@@ -1077,6 +1085,37 @@ impl App {
                 }
             }
         }
+    }
+
+    /// The terminal under `pos` (other than `dragged`) and which part of it, for a terminal being dragged.
+    fn pane_drop_target(&self, pos: egui::Pos2, dragged: u64) -> Option<(u64, Zone)> {
+        let (id, rect) = self.rects.iter().find(|(id, r)| *id != dragged && r.contains(pos))?;
+        Some((*id, layout::drop_zone(*rect, pos)))
+    }
+
+    /// Rearrange the active tab: put terminal `id` beside `target` on the side of `zone`, or swap them.
+    fn drop_pane(&mut self, id: u64, target: u64, zone: Zone) {
+        let Some(tab) = self.tabs.get_mut(self.active) else { return };
+        if id == target || !tab.root.contains(&id) || !tab.root.contains(&target) {
+            return;
+        }
+        tab.zoomed = None;
+        match zone {
+            Zone::Center => tab.root.swap_leaves(&id, &target),
+            side => {
+                let (dir, before) = match side {
+                    Zone::Left => (Dir::Row, true),
+                    Zone::Right => (Dir::Row, false),
+                    Zone::Top => (Dir::Col, true),
+                    _ => (Dir::Col, false),
+                };
+                if !tab.root.remove(&id) {
+                    return;
+                }
+                tab.root.insert_beside(&target, dir, before, id);
+            }
+        }
+        tab.focused = id;
     }
 
     /// Move a terminal into another tab (`Some(index)`) or a tab of its own (`None`).
@@ -1970,6 +2009,33 @@ impl App {
             self.draw_pane(ui, *id, *r, *id == focused, multi);
         }
         self.rects = rects;
+        self.draw_drop_preview(ui);
+    }
+
+    /// While a terminal is dragged by its title bar: show where it would land.
+    fn draw_drop_preview(&self, ui: &egui::Ui) {
+        #[cfg(any(test, debug_assertions))]
+        let forced = self.preview_drop;
+        #[cfg(not(any(test, debug_assertions)))]
+        let forced: Option<(u64, Zone)> = None;
+        let target_zone = match forced {
+            Some(tz) => Some(tz),
+            None => {
+                let Some(dragged) = self.drag_pane else { return };
+                let Some(pos) = ui.ctx().pointer_latest_pos() else { return };
+                self.pane_drop_target(pos, dragged)
+            }
+        };
+        let Some((target, zone)) = target_zone else { return };
+        let Some((_, rect)) = self.rects.iter().find(|(id, _)| *id == target) else { return };
+        let accent = self.s.theme.accent.color();
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("pane_drop_preview")));
+        let area = layout::zone_rect(*rect, zone);
+        painter.rect_filled(area, 6.0, accent.gamma_multiply(0.32));
+        painter.rect_stroke(area, 6.0, Stroke::new(2.0, accent), egui::StrokeKind::Inside);
+        if zone == Zone::Center {
+            painter.text(area.center(), egui::Align2::CENTER_CENTER, "⇄ swap", egui::FontId::proportional(16.0), Color32::WHITE);
+        }
     }
 
     fn draw_pane(&mut self, ui: &mut egui::Ui, id: u64, r: Rect, focused: bool, multi: bool) {
@@ -2102,7 +2168,9 @@ impl App {
         if resp.drag_stopped() {
             self.drag_pane = None;
             if let Some(pos) = ui.ctx().pointer_latest_pos() {
-                if let Some(i) = self.tab_rects.iter().position(|r| r.contains(pos)) {
+                if let Some((target, zone)) = self.pane_drop_target(pos, id) {
+                    self.acts.push(Act::DropPane(id, target, zone));
+                } else if let Some(i) = self.tab_rects.iter().position(|r| r.contains(pos)) {
                     self.acts.push(Act::MovePane(id, Some(i)));
                 } else if self.new_tab_rect.is_some_and(|r| r.contains(pos)) {
                     self.acts.push(Act::MovePane(id, None));
@@ -2461,6 +2529,17 @@ impl App {
         p.map(|p| p.commands.iter().map(|c| (c.command.clone(), c.auto_run)).collect()).unwrap_or_default()
     }
 
+    #[cfg(test)]
+    pub(crate) fn tab_leaves(&self) -> Vec<u64> {
+        self.tabs.get(self.active).map(|t| t.root.leaves()).unwrap_or_default()
+    }
+
+    /// The active tab's split tree as text, e.g. `(1|(2/3))`.
+    #[cfg(test)]
+    pub(crate) fn tab_shape(&self) -> String {
+        self.tabs.get(self.active).map(|t| t.root.shape()).unwrap_or_default()
+    }
+
     /// How many terminals each tab holds.
     #[cfg(test)]
     pub(crate) fn tab_sizes(&self) -> Vec<usize> {
@@ -2524,6 +2603,34 @@ impl App {
             if let Some(id) = self.focused() {
                 let (title, body) = text.split_once('|').unwrap_or((text, ""));
                 self.toast(id, title, body.to_string());
+            }
+        } else if let Some(args) = step.strip_prefix("preview_drop:") {
+            // preview_drop:<to>:<zone>
+            let parts: Vec<&str> = args.split(':').collect();
+            let leaves = self.tabs.get(self.active).map(|t| t.root.leaves()).unwrap_or_default();
+            let zone = match parts.get(1).copied() {
+                Some("left") => Zone::Left,
+                Some("right") => Zone::Right,
+                Some("top") => Zone::Top,
+                Some("bottom") => Zone::Bottom,
+                _ => Zone::Center,
+            };
+            self.preview_drop = parts.first().and_then(|p| p.parse::<usize>().ok()).and_then(|i| leaves.get(i).copied()).map(|id| (id, zone));
+        } else if let Some(args) = step.strip_prefix("drop_pane:") {
+            // drop_pane:<from>:<to>:<zone>, with positions in the active tab's terminal order.
+            let parts: Vec<&str> = args.split(':').collect();
+            let leaves = self.tabs.get(self.active).map(|t| t.root.leaves()).unwrap_or_default();
+            let zone = match parts.get(2).copied() {
+                Some("left") => Zone::Left,
+                Some("right") => Zone::Right,
+                Some("top") => Zone::Top,
+                Some("bottom") => Zone::Bottom,
+                _ => Zone::Center,
+            };
+            let pick = |i: usize| parts.get(i).and_then(|p| p.parse::<usize>().ok()).and_then(|i| leaves.get(i).copied());
+            if let (Some(from), Some(to)) = (pick(0), pick(1)) {
+                self.acts.push(Act::DropPane(from, to, zone));
+                self.run_acts();
             }
         } else if let Some(to) = step.strip_prefix("move_pane:") {
             if let Some(id) = self.focused() {
