@@ -703,7 +703,8 @@ fn row_full(
     if !badge.is_empty() {
         let mut x = right + 10.0;
         for &(n, up) in badge.iter().rev() {
-            let col = visuals.weak_text_color();
+            // Full-strength text: the dimmed colour is unreadable on the green current-branch row.
+            let col = if current { visuals.strong_text_color() } else { visuals.text_color() };
             // A solid block arrow as one mesh: head and stem share vertices and the same
             // (non-feathered) edges, so they cannot drift apart. Snapped to whole pixels.
             let ppp = ui.ctx().pixels_per_point();
