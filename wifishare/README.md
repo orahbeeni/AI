@@ -118,6 +118,31 @@ pasting in Finder/Nautilus/Explorer copies them from there. Only the last three 
 are kept. A copy made while the machines were apart is re-sent when they reconnect, if it is
 newer than what the other side has.
 
+## Shared folders
+
+Each computer can publish folders for the other to browse and copy from, in both directions.
+In the window, the **Files** tab shows this computer on the left and the other one on the
+right. Open a folder on the right, select files, press **Get** to copy them into the folder
+open on the left, or select files on the left and press **Send** to copy them into the folder
+on the right. Folders are copied whole.
+
+- **Choosing what to share.** Open the folder you want on the left and press *Folders I share*.
+  A folder is read-only by default; *Let the other computer add files and folders* lets it send
+  files in. The other computer can never overwrite or delete anything: a name that is taken
+  gets a number (`report (2).pdf`).
+- **Safe by construction.** Only the folders you chose are reachable. Every path is resolved
+  and checked on the computer that owns the files, so `..` and symlinks cannot lead out of a
+  shared folder, and read-only is enforced there too, not just in the window.
+- **Wi-Fi proof.** A copy that is cut off (server out of range, laptop asleep) pauses and
+  carries on by itself from the bytes already on disk when the other side is back. An
+  unfinished file is kept as `name.wifishare-part` until it is complete.
+- **From the command line.** `wifishare files share ~/Documents --name Documents [--write]`,
+  `files unshare NAME`, and on a client `files ls [SHARE/PATH]`, `files get SHARE/PATH [DEST]`,
+  `files put SHARE/DIR FILE...`.
+
+Opening a remote file and saving straight back to it is not built; copy it, edit it, send it
+back.
+
 ## Sound
 
 On Ubuntu, tick **Play this computer's sound on …** in the window's Sound card (or set
@@ -157,6 +182,7 @@ wifishare pair [SERVER]
 wifishare info            # key, paired machines, monitors, permission problems
 wifishare init            # write a commented config.toml
 wifishare forget NAME
+wifishare files share|unshare|ls|get|put ...   # shared folders (see above)
 wifishare test-inject     # move the pointer in a square to check injection
 ```
 
@@ -173,6 +199,9 @@ several instances on one machine.
 - Media keys (volume, play) on the Mac keyboard still act on the Mac.
 - Sound goes from Linux to the others only. Sending a Mac's or a Windows PC's sound is not
   built yet, and neither is microphone sharing.
+- Shared folders: the window copies files and folders but does not open them in place, and
+  dragging files between the window and the file manager is not supported (use the buttons).
+  A server cannot be browsed from a client's command line, only from the window.
 - The tray icon exists on Linux only. On macOS and Windows, closing the window quits; leave it
   open or minimized while sharing.
 
@@ -186,4 +215,6 @@ scripts/run_e2e.sh       # Linux/macOS: two local instances, file-backed clipboa
 
 The end-to-end script pairs two instances, then checks clipboard text and files both ways, a
 large clipboard over a bulk connection, a frozen server (detected, reconnected, still syncing),
-replay after a restart, and finding the server by its beacon alone.
+replay after a restart, finding the server by its beacon alone, and shared folders (browsing,
+copying both ways, read-only refusal, refusing paths outside a share, and a large copy that
+carries on after the server is stopped and started again).

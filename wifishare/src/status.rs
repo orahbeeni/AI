@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use tokio::sync::oneshot;
 
+use crate::files::Files;
 use crate::geom::{Screen, Side};
 use crate::proto::Os;
 
@@ -142,11 +143,20 @@ pub struct Hub {
     pub approval: Approval,
     prompts: Mutex<Vec<(PairPrompt, Option<oneshot::Sender<bool>>)>>,
     next_prompt: AtomicU64,
+    files: Mutex<Option<Arc<Files>>>,
 }
 
 impl Hub {
     pub fn new(approval: Approval) -> Arc<Hub> {
-        Arc::new(Hub { reload: tokio::sync::watch::Sender::new(0), state: Mutex::default(), listener: Mutex::new(None), approval, prompts: Mutex::default(), next_prompt: AtomicU64::new(1) })
+        Arc::new(Hub {
+            reload: tokio::sync::watch::Sender::new(0),
+            state: Mutex::default(),
+            listener: Mutex::new(None),
+            approval,
+            prompts: Mutex::default(),
+            next_prompt: AtomicU64::new(1),
+            files: Mutex::default(),
+        })
     }
 
     /// Called after every change (the GUI uses it to repaint).
@@ -170,7 +180,18 @@ impl Hub {
         self.state.lock().unwrap().clone()
     }
 
+    /// The shared-folder service of the running engine, if any.
+    pub fn files(&self) -> Option<Arc<Files>> {
+        self.files.lock().unwrap().clone()
+    }
+
+    pub fn set_files(&self, files: Option<Arc<Files>>) {
+        *self.files.lock().unwrap() = files;
+        self.notify();
+    }
+
     pub fn reset(&self) {
+        *self.files.lock().unwrap() = None;
         *self.state.lock().unwrap() = Status::default();
         self.prompts.lock().unwrap().clear();
         self.notify();
@@ -214,7 +235,6 @@ impl Hub {
         drop(prompts);
         self.notify();
     }
-
 }
 
 pub struct TransferGuard {

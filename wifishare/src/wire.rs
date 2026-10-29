@@ -39,6 +39,8 @@ pub enum Purpose {
     Bulk = 2,
     /// First contact between two machines that have not been paired yet.
     Pair = 3,
+    /// Requests for the other side's shared folders, and the file data answering them.
+    Files = 4,
 }
 
 impl Purpose {
@@ -47,6 +49,7 @@ impl Purpose {
             1 => Some(Purpose::Control),
             2 => Some(Purpose::Bulk),
             3 => Some(Purpose::Pair),
+            4 => Some(Purpose::Files),
             _ => None,
         }
     }
@@ -133,7 +136,7 @@ fn finish(stream: TcpStream, hs: snow::HandshakeState) -> Result<Secured> {
 fn tune(stream: &TcpStream, purpose: Purpose) {
     let _ = stream.set_nodelay(true);
     let sock = socket2::SockRef::from(stream);
-    if purpose != Purpose::Bulk {
+    if !matches!(purpose, Purpose::Bulk | Purpose::Files) {
         let _ = sock.set_tos_v4(0xB8);
     }
     let keepalive = socket2::TcpKeepalive::new().with_time(Duration::from_secs(5)).with_interval(Duration::from_secs(2));
@@ -172,7 +175,8 @@ impl FrameReader {
         loop {
             let len = self.rd.read_u16().await? as usize;
             self.rd.read_exact(&mut self.frame[..len]).await?;
-            let n = self.noise.read_message(self.nonce, &self.frame[..len], &mut self.plain).map_err(|e| anyhow::anyhow!("decrypting: {e}"))?;
+            let n =
+                self.noise.read_message(self.nonce, &self.frame[..len], &mut self.plain).map_err(|e| anyhow::anyhow!("decrypting: {e}"))?;
             self.nonce += 1;
             if n == 0 {
                 bail!("empty frame");
@@ -217,7 +221,10 @@ impl FrameWriter {
         self.plain.extend_from_slice(data);
         let start = self.out.len();
         self.out.resize(start + 2 + self.plain.len() + TAG_LEN, 0);
-        let n = self.noise.write_message(self.nonce, &self.plain, &mut self.out[start + 2..]).map_err(|e| anyhow::anyhow!("encrypting: {e}"))?;
+        let n = self
+            .noise
+            .write_message(self.nonce, &self.plain, &mut self.out[start + 2..])
+            .map_err(|e| anyhow::anyhow!("encrypting: {e}"))?;
         self.nonce += 1;
         self.out[start..start + 2].copy_from_slice(&(n as u16).to_be_bytes());
         self.out.truncate(start + 2 + n);
@@ -262,7 +269,16 @@ impl Link {
         let (dead_tx, dead_rx) = watch::channel(false);
         let dead_tx = Arc::new(dead_tx);
         let (start, rtt) = (Instant::now(), Rtt::default());
-        let reader_task = tokio::spawn(read_loop(reader, in_tx, out_tx.clone(), timeout, label.clone(), (start, rtt.clone()), dead_tx.clone(), dead_rx.clone()));
+        let reader_task = tokio::spawn(read_loop(
+            reader,
+            in_tx,
+            out_tx.clone(),
+            timeout,
+            label.clone(),
+            (start, rtt.clone()),
+            dead_tx.clone(),
+            dead_rx.clone(),
+        ));
         let writer_task = tokio::spawn(write_loop(writer, out_rx, heartbeat, label, start, dead_tx, dead_rx));
         Link { rx: in_rx, tx: out_tx, rtt, tasks: [reader_task, writer_task] }
     }

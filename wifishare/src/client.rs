@@ -18,8 +18,9 @@ use tokio::task::JoinSet;
 use crate::audio::LinkAudio;
 use crate::clipboard;
 use crate::clipnet::{self, ClientCtx, ClipNet};
-use crate::config::{Config, Identity, Peer, Paths, Peers};
+use crate::config::{Config, Identity, Paths, Peer, Peers};
 use crate::discovery::{self, Beacon};
+use crate::files::Files;
 use crate::geom::Screen;
 use crate::netwatch::{self, NetState};
 use crate::platform::{self, Injector};
@@ -132,8 +133,30 @@ fn choose_server(peers: &Peers, hint: Option<&str>) -> Result<Peer> {
     Ok(servers[servers.len() - 1].clone())
 }
 
+/// The paired server and an address it answers on, for one-off commands that do not keep a link.
+pub async fn locate(cfg: &Config, paths: &Paths, id: &Identity) -> Result<(Peer, SocketAddr)> {
+    let server = choose_server(&Peers::load(paths)?, cfg.client.server.as_deref())?;
+    let last = server.last_addr.as_deref().and_then(|a| a.parse().ok());
+    let candidates = candidates(cfg.client.server.as_deref(), cfg.port, last, &HashMap::new()).await;
+    if candidates.is_empty() {
+        bail!("no address known for {}; set client.server in the config", server.name);
+    }
+    let key = hex::decode(&server.key)?;
+    let mut s = connect_any(&candidates, id, &key, Purpose::Files).await.with_context(|| format!("cannot reach {}", server.name))?;
+    let addr = s.peer_addr;
+    s.writer.send(&crate::proto::FsOpen { token: None }).await?;
+    Ok((server, addr))
+}
+
 /// Follows the paired server until `stop` fires (or its sender is dropped).
-pub async fn run(cfg: Config, paths: Paths, id: Identity, server_arg: Option<String>, hub: Arc<Hub>, stop: oneshot::Receiver<()>) -> Result<()> {
+pub async fn run(
+    cfg: Config,
+    paths: Paths,
+    id: Identity,
+    server_arg: Option<String>,
+    hub: Arc<Hub>,
+    stop: oneshot::Receiver<()>,
+) -> Result<()> {
     let result = tokio::select! {
         r = follow(cfg, paths, id, server_arg, hub.clone()) => r,
         _ = stop => Ok(()),
@@ -196,6 +219,9 @@ async fn follow(cfg: Config, paths: Paths, id: Identity, server_arg: Option<Stri
         net
     });
 
+    let files = Files::client(paths.clone(), id.clone(), hub.clone(), server_key.clone());
+    hub.set_files(Some(files.clone()));
+
     let mut beacons: HashMap<SocketAddr, Instant> = HashMap::new();
     let mut last_addr: Option<SocketAddr> = server.last_addr.as_deref().and_then(|a| a.parse().ok());
     let mut backoff = Duration::from_millis(250);
@@ -215,7 +241,11 @@ async fn follow(cfg: Config, paths: Paths, id: Identity, server_arg: Option<Stri
         hub.update(|s| s.link = LinkState::Searching { server: server.name.clone(), since: failing_since, error });
 
         let candidates = candidates(host.as_deref(), cfg.port, last_addr, &beacons).await;
-        let attempt = if candidates.is_empty() { Err(anyhow::anyhow!("no address known yet")) } else { connect_any(&candidates, &id, &server_key).await };
+        let attempt = if candidates.is_empty() {
+            Err(anyhow::anyhow!("no address known yet"))
+        } else {
+            connect_any(&candidates, &id, &server_key, Purpose::Control).await
+        };
         match attempt {
             Ok(s) => {
                 let _ = probing_tx.send(false);
@@ -228,7 +258,7 @@ async fn follow(cfg: Config, paths: Paths, id: Identity, server_arg: Option<Stri
                     remember_addr(&paths, &server.key, addr);
                 }
                 let started = Instant::now();
-                session(&cfg, &paths, s, &inject, &mut screen, clip.as_ref(), &mut net_rx, &mut found_rx, &hub).await;
+                session(&cfg, &paths, s, &inject, &mut screen, (clip.as_ref(), &files), &mut net_rx, &mut found_rx, &hub).await;
                 inject.lock().unwrap().release_all();
                 if let Some(c) = clip.as_ref().and_then(|c| c.client_ctx()) {
                     *c.link.lock().unwrap() = None;
@@ -296,7 +326,11 @@ async fn candidates(host: Option<&str>, port: u16, last: Option<SocketAddr>, bea
     out.extend(by_recency.into_iter().map(|(a, _)| *a));
     if let Some(h) = host {
         // Re-resolved every time: the server's address may have changed since the last attempt.
-        let target = if h.contains(':') && !h.starts_with('[') && h.parse::<std::net::Ipv6Addr>().is_err() { h.to_string() } else { format!("{h}:{port}") };
+        let target = if h.contains(':') && !h.starts_with('[') && h.parse::<std::net::Ipv6Addr>().is_err() {
+            h.to_string()
+        } else {
+            format!("{h}:{port}")
+        };
         if let Ok(Ok(addrs)) = tokio::time::timeout(Duration::from_secs(2), tokio::net::lookup_host(target)).await {
             out.extend(addrs.filter(|a| a.is_ipv4()));
         }
@@ -308,11 +342,11 @@ async fn candidates(host: Option<&str>, port: u16, last: Option<SocketAddr>, bea
 }
 
 /// Dials every candidate at once and keeps the first that turns out to be our server.
-async fn connect_any(candidates: &[SocketAddr], id: &Identity, key: &[u8]) -> Result<Secured> {
+async fn connect_any(candidates: &[SocketAddr], id: &Identity, key: &[u8], purpose: Purpose) -> Result<Secured> {
     let mut set = JoinSet::new();
     for &addr in candidates {
         let id = id.clone();
-        set.spawn(async move { wire::connect(addr, &id, Purpose::Control, CONNECT_TIMEOUT).await });
+        set.spawn(async move { wire::connect(addr, &id, purpose, CONNECT_TIMEOUT).await });
     }
     let mut last_err = anyhow::anyhow!("no candidates");
     while let Some(r) = set.join_next().await {
@@ -341,7 +375,7 @@ async fn session(
     s: Secured,
     inject: &Arc<Mutex<InjectState>>,
     screen: &mut Screen,
-    clip: Option<&Arc<ClipNet>>,
+    (clip, files): (Option<&Arc<ClipNet>>, &Arc<Files>),
     net: &mut watch::Receiver<NetState>,
     found: &mut mpsc::UnboundedReceiver<(Beacon, SocketAddr)>,
     hub: &Arc<Hub>,
@@ -354,7 +388,12 @@ async fn session(
         Duration::from_millis(cfg.network.timeout_ms),
         format!("server {}", addr.ip()),
     );
-    let _ = link.tx.send(Msg::Hello(Hello { version: PROTOCOL_VERSION, name: cfg.name.clone(), os: Os::current(), screen: Some(screen.clone()) }));
+    let _ = link.tx.send(Msg::Hello(Hello {
+        version: PROTOCOL_VERSION,
+        name: cfg.name.clone(),
+        os: Os::current(),
+        screen: Some(screen.clone()),
+    }));
     let hello = match tokio::time::timeout(Duration::from_secs(5), link.rx.recv()).await {
         Ok(Some(Msg::Hello(h))) => h,
         Ok(Some(Msg::Bye(reason))) => {
@@ -378,6 +417,7 @@ async fn session(
         }
         c.on_link_up(&link.tx);
     }
+    files.set_link(Some(addr));
     let mut audio_cfg = cfg.audio.clone();
     let mut audio = LinkAudio::new(&hello.name, addr.ip(), hub.clone(), paths.cache_dir.clone());
     audio.apply(&audio_cfg, &link.tx, false);
@@ -404,6 +444,7 @@ async fn session(
                             clip.on_message(c, None);
                         }
                     }
+                    Msg::FilesDial { token } => files.on_dial(token),
                     Msg::Bye(reason) => {
                         log::info!("server closed the link: {reason}");
                         break;
@@ -441,5 +482,6 @@ async fn session(
             }
         }
     }
+    files.set_link(None);
     log::info!("disconnected from {}", hello.name);
 }

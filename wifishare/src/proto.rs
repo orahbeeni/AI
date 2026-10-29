@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::geom::Screen;
 
 /// Bump when messages change incompatibly; peers with a different version refuse each other.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Os {
@@ -71,24 +71,56 @@ pub enum Msg {
     Screen(Screen),
 
     /// Server -> client: the cursor moved onto the client at (x, y).
-    Enter { x: f64, y: f64 },
+    Enter {
+        x: f64,
+        y: f64,
+    },
     /// Server -> client: the cursor left; release anything still held.
     Leave,
-    Motion { x: f64, y: f64 },
-    Button { button: Button, down: bool },
-    Wheel { dx: i32, dy: i32 },
-    Key { code: u16, down: bool, repeat: bool },
+    Motion {
+        x: f64,
+        y: f64,
+    },
+    Button {
+        button: Button,
+        down: bool,
+    },
+    Wheel {
+        dx: i32,
+        dy: i32,
+    },
+    Key {
+        code: u16,
+        down: bool,
+        repeat: bool,
+    },
 
     Clip(ClipMsg),
 
     /// "I would like to play my sound on your machine": key and session for the UDP stream.
-    AudioOffer { session: u32, key: [u8; 32] },
+    AudioOffer {
+        session: u32,
+        key: [u8; 32],
+    },
     /// Send the sound to this UDP port on my address.
-    AudioAccept { session: u32, port: u16 },
-    AudioRefuse { session: u32, reason: String },
-    AudioStop { session: u32 },
+    AudioAccept {
+        session: u32,
+        port: u16,
+    },
+    AudioRefuse {
+        session: u32,
+        reason: String,
+    },
+    AudioStop {
+        session: u32,
+    },
     /// "I take sound again": offer it once more if you were told not to.
     AudioWanted,
+
+    /// Server -> client: open a files connection back to me for request `token` (see `files`).
+    FilesDial {
+        token: u64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -138,8 +170,96 @@ pub enum ClipMsg {
 pub enum Bulk {
     /// First message from the client. `push`: the client sends offer `id`; otherwise the
     /// server sends its offer `id` to the client.
-    Open { id: u64, push: bool },
+    Open {
+        id: u64,
+        push: bool,
+    },
     Data(Vec<u8>),
+    End,
+    Error(String),
+}
+
+/// A folder one side shares with the other.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Share {
+    pub name: String,
+    /// The other side may add files and folders.
+    pub write: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DirEntry {
+    pub name: String,
+    pub dir: bool,
+    pub size: u64,
+    /// Unix milliseconds; 0 when unknown.
+    pub modified: u64,
+}
+
+/// First message on a files connection, sent by whichever side dialled (always the client).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct FsOpen {
+    /// `None`: the dialler makes the requests. `Some(token)`: it answers the requests of the
+    /// side that sent `Msg::FilesDial { token }`.
+    pub token: Option<u64>,
+}
+
+/// Requests on a files connection. Paths are relative to a share and use `/` separators; the
+/// empty path is the share itself.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum FsReq {
+    Shares,
+    List {
+        share: String,
+        path: String,
+    },
+    /// Everything under `path` (a file or a folder), named relative to its parent.
+    Walk {
+        share: String,
+        path: String,
+    },
+    /// Stream a file from `offset`; `size` is what the requester believes the file holds.
+    Read {
+        share: String,
+        path: String,
+        offset: u64,
+        size: u64,
+    },
+    Mkdir {
+        share: String,
+        path: String,
+    },
+    /// A name like `name` that does not exist in `dir` yet.
+    FreeName {
+        share: String,
+        dir: String,
+        name: String,
+    },
+    /// Store a file; the answer says how much of it is already there.
+    Write {
+        share: String,
+        path: String,
+        size: u64,
+        exec: bool,
+    },
+    /// File bytes, after a `Write` was answered with `Ready`.
+    Chunk(Vec<u8>),
+    End,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum FsResp {
+    Shares(Vec<Share>),
+    Listing(Vec<DirEntry>),
+    Manifest(Vec<FileEntry>),
+    Name(String),
+    Ok,
+    /// Answer to `Write`: send the file's bytes from this offset.
+    Ready {
+        offset: u64,
+    },
+    /// File bytes answering a `Read`, ended by `End`.
+    Chunk(Vec<u8>),
     End,
     Error(String),
 }

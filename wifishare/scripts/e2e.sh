@@ -86,6 +86,33 @@ before=$(connected_count)
 start_client
 wait_until 6 more_connections && ok "found via beacon: $(grep 'connected to test-S' $T/client.log | tail -1 | sed 's/.* at //')" || bad "discovery"
 
+echo "9. shared folders (the client browses and copies with the server's shares)"
+FILES="$BIN --config-dir $T/C files"
+echo hello >"$T/docs/My Folder/a.txt"; head -c 200000 /dev/urandom >"$T/docs/My Folder/sub/blob.bin"; echo top >"$T/docs/top.txt"
+$FILES ls 2>&1 | grep -q "^Docs" && $FILES ls 2>&1 | grep -q "^Inbox" && ok "lists the shares" || bad "lists the shares"
+$FILES ls Docs 2>&1 | grep -q "My Folder/" && ok "lists a share's contents" || bad "lists a share's contents"
+rm -rf $T/got; mkdir $T/got
+$FILES get "Docs/My Folder" $T/got >/dev/null 2>&1 && diff -r "$T/docs/My Folder" "$T/got/My Folder" >/dev/null && ok "folder downloaded intact" || bad "folder download"
+$FILES get Docs/top.txt $T/got >/dev/null 2>&1; $FILES get Docs/top.txt $T/got >/dev/null 2>&1
+cmp -s $T/docs/top.txt "$T/got/top (2).txt" && ok "a second copy gets a new name instead of overwriting" || bad "no overwrite"
+$FILES put Inbox "$T/src/My Folder" $T/src/note.md >/dev/null 2>&1 && diff -r "$T/src/My Folder" "$T/inbox/My Folder" >/dev/null && cmp -s $T/src/note.md $T/inbox/note.md && ok "folder and file uploaded intact" || bad "upload"
+test -x "$T/inbox/My Folder/a.txt" && ok "exec bit kept" || bad "exec bit on upload"
+$FILES put Docs $T/src/note.md 2>&1 | grep -qi "read-only" && ok "read-only share refuses uploads" || bad "read-only refusal"
+$FILES get "Docs/../../etc/passwd" $T/got 2>&1 | grep -qi "outside\|no such\|unsafe\|refusing" && ok "paths outside the share are refused" || bad "path escape refusal"
+
+echo "10. a big copy interrupted by the server going away carries on afterwards"
+head -c 1500000000 /dev/zero | tr '\0' 'q' >"$T/docs/big.bin"
+rm -rf $T/got2; mkdir $T/got2
+$FILES get Docs/big.bin $T/got2 >$T/get.log 2>&1 & GPID=$!
+part_started() { [ "$(stat -c %s $T/got2/big.bin.wifishare-part 2>/dev/null || echo 0)" -gt 20000000 ]; }
+wait_until 20 part_started
+kill -INT $SPID; wait $SPID 2>/dev/null
+cut_at=$(stat -c %s $T/got2/big.bin.wifishare-part 2>/dev/null || echo 0)
+sleep 1.5
+start_server
+wait $GPID && cmp -s $T/docs/big.bin $T/got2/big.bin && ok "finished after the server came back (cut at ${cut_at} bytes)" || { bad "interrupted copy"; cat $T/get.log; tail -5 $T/server.log; }
+rm -f $T/docs/big.bin
+
 kill $CPID $SPID 2>/dev/null; wait 2>/dev/null
 echo "passed $pass, failed $fail"
 [ "$fail" -eq 0 ]

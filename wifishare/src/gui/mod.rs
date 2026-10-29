@@ -2,6 +2,7 @@
 //! closing the window keeps sharing running and the tray brings the window back.
 
 mod app;
+mod files;
 mod layout;
 #[cfg(test)]
 mod tests;

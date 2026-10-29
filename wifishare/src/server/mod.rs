@@ -16,6 +16,7 @@ use crate::clipboard;
 use crate::clipnet::{self, ClipNet};
 use crate::config::{Config, Identity, Paths, Peers, Role};
 use crate::discovery::{self, Beacon};
+use crate::files::Files;
 use crate::geom::Side;
 use crate::netwatch;
 use crate::pair;
@@ -31,6 +32,7 @@ pub struct Shared {
     pub id: Identity,
     pub core: Arc<Mutex<ServerCore>>,
     pub clip: Option<Arc<ClipNet>>,
+    pub files: Arc<Files>,
     pub hub: Arc<Hub>,
     /// One pairing question at a time.
     pub pair_lock: tokio::sync::Mutex<()>,
@@ -112,12 +114,15 @@ pub async fn run(cfg: Config, paths: Paths, id: Identity, opts: Options, hub: Ar
         log::info!("no clients paired yet: run `wifishare pair` on the other machine");
     }
 
+    let files = Files::server(paths.clone(), id.clone(), hub.clone(), core.clone());
+    hub.set_files(Some(files.clone()));
     let shared = Arc::new(Shared {
         cfg: Mutex::new(cfg),
         paths,
         id,
         core: core.clone(),
         clip,
+        files,
         hub: hub.clone(),
         pair_lock: tokio::sync::Mutex::new(()),
         side_override: opts.side,
@@ -178,7 +183,8 @@ async fn apply_reloads(sh: Arc<Shared>) {
             }
         };
         let clients: Vec<(String, Os)> = sh.hub.snapshot().clients.iter().map(|c| (c.name.clone(), c.os)).collect();
-        let settings: Vec<(String, ClientSettings)> = clients.iter().map(|(n, os)| (n.clone(), settings_for(&fresh, sh.side_override, n, *os))).collect();
+        let settings: Vec<(String, ClientSettings)> =
+            clients.iter().map(|(n, os)| (n.clone(), settings_for(&fresh, sh.side_override, n, *os))).collect();
         {
             let mut core = sh.core.lock().unwrap();
             for (name, s) in &settings {
@@ -224,6 +230,11 @@ async fn handle(sh: Arc<Shared>, stream: TcpStream, addr: SocketAddr) {
                 && let Err(e) = clip.serve_bulk(s).await
             {
                 log::warn!("clipboard transfer with {}: {e:#}", peer.name);
+            }
+        }
+        Purpose::Files => {
+            if let Err(e) = sh.files.accept(s).await {
+                log::warn!("shared folders with {}: {e:#}", peer.name);
             }
         }
         Purpose::Pair => unreachable!(),
@@ -280,7 +291,8 @@ async fn control(sh: Arc<Shared>, s: Secured, paired_name: String) {
     );
     let side = settings.side;
     let conn = sh.core.lock().unwrap().attach(&name, screen.clone(), settings, link.tx.clone());
-    let info = ClientInfo { conn, name: name.clone(), os: hello.os, addr: addr.ip(), screen, side, since: Instant::now(), rtt: link.rtt.clone() };
+    let info =
+        ClientInfo { conn, name: name.clone(), os: hello.os, addr: addr.ip(), screen, side, since: Instant::now(), rtt: link.rtt.clone() };
     sh.hub.update(|s| {
         s.clients.retain(|c| c.name != name);
         s.clients.push(info);

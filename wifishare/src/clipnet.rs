@@ -306,7 +306,11 @@ impl ClipNet {
         let secs = started.elapsed().as_secs_f64();
         match applied {
             Some(what) => {
-                log::info!("clipboard: received {what}, {} in {secs:.1}s ({}/s)", human(pending.bytes), human((pending.bytes as f64 / secs.max(0.001)) as u64));
+                log::info!(
+                    "clipboard: received {what}, {} in {secs:.1}s ({}/s)",
+                    human(pending.bytes),
+                    human((pending.bytes as f64 / secs.max(0.001)) as u64)
+                );
                 self.hub.clipboard_event(format!("Received {what} ({})", human(pending.bytes)));
             }
             None => log::info!("clipboard: transfer finished after something newer was copied; left the clipboard alone"),
@@ -449,7 +453,7 @@ async fn receive_files(data: &mut DataStream<'_>, entries: &[FileEntry], incomin
 }
 
 /// Joins a peer-supplied relative path under `base`, refusing anything that could escape it.
-fn safe_join(base: &Path, rel: &str) -> Result<PathBuf> {
+pub fn safe_join(base: &Path, rel: &str) -> Result<PathBuf> {
     let mut out = base.to_path_buf();
     for part in rel.split('/') {
         if part.is_empty() || part == "." || part == ".." || part.contains(['\\', ':', '\0']) {
@@ -471,7 +475,7 @@ fn prune_incoming(incoming: &Path) {
 }
 
 /// Lists copied paths (recursing into folders) as wire entries named relative to their roots.
-fn walk(paths: &[PathBuf]) -> Result<Vec<(PathBuf, FileEntry)>> {
+pub fn walk(paths: &[PathBuf]) -> Result<Vec<(PathBuf, FileEntry)>> {
     let mut out = Vec::new();
     let mut used = Vec::new();
     for root in paths {
@@ -489,7 +493,7 @@ fn walk(paths: &[PathBuf]) -> Result<Vec<(PathBuf, FileEntry)>> {
     Ok(out)
 }
 
-fn walk_into(path: &Path, rel: &str, out: &mut Vec<(PathBuf, FileEntry)>) -> Result<()> {
+pub fn walk_into(path: &Path, rel: &str, out: &mut Vec<(PathBuf, FileEntry)>) -> Result<()> {
     let meta = std::fs::symlink_metadata(path).with_context(|| format!("reading {}", path.display()))?;
     if meta.file_type().is_symlink() {
         log::info!("clipboard: skipping symlink {}", path.display());

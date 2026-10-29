@@ -12,6 +12,7 @@ mod clipnet;
 mod config;
 mod discovery;
 mod engine;
+mod files;
 mod geom;
 mod gui;
 mod icon;
@@ -77,6 +78,11 @@ enum Cmd {
         /// Server host name or IP; without it, servers on the LAN are listed.
         server: Option<String>,
     },
+    /// Shared folders: choose what to share, or copy files to and from the server.
+    Files {
+        #[command(subcommand)]
+        action: files::cli::FilesCmd,
+    },
     /// Show this machine's key, paired machines, detected monitors and permission problems.
     Info,
     /// Remove a paired machine.
@@ -124,6 +130,7 @@ fn run(cli: Cli) -> Result<()> {
                     Cmd::Server { side, no_input } => server::run(cfg, paths, id, server::Options { side, no_input }, hub, stop).await,
                     Cmd::Client { server } => client::run(cfg, paths, id, server, hub, stop).await,
                     Cmd::Pair { server } => pair::run(cfg, paths, id, server).await,
+                    Cmd::Files { action } => files::cli::run(cfg, paths, id, action).await,
                     _ => unreachable!(),
                 }
             })

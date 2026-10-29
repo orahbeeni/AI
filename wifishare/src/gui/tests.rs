@@ -143,5 +143,89 @@ fn screenshots() {
 
     // First run: nothing chosen yet.
     let p = paths("fresh");
-    render("first-run", p, Hub::new(Approval::Gui), [880.0, 620.0], false);
+    render("first-run", p.clone(), Hub::new(Approval::Gui), [880.0, 620.0], false);
+    render_tab("files-stopped", p, Hub::new(Approval::Gui), [880.0, 520.0], true, Tab::Files);
+}
+
+/// The Files tab against a real loopback "other computer".
+#[test]
+#[ignore]
+fn files_tab_screenshot() {
+    let Some(dir) = std::env::var_os("WIFISHARE_SHOTS") else { return };
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+    let base = crate::files::tests::scratch("gui");
+    let share = base.join("Documents");
+    for (name, size) in [("Budget 2026.xlsx", 48_213usize), ("Holiday plan.pdf", 2_400_000), ("notes.txt", 1_204)] {
+        std::fs::create_dir_all(&share).unwrap();
+        std::fs::write(share.join(name), vec![b'x'; size]).unwrap();
+    }
+    for d in ["Photos", "Invoices", "Work/projects"] {
+        std::fs::create_dir_all(share.join(d)).unwrap();
+    }
+    std::fs::write(share.join("Photos/beach.jpg"), vec![b'x'; 3_100_000]).unwrap();
+    std::fs::write(share.join(".hidden"), "x").unwrap();
+    let drop_box = base.join("Drop box");
+    std::fs::create_dir_all(&drop_box).unwrap();
+    let mine = base.join("Downloads");
+    std::fs::create_dir_all(mine.join("Screenshots")).unwrap();
+    std::fs::create_dir_all(mine.join("Music")).unwrap();
+    for (n, s) in [("invoice-oct.pdf", 220_000usize), ("setup.AppImage", 98_000_000), ("todo.md", 640)] {
+        std::fs::write(mine.join(n), vec![b'x'; s.min(1_000)]).unwrap();
+    }
+    let (server_paths, client_paths) = (
+        crate::files::tests::machine(&base.join("s"), &[("Documents", &share, false), ("Drop box", &drop_box, true)]),
+        crate::files::tests::machine(&base.join("c"), &[("Downloads", &mine, false)]),
+    );
+    let (_server, client, _) = rt.block_on(crate::files::tests::pair(server_paths, client_paths.clone()));
+
+    let mut cfg = Config { mode: Some(Mode::Client), name: "omar-ThinkPad-P50".into(), ..Config::default() };
+    cfg.files = Config::load(&client_paths).unwrap().files;
+    cfg.save(&client_paths).unwrap();
+    pin(&client_paths, "Omars-MacBook-Pro", Role::Server, 3);
+    let hub = Hub::new(Approval::Gui);
+    let rtt = Rtt::default();
+    rtt.set(6);
+    hub.update(|s| {
+        s.running = true;
+        s.local_screen = Some(thinkpad());
+        s.link = LinkState::Connected {
+            server: "Omars-MacBook-Pro".into(),
+            addr: SocketAddr::from(([192, 168, 1, 25], 24900)),
+            since: Instant::now(),
+            rtt,
+        };
+    });
+    hub.set_files(Some(client.clone()));
+
+    let engine = Arc::new(Mutex::new(Engine::new(client_paths.clone(), hub.clone())));
+    let ctx = AppCtx { engine, hub, paths: client_paths, commands: None, has_tray: true, quit: Default::default(), start_minimized: false };
+    let mut h = egui_kittest::Harness::builder().with_size([960.0, 720.0]).build_eframe(|cc| App::new(cc, ctx));
+    h.ctx.set_theme(egui::Theme::Light);
+    h.state_mut().set_tab(Tab::Files);
+    let settle = |h: &mut egui_kittest::Harness<'_, App>| {
+        for _ in 0..6 {
+            std::thread::sleep(Duration::from_millis(120));
+            h.run_steps(2);
+        }
+    };
+    settle(&mut h);
+    h.render().expect("render").save(std::path::Path::new(&dir).join("files-shares.png")).unwrap();
+
+    h.state_mut().files_view().browse_remote(&client, "Documents", "");
+    h.state_mut().files_view().browse_local(mine.clone());
+    settle(&mut h);
+    let copy = client.download("", "Documents", "", vec!["Holiday plan.pdf".into(), "Photos".into()], base.join("got"));
+    while !copy.finished() {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let up = client.upload("", "Drop box", "", vec![mine.join("todo.md")]);
+    while !up.finished() {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    settle(&mut h);
+    h.render().expect("render").save(std::path::Path::new(&dir).join("files-browse.png")).unwrap();
+    h.state_mut().files_view().open_folders();
+    settle(&mut h);
+    h.render().expect("render").save(std::path::Path::new(&dir).join("files-dialog.png")).unwrap();
+    println!("wrote the files screenshots to {}", dir.to_string_lossy());
 }

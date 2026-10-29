@@ -61,7 +61,26 @@ pub struct Config {
     pub client: ClientCfg,
     pub clipboard: ClipboardCfg,
     pub audio: AudioCfg,
+    pub files: FilesCfg,
     pub gui: GuiCfg,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FilesCfg {
+    /// Folders the other computer may browse and copy from.
+    pub shares: Vec<ShareCfg>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShareCfg {
+    /// What the other computer sees; unique among the shares.
+    pub name: String,
+    pub path: PathBuf,
+    /// Let the other computer add files and folders (never overwrite or delete).
+    #[serde(default)]
+    pub write: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -178,6 +197,7 @@ impl Default for Config {
             client: ClientCfg::default(),
             clipboard: ClipboardCfg::default(),
             audio: AudioCfg::default(),
+            files: FilesCfg::default(),
             gui: GuiCfg::default(),
         }
     }
@@ -377,6 +397,13 @@ pub const SAMPLE_CONFIG: &str = r#"# wifishare settings. Every key is optional.
 # play_here = false        # while sending, keep playing it here too
 # receive = true           # play sound the other computer sends
 # buffer_ms = 40           # receiving buffer: more rides out bad Wi-Fi, less is snappier
+
+[files]
+# Folders the other computer may browse and copy from (the window's Files tab adds these).
+# [[files.shares]]
+# name = "Documents"
+# path = "/home/me/Documents"
+# write = false            # true lets the other computer add files and folders
 
 [gui]
 # start_sharing = true     # start sharing when the window opens

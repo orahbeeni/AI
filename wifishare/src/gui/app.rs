@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use egui::{Align, Color32, CornerRadius, Frame, Layout, Margin, RichText, Stroke, Ui, vec2};
 
 use super::Command;
+use super::files::{self, FilesView};
 use super::layout::{self, DragState, Machine, Placed};
 use crate::autostart;
 use crate::clipnet::human;
@@ -21,6 +22,7 @@ use crate::status::{Hub, LinkState, PairPrompt, Status};
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Tab {
     Overview,
+    Files,
     Settings,
     Log,
 }
@@ -51,6 +53,7 @@ pub struct App {
     pairing: Option<String>,
     autostart: bool,
     drag: DragState,
+    files_view: FilesView,
     settings_error: Option<String>,
     icon: Option<egui::TextureHandle>,
     first_frame: bool,
@@ -84,6 +87,7 @@ impl App {
             pairing: None,
             autostart: autostart::is_enabled(),
             drag: DragState::default(),
+            files_view: FilesView::new(),
             settings_error: None,
             icon: None,
             first_frame: true,
@@ -96,6 +100,11 @@ impl App {
     #[cfg(test)]
     pub(super) fn set_tab(&mut self, tab: Tab) {
         self.tab = tab;
+    }
+
+    #[cfg(test)]
+    pub(super) fn files_view(&mut self) -> &mut FilesView {
+        &mut self.files_view
     }
 
     fn refresh_peers(&mut self, force: bool) {
@@ -196,8 +205,18 @@ impl App {
                 let selected = self.mode() == Some(mode);
                 let sub_color = if selected { ui.visuals().selection.stroke.color } else { ui.visuals().text_color() };
                 let mut job = egui::text::LayoutJob::default();
-                RichText::new(format!("{title}\n")).strong().size(15.0).append_to(&mut job, ui.style(), egui::FontSelection::Default, Align::LEFT);
-                RichText::new(sub).size(12.0).color(sub_color.gamma_multiply(0.85)).append_to(&mut job, ui.style(), egui::FontSelection::Default, Align::LEFT);
+                RichText::new(format!("{title}\n")).strong().size(15.0).append_to(
+                    &mut job,
+                    ui.style(),
+                    egui::FontSelection::Default,
+                    Align::LEFT,
+                );
+                RichText::new(sub).size(12.0).color(sub_color.gamma_multiply(0.85)).append_to(
+                    &mut job,
+                    ui.style(),
+                    egui::FontSelection::Default,
+                    Align::LEFT,
+                );
                 let button = egui::Button::new(job).selected(selected).min_size(vec2(width, 52.0)).corner_radius(CornerRadius::same(8));
                 if ui.add(button).clicked() {
                     self.set_mode(mode);
@@ -206,13 +225,16 @@ impl App {
         });
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            for (tab, name) in [(Tab::Overview, "Overview"), (Tab::Settings, "Settings"), (Tab::Log, "Log")] {
+            for (tab, name) in [(Tab::Overview, "Overview"), (Tab::Files, "Files"), (Tab::Settings, "Settings"), (Tab::Log, "Log")] {
                 let selected = self.tab == tab;
                 let text = if selected { RichText::new(name).strong() } else { RichText::new(name) };
                 let resp = ui.add(egui::Button::new(text).frame(false));
                 if selected {
                     let r = resp.rect;
-                    ui.painter().line_segment([r.left_bottom() + vec2(0.0, 3.0), r.right_bottom() + vec2(0.0, 3.0)], Stroke::new(2.0, ui.visuals().selection.bg_fill));
+                    ui.painter().line_segment(
+                        [r.left_bottom() + vec2(0.0, 3.0), r.right_bottom() + vec2(0.0, 3.0)],
+                        Stroke::new(2.0, ui.visuals().selection.bg_fill),
+                    );
                 }
                 if resp.clicked() {
                     self.tab = tab;
@@ -242,7 +264,9 @@ impl App {
                     ui.label("Pick what this computer does above:");
                     ui.label("•  Share this computer: on the machine whose keyboard and mouse you use (your Mac).");
                     ui.label("•  Be controlled: on the other machines.");
-                    ui.label("Then pair them once: on the controlled computer, choose the server from the list and compare the 6-digit codes.");
+                    ui.label(
+                        "Then pair them once: on the controlled computer, choose the server from the list and compare the 6-digit codes.",
+                    );
                 });
             }
             Some(Mode::Server) => {
@@ -283,7 +307,12 @@ impl App {
             for c in &st.clients {
                 if !placed.iter().any(|p| p.machine.name.eq_ignore_ascii_case(&c.name)) {
                     placed.push(Placed {
-                        machine: Machine { name: c.name.clone(), screen: c.screen.clone(), connected: true, active: st.active.as_deref() == Some(c.name.as_str()) },
+                        machine: Machine {
+                            name: c.name.clone(),
+                            screen: c.screen.clone(),
+                            connected: true,
+                            active: st.active.as_deref() == Some(c.name.as_str()),
+                        },
                         side: c.side,
                     });
                 }
@@ -513,7 +542,11 @@ impl App {
             for a in &st.audio {
                 ui.horizontal(|ui| {
                     dot(ui, GREEN);
-                    let what = if a.sending { format!("Sending this computer's sound to {}", a.peer) } else { format!("Playing sound from {}", a.peer) };
+                    let what = if a.sending {
+                        format!("Sending this computer's sound to {}", a.peer)
+                    } else {
+                        format!("Playing sound from {}", a.peer)
+                    };
                     ui.label(what);
                     let mut detail = format!("for {}", span(a.since.elapsed()));
                     let (packets, lost) = (a.packets.load(Ordering::Relaxed), a.lost.load(Ordering::Relaxed));
@@ -524,7 +557,14 @@ impl App {
                 });
             }
             if cfg.audio.send && !st.audio.iter().any(|a| a.sending) {
-                ui.label(RichText::new(if st.running { format!("Starts when {peer} is connected.") } else { "Starts when sharing is running.".into() }).weak());
+                ui.label(
+                    RichText::new(if st.running {
+                        format!("Starts when {peer} is connected.")
+                    } else {
+                        "Starts when sharing is running.".into()
+                    })
+                    .weak(),
+                );
             }
         });
         if changed {
@@ -532,6 +572,19 @@ impl App {
             if self.persist(cfg) {
                 self.engine().reload();
             }
+        }
+    }
+
+    fn files_tab(&mut self, ui: &mut Ui, st: &Status) {
+        let peers: Vec<String> = match (&st.link, self.mode()) {
+            (LinkState::Connected { server, .. }, Some(Mode::Client)) => vec![server.clone()],
+            (_, Some(Mode::Server)) => st.clients.iter().map(|c| c.name.clone()).collect(),
+            _ => Vec::new(),
+        };
+        let cx = files::Ctx { files: self.ctx.hub.files(), cfg: &self.saved, peers: &peers };
+        if let Some(cfg) = self.files_view.show(ui, &cx) {
+            self.draft.files = cfg.files.clone();
+            self.persist(cfg);
         }
     }
 
@@ -626,7 +679,10 @@ impl App {
             if self.ctx.has_tray {
                 ui.checkbox(&mut d.gui.keep_running, "Keep running in the tray when the window is closed");
             }
-            if cfg!(target_os = "linux") && !autostart::launcher_installed() && ui.button("Add wifishare to the applications menu").clicked() {
+            if cfg!(target_os = "linux")
+                && !autostart::launcher_installed()
+                && ui.button("Add wifishare to the applications menu").clicked()
+            {
                 if let Err(e) = autostart::install_launcher() {
                     self.settings_error = Some(format!("Could not add the launcher: {e:#}"));
                 }
@@ -723,19 +779,25 @@ impl eframe::App for App {
         self.refresh_peers(false);
         let st = self.ctx.hub.snapshot();
 
-        egui::Panel::top("header").frame(Frame::side_top_panel(ui.style()).inner_margin(Margin::symmetric(16, 6))).show(ui, |ui| self.header(ui, &st));
-        egui::CentralPanel::default().frame(Frame::central_panel(ui.style()).inner_margin(Margin::symmetric(16, 10))).show(ui, |ui| match self.tab {
-            Tab::Overview => {
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.overview(ui, &st));
+        egui::Panel::top("header")
+            .frame(Frame::side_top_panel(ui.style()).inner_margin(Margin::symmetric(16, 6)))
+            .show(ui, |ui| self.header(ui, &st));
+        egui::CentralPanel::default().frame(Frame::central_panel(ui.style()).inner_margin(Margin::symmetric(16, 10))).show(ui, |ui| {
+            match self.tab {
+                Tab::Overview => {
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.overview(ui, &st));
+                }
+                Tab::Files => self.files_tab(ui, &st),
+                Tab::Settings => {
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.settings(ui));
+                }
+                Tab::Log => self.log_view(ui),
             }
-            Tab::Settings => {
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.settings(ui));
-            }
-            Tab::Log => self.log_view(ui),
         });
         self.pair_dialog(&ctx);
         self.notice(&ctx, &st);
-        ctx.request_repaint_after(if st.transfers.is_empty() { Duration::from_secs(1) } else { Duration::from_millis(100) });
+        let copying = self.ctx.hub.files().is_some_and(|f| f.jobs().iter().any(|j| !j.finished()));
+        ctx.request_repaint_after(if st.transfers.is_empty() && !copying { Duration::from_secs(1) } else { Duration::from_millis(100) });
     }
 }
 
@@ -753,12 +815,14 @@ fn pair_contents(ui: &mut Ui, p: &PairPrompt, hub: &Hub) {
         ui.label(RichText::new(&p.code).size(34.0).strong().monospace());
     });
     ui.add_space(10.0);
-    ui.label(RichText::new(if p.incoming {
-        "Allow it only if the other computer shows exactly the same code."
-    } else {
-        "The server shows a code too. If it is the same, confirm here and approve it there."
-    })
-    .weak());
+    ui.label(
+        RichText::new(if p.incoming {
+            "Allow it only if the other computer shows exactly the same code."
+        } else {
+            "The server shows a code too. If it is the same, confirm here and approve it there."
+        })
+        .weak(),
+    );
     ui.add_space(10.0);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         let yes = if p.incoming { "Allow" } else { "The codes match" };
@@ -793,12 +857,17 @@ fn status_pill(st: &Status, mode: Option<Mode>) -> (String, Color32) {
 }
 
 fn pill(ui: &mut Ui, text: &str, color: Color32) {
-    Frame::new().fill(color.gamma_multiply(0.18)).stroke(Stroke::new(1.0, color)).corner_radius(CornerRadius::same(12)).inner_margin(Margin::symmetric(10, 3)).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            dot(ui, color);
-            ui.label(RichText::new(text).color(ui.visuals().strong_text_color()));
+    Frame::new()
+        .fill(color.gamma_multiply(0.18))
+        .stroke(Stroke::new(1.0, color))
+        .corner_radius(CornerRadius::same(12))
+        .inner_margin(Margin::symmetric(10, 3))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                dot(ui, color);
+                ui.label(RichText::new(text).color(ui.visuals().strong_text_color()));
+            });
         });
-    });
 }
 
 fn dot(ui: &mut Ui, color: Color32) {
@@ -826,11 +895,16 @@ fn section(ui: &mut Ui, title: &str, body: impl FnOnce(&mut Ui)) {
 }
 
 fn banner(ui: &mut Ui, color: Color32, title: &str, text: &str) {
-    Frame::new().fill(color.gamma_multiply(0.15)).stroke(Stroke::new(1.0, color)).corner_radius(CornerRadius::same(8)).inner_margin(Margin::same(10)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.label(RichText::new(title).strong().color(color));
-        ui.label(text);
-    });
+    Frame::new()
+        .fill(color.gamma_multiply(0.15))
+        .stroke(Stroke::new(1.0, color))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(Margin::same(10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(title).strong().color(color));
+            ui.label(text);
+        });
     ui.add_space(8.0);
 }
 
