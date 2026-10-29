@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::geom::Screen;
 
 /// Bump when messages change incompatibly; peers with a different version refuse each other.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Os {
@@ -87,6 +87,8 @@ pub enum Msg {
     AudioAccept { session: u32, port: u16 },
     AudioRefuse { session: u32, reason: String },
     AudioStop { session: u32 },
+    /// "I take sound again": offer it once more if you were told not to.
+    AudioWanted,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

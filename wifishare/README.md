@@ -31,6 +31,17 @@ Rust 1.88 or newer (`rustup`), then in this folder:
 cargo build --release          # binary: target/release/wifishare
 ```
 
+Or build and install in one go. Either script restarts a running copy on the new build, and
+`--no-build` skips the build.
+
+```sh
+./install_mac.sh      # /Applications/wifishare.app, plus `wifishare` in /usr/local/bin
+./install_ubuntu.sh   # ~/.local/bin/wifishare, the applications menu entry, the uinput udev rule
+```
+
+On the Mac, every rebuild gets a new ad hoc signature. If the cursor will not cross over
+afterwards, remove wifishare under Privacy & Security > Accessibility and add it again.
+
 CI (`.github/workflows/wifishare.yml`) builds macOS, Windows and Linux binaries and keeps them
 as downloadable artifacts.
 

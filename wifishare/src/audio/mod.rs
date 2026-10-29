@@ -188,6 +188,10 @@ impl Drop for Listed {
 /// Source of this machine's sound, 5 ms at a time.
 trait Capture: Send {
     fn read(&mut self, frame: &mut [i16]) -> Result<()>;
+    /// Starts over after a failed read (the sound server restarted, say).
+    fn reopen(&mut self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// A test tone instead of the real sound (`WIFISHARE_FAKE_AUDIO`).
@@ -230,7 +234,7 @@ impl Sender {
         } else {
             let route = if play_here { None } else { Some(linux::Route::to_virtual_sink(state_dir)?) };
             let device = route.as_ref().map(|r| r.monitor()).unwrap_or_else(|| "@DEFAULT_MONITOR@".to_string());
-            (route, Box::new(linux::Recorder(linux::Stream::record(&device, FRAME_SAMPLES)?)))
+            (route, Box::new(linux::Recorder::open(device)?))
         };
         #[cfg(not(target_os = "linux"))]
         let mut capture: Box<dyn Capture> = {
@@ -253,8 +257,11 @@ impl Sender {
             let mut seq = 0u64;
             while !stop2.load(Ordering::Relaxed) {
                 if let Err(e) = capture.read(&mut frame) {
-                    log::warn!("audio: capture stopped: {e:#}");
-                    return;
+                    log::warn!("audio: capture failed, retrying: {e:#}");
+                    while !stop2.load(Ordering::Relaxed) && capture.reopen().is_err() {
+                        std::thread::sleep(Duration::from_secs(1));
+                    }
+                    continue;
                 }
                 seq += 1;
                 if frame.iter().all(|s| *s == 0) {
@@ -448,6 +455,68 @@ mod tests {
         assert!(j.buffered() <= samples_for(20 + 60));
     }
 
+    /// One side of a link: its sound state, settings and outgoing messages.
+    struct End {
+        audio: LinkAudio,
+        cfg: crate::config::AudioCfg,
+        tx: tokio::sync::mpsc::UnboundedSender<crate::proto::Msg>,
+        rx: tokio::sync::mpsc::UnboundedReceiver<crate::proto::Msg>,
+    }
+
+    impl End {
+        fn new(peer: &str, cfg: crate::config::AudioCfg, hub: &Arc<Hub>, dir: &std::path::Path) -> End {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            End { audio: LinkAudio::new(peer, std::net::IpAddr::from([127, 0, 0, 1]), hub.clone(), dir.into()), cfg, tx, rx }
+        }
+
+        fn apply(&mut self, changed: bool) {
+            self.audio.apply(&self.cfg, &self.tx, changed);
+        }
+    }
+
+    /// Delivers messages both ways until neither side has more to say.
+    fn pump(a: &mut End, b: &mut End) {
+        while deliver(a, b) | deliver(b, a) {}
+    }
+
+    /// Hands `to` what `from` sent; true if there was anything.
+    fn deliver(from: &mut End, to: &mut End) -> bool {
+        let mut any = false;
+        while let Ok(m) = from.rx.try_recv() {
+            any = true;
+            to.audio.handle(&m, &to.cfg, &to.tx);
+        }
+        any
+    }
+
+    #[test]
+    fn receiving_again_after_turning_it_off_asks_for_the_sound() {
+        let dir = std::env::temp_dir().join(format!("wifishare-audio-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // SAFETY: no other test reads or writes the environment.
+        unsafe { std::env::set_var("WIFISHARE_FAKE_AUDIO", &dir) };
+        let hub = Hub::new(crate::status::Approval::Gui);
+        let mut sender = End::new("player", crate::config::AudioCfg { send: true, ..Default::default() }, &hub, &dir);
+        let mut player = End::new("sender", Default::default(), &hub, &dir);
+        let streaming = |s: &End, p: &End| s.audio.sender.is_some() && p.audio.receiver.is_some();
+
+        sender.apply(false);
+        player.apply(false);
+        pump(&mut sender, &mut player);
+        assert!(streaming(&sender, &player), "streaming on link-up");
+
+        player.cfg.receive = false;
+        player.apply(true);
+        pump(&mut sender, &mut player);
+        assert!(sender.audio.sender.is_none() && player.audio.receiver.is_none(), "stopped when turned off");
+
+        player.cfg.receive = true;
+        player.apply(true);
+        pump(&mut sender, &mut player);
+        assert!(streaming(&sender, &player), "streaming again when turned back on");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn resampler_keeps_the_rate() {
         let mut r = Resampler::new(44_100);
@@ -515,6 +584,10 @@ impl LinkAudio {
         {
             let _ = tx.send(Msg::AudioRefuse { session, reason: "sound from other computers was turned off there".into() });
         }
+        // The peer stops offering once refused, so say when sound is welcome again.
+        if changed && cfg.receive && self.receiver.is_none() {
+            let _ = tx.send(Msg::AudioWanted);
+        }
     }
 
     /// Handles an audio message from the peer; returns false for anything else.
@@ -565,6 +638,10 @@ impl LinkAudio {
                 if self.receiver.as_ref().is_some_and(|(s, _)| s == session) {
                     self.receiver = None;
                 }
+            }
+            Msg::AudioWanted => {
+                self.refused = false;
+                self.apply(cfg, tx, false);
             }
             _ => return false,
         }

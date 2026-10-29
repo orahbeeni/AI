@@ -85,6 +85,10 @@ enum Cmd {
     Init,
     /// Move the mouse in a small square to check that input injection works here.
     TestInject,
+    /// List this binary in the applications menu, and point start-at-login at it if that is on
+    /// (used by install_ubuntu.sh).
+    #[command(hide = true)]
+    InstallLauncher,
 }
 
 fn main() {
@@ -105,6 +109,7 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Info => info(&cfg, &paths),
         Cmd::Forget { name } => forget(&paths, &name),
         Cmd::TestInject => test_inject(&cfg),
+        Cmd::InstallLauncher => install_launcher(),
         cmd => {
             let id = Identity::load_or_create(&paths)?;
             let rt = tokio::runtime::Builder::new_multi_thread().enable_all().worker_threads(2).build()?;
@@ -124,6 +129,14 @@ fn run(cli: Cli) -> Result<()> {
             })
         }
     }
+}
+
+fn install_launcher() -> Result<()> {
+    autostart::install_launcher()?;
+    if autostart::is_enabled() {
+        autostart::set_enabled(true)?;
+    }
+    Ok(())
 }
 
 fn init(paths: &Paths) -> Result<()> {

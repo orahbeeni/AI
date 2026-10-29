@@ -169,11 +169,26 @@ impl Drop for Stream {
     }
 }
 
-pub struct Recorder(pub Stream);
+pub struct Recorder {
+    stream: Stream,
+    device: String,
+}
+
+impl Recorder {
+    pub fn open(device: String) -> Result<Recorder> {
+        Ok(Recorder { stream: Stream::record(&device, FRAME_SAMPLES)?, device })
+    }
+}
 
 impl Capture for Recorder {
     fn read(&mut self, frame: &mut [i16]) -> Result<()> {
-        self.0.read(frame)
+        self.stream.read(frame)
+    }
+
+    fn reopen(&mut self) -> Result<()> {
+        self.stream = Stream::record(&self.device, FRAME_SAMPLES)?;
+        log::info!("audio: capturing again");
+        Ok(())
     }
 }
 
@@ -185,8 +200,16 @@ pub fn play(jitter: Arc<Mutex<Jitter>>, stop: Arc<AtomicBool>) -> Result<()> {
             jitter.lock().unwrap().pull(&mut frame);
             // Blocks while the server's buffer is full, which paces this loop.
             if let Err(e) = stream.write(&frame) {
-                log::warn!("audio: {e:#}");
-                return;
+                log::warn!("audio: playback failed, retrying: {e:#}");
+                stream = loop {
+                    if stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    if let Ok(s) = Stream::playback() {
+                        break s;
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                };
             }
         }
     })?;
@@ -201,14 +224,28 @@ fn pactl(args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// This machine's sound redirected into the virtual output while it lives.
+/// This machine's sound redirected into the virtual output while it lives. A watcher puts it
+/// back when something else takes over (a dock, HDMI or Bluetooth output appearing after
+/// sleep makes itself the default), keeping that newer output as the one to restore later.
 pub struct Route {
-    module: String,
-    previous: String,
+    current: Arc<Mutex<Current>>,
     /// PulseAudio proper does not move playing streams when the default changes; PipeWire does.
     move_streams: bool,
     state: PathBuf,
     guardian: Option<Child>,
+    stop: Arc<AtomicBool>,
+    watcher: Option<std::thread::JoinHandle<()>>,
+}
+
+struct Current {
+    module: String,
+    previous: String,
+}
+
+impl Current {
+    fn save(&self, state: &Path) {
+        let _ = std::fs::write(state, format!("{}\n{}\n", self.module, self.previous));
+    }
 }
 
 impl Route {
@@ -221,16 +258,21 @@ impl Route {
         if previous.is_empty() || previous == SINK {
             bail!("cannot tell which output to restore later");
         }
-        let module = pactl(&["load-module", "module-null-sink", &format!("sink_name={SINK}"), "sink_properties=device.description=wifishare"])?;
-        std::fs::write(&state, format!("{module}\n{previous}\n"))?;
-        let guardian = spawn_guardian(&module, &previous, &state);
-        let route = Route { module, previous, move_streams, state, guardian };
+        let current = Current { module: load_sink()?, previous };
+        current.save(&state);
+        let guardian = spawn_guardian(&state);
         pactl(&["set-default-sink", SINK])?;
-        if route.move_streams {
+        if move_streams {
             move_all(SINK);
         }
-        log::info!("audio: this computer's sound now goes to the other computer (was {})", route.previous);
-        Ok(route)
+        log::info!("audio: this computer's sound now goes to the other computer (was {})", current.previous);
+        let current = Arc::new(Mutex::new(current));
+        let stop = Arc::new(AtomicBool::new(false));
+        let watcher = {
+            let (current, stop, state) = (current.clone(), stop.clone(), state.clone());
+            std::thread::Builder::new().name("audio-route".into()).spawn(move || watch(&current, &stop, move_streams, &state)).ok()
+        };
+        Ok(Route { current, move_streams, state, guardian, stop, watcher })
     }
 
     pub fn monitor(&self) -> String {
@@ -238,19 +280,68 @@ impl Route {
     }
 }
 
+fn load_sink() -> Result<String> {
+    pactl(&["load-module", "module-null-sink", &format!("sink_name={SINK}"), "sink_properties=device.description=wifishare"])
+}
+
+/// Every couple of seconds, makes sure the virtual output exists and is still the default.
+fn watch(current: &Mutex<Current>, stop: &AtomicBool, move_streams: bool, state: &Path) {
+    loop {
+        for _ in 0..20 {
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let Ok(default) = pactl(&["get-default-sink"]) else { continue };
+        if default == SINK {
+            continue;
+        }
+        let mut cur = current.lock().unwrap();
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let sinks = pactl(&["list", "short", "sinks"]).unwrap_or_default();
+        if !sinks.lines().any(|l| l.split_whitespace().nth(1) == Some(SINK)) {
+            match load_sink() {
+                Ok(module) => cur.module = module,
+                Err(e) => {
+                    log::warn!("audio: cannot recreate the wifishare output: {e:#}");
+                    continue;
+                }
+            }
+        }
+        if !default.is_empty() {
+            cur.previous = default;
+        }
+        cur.save(state);
+        if pactl(&["set-default-sink", SINK]).is_ok() {
+            if move_streams {
+                move_all(SINK);
+            }
+            log::info!("audio: {} took over the sound; sending it to the other computer again", cur.previous);
+        }
+    }
+}
+
 impl Drop for Route {
     fn drop(&mut self) {
-        let _ = pactl(&["set-default-sink", &self.previous]);
-        if self.move_streams {
-            move_all(&self.previous);
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(w) = self.watcher.take() {
+            let _ = w.join();
         }
-        let _ = pactl(&["unload-module", &self.module]);
+        let cur = self.current.lock().unwrap();
+        let _ = pactl(&["set-default-sink", &cur.previous]);
+        if self.move_streams {
+            move_all(&cur.previous);
+        }
+        let _ = pactl(&["unload-module", &cur.module]);
         let _ = std::fs::remove_file(&self.state);
         if let Some(mut g) = self.guardian.take() {
             let _ = g.kill();
             let _ = g.wait();
         }
-        log::info!("audio: sound plays here again ({})", self.previous);
+        log::info!("audio: sound plays here again ({})", cur.previous);
     }
 }
 
@@ -273,13 +364,16 @@ fn restore_leftover(state: &Path) {
     let _ = std::fs::remove_file(state);
 }
 
-/// A detached shell that waits for this process to exit and then restores the output.
-fn spawn_guardian(module: &str, previous: &str, state: &Path) -> Option<Child> {
+/// A detached shell that waits for this process to exit and then restores the output recorded
+/// in `state` (read at that point, since the watcher may have updated it).
+fn spawn_guardian(state: &Path) -> Option<Child> {
     use std::os::unix::process::CommandExt;
     let script = r#"while kill -0 "$1" 2>/dev/null; do sleep 1; done
-pactl set-default-sink "$2"; pactl unload-module "$3"; rm -f "$4""#;
+[ -f "$2" ] || exit 0
+{ read -r module; read -r previous; } < "$2"
+pactl set-default-sink "$previous"; pactl unload-module "$module"; rm -f "$2""#;
     Command::new("sh")
-        .args(["-c", script, "wifishare-audio-guard", &std::process::id().to_string(), previous, module])
+        .args(["-c", script, "wifishare-audio-guard", &std::process::id().to_string()])
         .arg(state)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
