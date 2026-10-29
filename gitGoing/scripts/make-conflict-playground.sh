@@ -96,6 +96,13 @@ cat > config.json <<'TXT'
 }
 TXT
 
+cat > long-lines.sql <<'TXT'
+-- Report queries
+SELECT id, name FROM customers WHERE active = 1;
+SELECT id, total FROM orders WHERE status = 'OPEN';
+SELECT COUNT(*) FROM audit_log;
+TXT
+
 printf 'old notes\nkeep this line\n' > legacy.txt
 printf 'line one\r\nline two\r\nline three\r\n' > windows-crlf.txt
 git add .
@@ -144,6 +151,12 @@ cat > config.json <<'TXT'
   "timeout": 30,
   "features": ["search", "export"]
 }
+TXT
+cat > long-lines.sql <<'TXT'
+-- Report queries
+SELECT c.id, c.name, c.email, c.phone, c.created_at, c.updated_at, a.street, a.city, a.postal_code, a.country, o.id AS order_id, o.total, o.currency, o.status, o.placed_at FROM customers c LEFT JOIN addresses a ON a.customer_id = c.id LEFT JOIN orders o ON o.customer_id = c.id WHERE c.active = 1 AND o.status IN ('OPEN', 'PAID', 'SHIPPED') ORDER BY o.placed_at DESC;
+SELECT id, total FROM orders WHERE status = 'OPEN';
+SELECT COUNT(*) FROM audit_log WHERE created_at > NOW() - INTERVAL '30 days' AND actor IS NOT NULL AND action IN ('LOGIN', 'LOGOUT', 'CANCEL', 'REFUND', 'EXPORT') GROUP BY actor, action HAVING COUNT(*) > 5 ORDER BY 1 DESC;
 TXT
 git rm -q legacy.txt
 printf 'line one\r\nline TWO from merge-conflict\r\nline three\r\n' > windows-crlf.txt
@@ -199,6 +212,12 @@ cat > config.json <<'TXT'
   "features": ["search", "audit"]
 }
 TXT
+cat > long-lines.sql <<'TXT'
+-- Report queries
+SELECT id, name, email FROM customers WHERE active = 1;
+SELECT id, total FROM orders WHERE status = 'OPEN';
+SELECT COUNT(*) FROM audit_log WHERE actor IS NOT NULL;
+TXT
 printf 'old notes, updated on dev\nkeep this line\n' > legacy.txt
 printf 'line one\r\nline TWO from dev\r\nline three\r\n' > windows-crlf.txt
 printf '# Playground\n\nWritten on dev.\nWith a second line.\n' > README.md
@@ -224,6 +243,8 @@ A = dev (ours), B = merge-conflict (theirs). What to try:
   OrderService.java  several conflicts of different sizes: an import, MAX_ITEMS,
                      a line only one side added, validation rewritten differently,
                      and cancel(): edited on dev, deleted on merge-conflict.
+  long-lines.sql     very long lines on B, short ones on A: tick "Scroll A and B
+                     separately" and drag either bar; the other follows to the same column.
   config.json        two conflicts close together (port, features).
   windows-crlf.txt   CRLF line endings: they should survive saving.
   README.md          added on both branches with different text.

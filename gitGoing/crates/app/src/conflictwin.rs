@@ -38,7 +38,13 @@ pub struct ConflictEditor {
     /// First row of each conflict, and its index in `file.regions`.
     first_row: Vec<usize>,
     conflict_regions: Vec<usize>,
-    max_chars: usize,
+    /// Longest line (in characters) of version A and of version B.
+    side_chars: [usize; 2],
+    /// Each version scrolls sideways on its own, following the other to the same column.
+    split_scroll: bool,
+    split_loaded: bool,
+    /// Sideways scroll of A and B in that mode.
+    hoff: [f32; 2],
     /// The output file being edited (always with `\n` line ends).
     out: String,
     /// Where each conflict's lines are in `out`: (first line, line count).
@@ -104,17 +110,15 @@ impl ConflictEditor {
                 }
             }
         }
-        let max_chars = file
-            .regions
-            .iter()
-            .flat_map(|r| match r {
-                Region::Common(l) => vec![l],
-                Region::Conflict { ours, theirs, .. } => vec![ours, theirs],
-            })
-            .flatten()
-            .map(|l| l.chars().count())
-            .max()
-            .unwrap_or(0);
+        let mut side_chars = [0usize; 2];
+        for r in &file.regions {
+            let (a, b) = match r {
+                Region::Common(l) => (l, l),
+                Region::Conflict { ours, theirs, .. } => (ours, theirs),
+            };
+            side_chars[0] = side_chars[0].max(a.iter().map(|l| l.chars().count()).max().unwrap_or(0));
+            side_chars[1] = side_chars[1].max(b.iter().map(|l| l.chars().count()).max().unwrap_or(0));
+        }
         let out = conflict::to_text(&out_lines, false, file.final_newline);
         let scroll = first_row.first().copied();
         Ok(ConflictEditor {
@@ -125,7 +129,10 @@ impl ConflictEditor {
             nums,
             first_row,
             conflict_regions,
-            max_chars,
+            side_chars,
+            split_scroll: false,
+            split_loaded: false,
+            hoff: [0.0; 2],
             out,
             scroll_out: ranges.first().map(|r| r.0),
             ranges,
@@ -344,6 +351,19 @@ impl ConflictEditor {
                 if ui.button(label).on_hover_text(tip).clicked() {
                     self.popped = !self.popped;
                 }
+                let flag = egui::Id::new("conflict_split_scroll");
+                if !self.split_loaded {
+                    self.split_loaded = true;
+                    self.split_scroll = ctx.data_mut(|d| d.get_persisted(flag)).unwrap_or(false);
+                }
+                if ui
+                    .checkbox(&mut self.split_scroll, "Scroll A and B separately")
+                    .on_hover_text("Give A and B a sideways scroll bar each; scrolling one moves the other to the same column")
+                    .changed()
+                {
+                    let on = self.split_scroll;
+                    ctx.data_mut(|d| d.insert_persisted(flag, on));
+                }
                 let save = egui::Button::new(RichText::new("Save & mark resolved").strong().color(Color32::WHITE))
                     .fill(Color32::from_rgb(0x2e, 0x7d, 0x32));
                 if ui
@@ -390,7 +410,16 @@ impl ConflictEditor {
         let line_col = Color32::from_rgba_unmultiplied(128, 128, 128, 80);
         let gutter = 22.0 + cw * 5.0 + 10.0;
         let view_w = ui.available_width();
-        let half_w = (view_w / 2.0).max(gutter + (self.max_chars as f32 + 2.0) * cw);
+        let split = self.split_scroll;
+        let sbw = ui.spacing().scroll.allocated_width();
+        // One pane's width: when A and B scroll together they share a wide canvas, otherwise each fits its half.
+        let pane_w = if split {
+            ((view_w - sbw) / 2.0).max(gutter + 60.0)
+        } else {
+            (view_w / 2.0).max(gutter + (self.side_chars[0].max(self.side_chars[1]) as f32 + 2.0) * cw)
+        };
+        let head_w = if split { pane_w } else { view_w / 2.0 };
+        let max_off = [0, 1].map(|s| (((self.side_chars[s] + 2) as f32) * cw - (pane_w - gutter)).max(0.0));
         let n = self.first_row.len();
 
         // Headers: a check box that takes that version for every conflict, and whose version it is.
@@ -402,7 +431,7 @@ impl ConflictEditor {
             (0usize, Side::Ours, "A", &self.file.ours_label, A_COL),
             (1, Side::Theirs, "B", &self.file.theirs_label, B_COL),
         ] {
-            let x0 = hrect.left() + s as f32 * view_w / 2.0;
+            let x0 = hrect.left() + s as f32 * head_w;
             let all = n > 0 && (0..n).all(|c| self.hunk_on(c, side));
             let cb = Rect::from_center_size(Pos2::new(x0 + 14.0, hrect.center().y), Vec2::splat(13.0));
             hp.rect_stroke(cb, 2.0, Stroke::new(1.2_f32, weak), egui::StrokeKind::Inside);
@@ -419,11 +448,11 @@ impl ConflictEditor {
                 FontId::proportional(13.5),
                 ui.visuals().strong_text_color(),
             );
-            if hresp.clicked() && hresp.interact_pointer_pos().is_some_and(|p| p.x >= x0 && p.x < x0 + view_w / 2.0) {
+            if hresp.clicked() && hresp.interact_pointer_pos().is_some_and(|p| p.x >= x0 && p.x < x0 + head_w) {
                 take_all = Some((side, !all));
             }
         }
-        hp.vline(hrect.left() + view_w / 2.0, hrect.y_range(), Stroke::new(1.0_f32, line_col));
+        hp.vline(hrect.left() + head_w, hrect.y_range(), Stroke::new(1.0_f32, line_col));
         hresp.on_hover_text("Click a side to take it for every conflict");
         if let Some((side, on)) = take_all {
             for c in 0..n {
@@ -431,23 +460,45 @@ impl ConflictEditor {
             }
         }
 
-        let mut area = egui::ScrollArea::both().id_salt(("conflict_sides", &self.file.path)).auto_shrink(false);
+        if split {
+            // Sideways wheel / shift+wheel over a pane moves both panes to the same column.
+            let avail = ui.available_rect_before_wrap();
+            let dx = ui.input(|i| i.smooth_scroll_delta.x);
+            let pointer = ui.input(|i| i.pointer.hover_pos());
+            if let Some(pt) = pointer.filter(|pt| dx != 0.0 && avail.contains(*pt)) {
+                let s = usize::from(pt.x >= avail.left() + pane_w);
+                self.hoff[s] -= dx;
+                self.follow(s, max_off);
+            }
+        }
+        let hoff = self.hoff;
+        let bar_h = if split { sbw + 2.0 } else { 0.0 };
+        let mut area = if split {
+            egui::ScrollArea::vertical().max_height((ui.available_height() - bar_h).max(40.0))
+        } else {
+            egui::ScrollArea::both()
+        }
+        .id_salt(("conflict_sides", &self.file.path))
+        .auto_shrink(false);
         if let Some(r) = self.scroll_sides.take() {
             area = area.vertical_scroll_offset((r as f32 - 3.0).max(0.0) * row_h);
         }
         let mut hunk_click: Option<(usize, Side)> = None;
         let mut line_click: Option<(usize, Side, usize)> = None;
         let path = self.file.path.clone();
+        ui.spacing_mut().item_spacing.y = 0.0;
         area.show_rows(ui, row_h, self.rows.len(), |ui, range| {
-            ui.spacing_mut().item_spacing.y = 0.0;
             for i in range {
-                let (rect, resp) = ui.allocate_exact_size(Vec2::new(half_w * 2.0, row_h), Sense::click());
+                let (rect, resp) = ui.allocate_exact_size(Vec2::new(pane_w * 2.0, row_h), Sense::click());
                 let p = ui.painter_at(rect);
                 let cy = rect.center().y;
                 for (s, side, col) in [(0usize, Side::Ours, A_COL), (1, Side::Theirs, B_COL)] {
-                    let x0 = rect.left() + s as f32 * half_w;
-                    let cell = Rect::from_min_size(Pos2::new(x0, rect.top()), Vec2::new(half_w, row_h));
+                    let x0 = rect.left() + s as f32 * pane_w;
+                    let cell = Rect::from_min_size(Pos2::new(x0, rect.top()), Vec2::new(pane_w, row_h));
                     let cp = p.with_clip_rect(cell.intersect(p.clip_rect()));
+                    let text_clip = Rect::from_min_max(Pos2::new(x0 + gutter - 2.0, cell.top()), cell.max);
+                    let tp = p.with_clip_rect(text_clip.intersect(p.clip_rect()));
+                    let shift = if split { hoff[s] } else { 0.0 };
                     let text: Option<&str> = match self.rows[i] {
                         Row::Common(ri, k) => match &self.file.regions[ri] {
                             Region::Common(l) => Some(&l[k]),
@@ -492,15 +543,41 @@ impl ConflictEditor {
                     if let Some(t) = text {
                         let job = syntax::highlight(&path, t, fg, &font, dark);
                         let galley = ui.fonts(|f| f.layout_job(job));
-                        cp.galley(Pos2::new(x0 + gutter, cy - galley.size().y / 2.0), galley, fg);
+                        tp.galley(Pos2::new(x0 + gutter - shift, cy - galley.size().y / 2.0), galley, fg);
                     }
                 }
-                p.vline(rect.left() + half_w, rect.y_range(), Stroke::new(1.0_f32, line_col));
+                p.vline(rect.left() + pane_w, rect.y_range(), Stroke::new(1.0_f32, line_col));
                 if matches!(self.rows[i], Row::Pair(..)) && resp.hovered() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
             }
         });
+        if split {
+            let mut moved = None;
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                for s in 0..2 {
+                    ui.allocate_ui(Vec2::new(pane_w, bar_h), |ui| {
+                        let out = egui::ScrollArea::horizontal()
+                            .id_salt(("conflict_hbar", &path, s))
+                            .auto_shrink([false, true])
+                            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                            .scroll_offset(Vec2::new(hoff[s], 0.0))
+                            .show(ui, |ui| {
+                                ui.allocate_space(Vec2::new(pane_w + max_off[s], 1.0));
+                            });
+                        if (out.state.offset.x - hoff[s]).abs() > 0.5 {
+                            moved = Some((s, out.state.offset.x));
+                        }
+                    });
+                }
+            });
+            if let Some((s, x)) = moved {
+                self.hoff[s] = x;
+                self.follow(s, max_off);
+                ui.ctx().request_repaint();
+            }
+        }
         if let Some((c, side)) = hunk_click {
             let on = self.hunk_on(c, side);
             self.set_hunk(c, side, !on);
@@ -508,6 +585,12 @@ impl ConflictEditor {
         if let Some((c, side, k)) = line_click {
             self.toggle_line(c, side, k);
         }
+    }
+
+    /// Move both panes to the column side `driver` is at (as far as the other one reaches).
+    fn follow(&mut self, driver: usize, max_off: [f32; 2]) {
+        let x = self.hoff[driver].clamp(0.0, max_off[driver]);
+        self.hoff = [x.min(max_off[0]), x.min(max_off[1])];
     }
 
     fn output(&mut self, ui: &mut egui::Ui) {
@@ -553,28 +636,9 @@ impl ConflictEditor {
                 let gutter_w = cw * 6.0 + 12.0;
                 let (grect, _) = ui.allocate_exact_size(Vec2::new(gutter_w, n_lines as f32 * row_h), Sense::hover());
                 let p = ui.painter().clone();
-                // Conflict lines: a band across the whole width under the text, and a bar in the gutter.
-                for (c, &(start, len)) in ranges.iter().enumerate() {
-                    let alpha = if c == current { 80 } else { 45 };
-                    for line in start..start + len {
-                        let y = grect.top() + line as f32 * row_h;
-                        let band = Rect::from_min_max(Pos2::new(grect.left(), y), Pos2::new(grect.left() + 100_000.0, y + row_h));
-                        p.rect_filled(band, 0.0, tint(OUT_COL.0, OUT_COL.1, OUT_COL.2, alpha));
-                        p.rect_filled(Rect::from_min_size(band.min, Vec2::new(3.0, row_h)), 0.0, rgb(OUT_COL));
-                    }
-                    if len == 0 {
-                        // An empty resolution: a thin marker where its lines would go.
-                        let y = grect.top() + start as f32 * row_h;
-                        p.hline(grect.left()..=grect.left() + 100_000.0, y, Stroke::new(2.0_f32, rgb(OUT_COL)));
-                    }
-                }
-                let clip = ui.clip_rect();
-                let first = (((clip.top() - grect.top()) / row_h).floor().max(0.0)) as usize;
-                let last = ((((clip.bottom() - grect.top()) / row_h).ceil()) as usize).min(n_lines);
-                for line in first..last {
-                    let y = grect.top() + line as f32 * row_h + row_h / 2.0;
-                    p.text(Pos2::new(grect.right() - 10.0, y), egui::Align2::RIGHT_CENTER, line + 1, font.clone(), weak);
-                }
+                // The bands go under the text but are measured from the text's own rows, which are
+                // only known once it is laid out, so their place is reserved now and filled in below.
+                let under = p.add(egui::Shape::Noop);
 
                 let font2 = font.clone();
                 let mut layouter = move |ui: &egui::Ui, text: &str, _wrap: f32| -> Arc<egui::Galley> {
@@ -599,18 +663,53 @@ impl ConflictEditor {
                     job.wrap.max_width = f32::INFINITY;
                     ui.fonts(|f| f.layout_job(job))
                 };
-                let r = ui.add(
-                    egui::TextEdit::multiline(&mut self.out)
-                        .id_salt(("conflict_out_text", &self.file.path))
-                        .font(font.clone())
-                        .code_editor()
-                        .frame(false)
-                        .margin(egui::Margin::ZERO)
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(n_lines)
-                        .layouter(&mut layouter),
-                );
-                changed = r.changed();
+                let r = egui::TextEdit::multiline(&mut self.out)
+                    .id_salt(("conflict_out_text", &self.file.path))
+                    .font(font.clone())
+                    .code_editor()
+                    .frame(false)
+                    .margin(egui::Margin::ZERO)
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(n_lines)
+                    .layouter(&mut layouter)
+                    .show(ui);
+                changed = r.response.changed();
+
+                // Vertical extent of a line, as the editor really laid it out.
+                let top = r.galley_pos.y;
+                let span = |line: usize| match r.galley.rows.get(line) {
+                    Some(row) => (top + row.rect.min.y, top + row.rect.max.y),
+                    None => (top + line as f32 * row_h, top + (line + 1) as f32 * row_h),
+                };
+                let mut shapes = Vec::new();
+                for (c, &(start, len)) in ranges.iter().enumerate() {
+                    let alpha = if c == current { 80 } else { 45 };
+                    for line in start..start + len {
+                        let (y0, y1) = span(line);
+                        let band = Rect::from_min_max(Pos2::new(grect.left(), y0), Pos2::new(grect.left() + 100_000.0, y1));
+                        shapes.push(egui::Shape::rect_filled(band, 0.0, tint(OUT_COL.0, OUT_COL.1, OUT_COL.2, alpha)));
+                        shapes.push(egui::Shape::rect_filled(
+                            Rect::from_min_size(band.min, Vec2::new(3.0, y1 - y0)),
+                            0.0,
+                            rgb(OUT_COL),
+                        ));
+                    }
+                    if len == 0 {
+                        // An empty resolution: a thin marker where its lines would go.
+                        let y = span(start).0;
+                        shapes.push(egui::Shape::hline(grect.left()..=grect.left() + 100_000.0, y, Stroke::new(2.0_f32, rgb(OUT_COL))));
+                    }
+                }
+                p.set(under, egui::Shape::Vec(shapes));
+
+                let clip = ui.clip_rect();
+                for line in 0..n_lines.min(r.galley.rows.len().max(1)) {
+                    let (y0, y1) = span(line);
+                    if y1 < clip.top() || y0 > clip.bottom() {
+                        continue;
+                    }
+                    p.text(Pos2::new(grect.right() - 10.0, (y0 + y1) / 2.0), egui::Align2::RIGHT_CENTER, line + 1, font.clone(), weak);
+                }
             });
         });
         if changed {
