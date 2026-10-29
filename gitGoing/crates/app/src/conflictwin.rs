@@ -45,6 +45,7 @@ pub struct ConflictEditor {
     split_loaded: bool,
     /// Sideways scroll of A and B in that mode.
     hoff: [f32; 2],
+    voff: f32,
     /// The output file being edited (always with `\n` line ends).
     out: String,
     /// Where each conflict's lines are in `out`: (first line, line count).
@@ -61,6 +62,50 @@ pub struct ConflictEditor {
 const A_COL: (u8, u8, u8) = (0x2f, 0xa8, 0xc4);
 const B_COL: (u8, u8, u8) = (0xe5, 0xb8, 0x3b);
 const OUT_COL: (u8, u8, u8) = (0xb0, 0x4c, 0xd0);
+
+/// Thickness of the scroll bars in the A / B panes.
+const BAR: f32 = 12.0;
+
+/// Move both panes to the column pane `driver` is at (as far as the other one reaches).
+fn follow_cols(hoff: &mut [f32; 2], driver: usize, max_off: [f32; 2]) {
+    let x = hoff[driver].clamp(0.0, max_off[driver]);
+    *hoff = [x.min(max_off[0]), x.min(max_off[1])];
+}
+
+/// A scroll bar that is always drawn (a plain track when there is nothing to scroll).
+/// `view` is how much of `content` shows at once; returns whether `off` changed.
+#[allow(clippy::too_many_arguments)]
+fn scrollbar(ui: &mut egui::Ui, id: egui::Id, track: Rect, vertical: bool, off: &mut f32, max: f32, view: f32, content: f32) -> bool {
+    ui.painter().rect_filled(track, 0.0, ui.visuals().extreme_bg_color);
+    if max <= 0.0 || content <= 0.0 {
+        return false;
+    }
+    let (len, start) = if vertical { (track.height(), track.top()) } else { (track.width(), track.left()) };
+    let thumb = (len * view / content).clamp(28.0_f32.min(len), len);
+    let travel = (len - thumb).max(1.0);
+    let resp = ui.interact(track, id, Sense::click_and_drag());
+    let before = *off;
+    if resp.dragged() {
+        let d = if vertical { resp.drag_delta().y } else { resp.drag_delta().x };
+        *off = (*off + d / travel * max).clamp(0.0, max);
+    } else if let Some(pt) = resp.clicked().then(|| resp.interact_pointer_pos()).flatten() {
+        let at = if vertical { pt.y } else { pt.x } - start - thumb / 2.0;
+        *off = (at / travel * max).clamp(0.0, max);
+    }
+    let pos = start + *off / max * travel;
+    let rect = if vertical {
+        Rect::from_min_size(Pos2::new(track.left(), pos), Vec2::new(track.width(), thumb))
+    } else {
+        Rect::from_min_size(Pos2::new(pos, track.top()), Vec2::new(thumb, track.height()))
+    };
+    let col = if resp.dragged() || resp.hovered() {
+        ui.visuals().widgets.hovered.bg_fill
+    } else {
+        ui.visuals().widgets.inactive.bg_fill
+    };
+    ui.painter().rect_filled(rect.shrink(2.0), 3.0, col);
+    *off != before
+}
 
 fn rgb(c: (u8, u8, u8)) -> Color32 {
     Color32::from_rgb(c.0, c.1, c.2)
@@ -133,6 +178,7 @@ impl ConflictEditor {
             split_scroll: false,
             split_loaded: false,
             hoff: [0.0; 2],
+            voff: 0.0,
             out,
             scroll_out: ranges.first().map(|r| r.0),
             ranges,
@@ -411,15 +457,13 @@ impl ConflictEditor {
         let gutter = 22.0 + cw * 5.0 + 10.0;
         let view_w = ui.available_width();
         let split = self.split_scroll;
-        let sbw = ui.spacing().scroll.allocated_width();
         // One pane's width: when A and B scroll together they share a wide canvas, otherwise each fits its half.
         let pane_w = if split {
-            ((view_w - sbw) / 2.0).max(gutter + 60.0)
+            (view_w / 2.0).max(gutter + 60.0)
         } else {
             (view_w / 2.0).max(gutter + (self.side_chars[0].max(self.side_chars[1]) as f32 + 2.0) * cw)
         };
         let head_w = if split { pane_w } else { view_w / 2.0 };
-        let max_off = [0, 1].map(|s| (((self.side_chars[s] + 2) as f32) * cw - (pane_w - gutter)).max(0.0));
         let n = self.first_row.len();
 
         // Headers: a check box that takes that version for every conflict, and whose version it is.
@@ -460,43 +504,23 @@ impl ConflictEditor {
             }
         }
 
-        if split {
-            // Sideways wheel / shift+wheel over a pane moves both panes to the same column.
-            let avail = ui.available_rect_before_wrap();
-            let dx = ui.input(|i| i.smooth_scroll_delta.x);
-            let pointer = ui.input(|i| i.pointer.hover_pos());
-            if let Some(pt) = pointer.filter(|pt| dx != 0.0 && avail.contains(*pt)) {
-                let s = usize::from(pt.x >= avail.left() + pane_w);
-                self.hoff[s] -= dx;
-                self.follow(s, max_off);
-            }
-        }
-        let hoff = self.hoff;
-        let bar_h = if split { sbw + 2.0 } else { 0.0 };
-        let mut area = if split {
-            egui::ScrollArea::vertical().max_height((ui.available_height() - bar_h).max(40.0))
-        } else {
-            egui::ScrollArea::both()
-        }
-        .id_salt(("conflict_sides", &self.file.path))
-        .auto_shrink(false);
-        if let Some(r) = self.scroll_sides.take() {
-            area = area.vertical_scroll_offset((r as f32 - 3.0).max(0.0) * row_h);
-        }
+        let mut hoff = self.hoff;
+        let mut voff = self.voff;
+        let jump = self.scroll_sides.take().map(|r| (r as f32 - 3.0).max(0.0) * row_h);
         let mut hunk_click: Option<(usize, Side)> = None;
         let mut line_click: Option<(usize, Side, usize)> = None;
         let path = self.file.path.clone();
-        ui.spacing_mut().item_spacing.y = 0.0;
-        area.show_rows(ui, row_h, self.rows.len(), |ui, range| {
-            for i in range {
-                let (rect, resp) = ui.allocate_exact_size(Vec2::new(pane_w * 2.0, row_h), Sense::click());
-                let p = ui.painter_at(rect);
+        let sides_id = self.file.path.clone();
+        {
+            // One row: both versions' cells, and what a click at `click` picked.
+            let mut paint_row = |ui: &egui::Ui, p: &egui::Painter, i: usize, rect: Rect, click: Option<Pos2>, hovered: bool, lane: f32, hoff: [f32; 2]| {
                 let cy = rect.center().y;
                 for (s, side, col) in [(0usize, Side::Ours, A_COL), (1, Side::Theirs, B_COL)] {
                     let x0 = rect.left() + s as f32 * pane_w;
                     let cell = Rect::from_min_size(Pos2::new(x0, rect.top()), Vec2::new(pane_w, row_h));
+                    let hit = Rect::from_min_max(cell.min, Pos2::new(cell.max.x - lane, cell.max.y));
                     let cp = p.with_clip_rect(cell.intersect(p.clip_rect()));
-                    let text_clip = Rect::from_min_max(Pos2::new(x0 + gutter - 2.0, cell.top()), cell.max);
+                    let text_clip = Rect::from_min_max(Pos2::new(x0 + gutter - 2.0, cell.top()), Pos2::new(cell.max.x - lane, cell.max.y));
                     let tp = p.with_clip_rect(text_clip.intersect(p.clip_rect()));
                     let shift = if split { hoff[s] } else { 0.0 };
                     let text: Option<&str> = match self.rows[i] {
@@ -525,13 +549,11 @@ impl ConflictEditor {
                                     cp.rect_filled(cb.shrink(2.5), 1.0, rgb(col));
                                 }
                             }
-                            if let Some(pt) = resp.clicked().then(|| resp.interact_pointer_pos()).flatten() {
-                                if cell.contains(pt) {
-                                    if k == 0 && pt.x < x0 + 24.0 {
-                                        hunk_click = Some((c, side));
-                                    } else if k < lines.len() {
-                                        line_click = Some((c, side, k));
-                                    }
+                            if let Some(pt) = click.filter(|pt| hit.contains(*pt)) {
+                                if k == 0 && pt.x < x0 + 24.0 {
+                                    hunk_click = Some((c, side));
+                                } else if k < lines.len() {
+                                    line_click = Some((c, side, k));
                                 }
                             }
                             lines.get(k).map(String::as_str)
@@ -546,38 +568,105 @@ impl ConflictEditor {
                         tp.galley(Pos2::new(x0 + gutter - shift, cy - galley.size().y / 2.0), galley, fg);
                     }
                 }
-                p.vline(rect.left() + pane_w, rect.y_range(), Stroke::new(1.0_f32, line_col));
-                if matches!(self.rows[i], Row::Pair(..)) && resp.hovered() {
+                if matches!(self.rows[i], Row::Pair(..)) && hovered {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
-            }
-        });
-        if split {
-            let mut moved = None;
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                for s in 0..2 {
-                    ui.allocate_ui(Vec2::new(pane_w, bar_h), |ui| {
-                        let out = egui::ScrollArea::horizontal()
-                            .id_salt(("conflict_hbar", &path, s))
-                            .auto_shrink([false, true])
-                            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-                            .scroll_offset(Vec2::new(hoff[s], 0.0))
-                            .show(ui, |ui| {
-                                ui.allocate_space(Vec2::new(pane_w + max_off[s], 1.0));
-                            });
-                        if (out.state.offset.x - hoff[s]).abs() > 0.5 {
-                            moved = Some((s, out.state.offset.x));
-                        }
-                    });
+            };
+
+            if split {
+                // Each version has its own scroll bars, but they move together: the same row and the
+                // same column (as far as the shorter version reaches).
+                let full = ui.available_rect_before_wrap();
+                let ar = ui.allocate_rect(full, Sense::click());
+                let content_h = self.rows.len() as f32 * row_h;
+                let content_w = [0, 1].map(|s| (self.side_chars[s] + 2) as f32 * cw);
+                let (mut v_lane, mut h_lane) = (0.0_f32, 0.0_f32);
+                for _ in 0..2 {
+                    h_lane = if (0..2).any(|s| content_w[s] > pane_w - v_lane - gutter) { BAR } else { 0.0 };
+                    v_lane = if content_h > full.height() - h_lane { BAR } else { 0.0 };
                 }
-            });
-            if let Some((s, x)) = moved {
-                self.hoff[s] = x;
-                self.follow(s, max_off);
-                ui.ctx().request_repaint();
+                let view_w = pane_w - v_lane;
+                let view_h = (full.height() - h_lane).max(1.0);
+                let max_off = [0, 1].map(|s| (content_w[s] - (view_w - gutter)).max(0.0));
+                let max_v = (content_h - view_h).max(0.0);
+                if let Some(j) = jump {
+                    voff = j;
+                }
+                let viewport = Rect::from_min_size(full.min, Vec2::new(full.width(), view_h));
+                let pointer = ui.input(|i| i.pointer.hover_pos()).filter(|pt| viewport.contains(*pt));
+                if let Some(pt) = pointer {
+                    let d = ui.input(|i| i.smooth_scroll_delta);
+                    if d != Vec2::ZERO {
+                        let s = usize::from(pt.x >= full.left() + pane_w);
+                        voff -= d.y;
+                        hoff[s] -= d.x;
+                        follow_cols(&mut hoff, s, max_off);
+                    }
+                }
+                voff = voff.clamp(0.0, max_v);
+                hoff = [hoff[0].min(max_off[0]), hoff[1].min(max_off[1])];
+
+                let p = ui.painter_at(viewport);
+                let click = ar.clicked().then(|| ar.interact_pointer_pos()).flatten();
+                let first = (voff / row_h).floor() as usize;
+                let last = (((voff + view_h) / row_h).ceil() as usize).min(self.rows.len());
+                for i in first..last {
+                    let rect = Rect::from_min_size(
+                        Pos2::new(full.left(), full.top() + i as f32 * row_h - voff),
+                        Vec2::new(pane_w * 2.0, row_h),
+                    );
+                    let hovered = pointer.is_some_and(|pt| rect.contains(pt));
+                    paint_row(ui, &p, i, rect, click, hovered, v_lane, hoff);
+                }
+                ui.painter_at(full).vline(full.left() + pane_w, full.y_range(), Stroke::new(1.0_f32, line_col));
+
+                let mut driver = None;
+                for s in 0..2 {
+                    let px = full.left() + s as f32 * pane_w;
+                    if v_lane > 0.0 {
+                        let track = Rect::from_min_size(Pos2::new(px + pane_w - BAR, full.top()), Vec2::new(BAR, view_h));
+                        scrollbar(ui, egui::Id::new(("conflict_vbar", &sides_id, s)), track, true, &mut voff, max_v, view_h, content_h);
+                    }
+                    if h_lane > 0.0 {
+                        let track = Rect::from_min_size(Pos2::new(px, full.top() + view_h), Vec2::new(view_w, BAR));
+                        let before = hoff[s];
+                        scrollbar(ui, egui::Id::new(("conflict_hbar", &sides_id, s)), track, false, &mut hoff[s], max_off[s], view_w - gutter, content_w[s]);
+                        if hoff[s] != before {
+                            driver = Some(s);
+                        }
+                    }
+                    if v_lane > 0.0 && h_lane > 0.0 {
+                        let corner = Rect::from_min_size(Pos2::new(px + pane_w - BAR, full.top() + view_h), Vec2::splat(BAR));
+                        ui.painter().rect_filled(corner, 0.0, ui.visuals().extreme_bg_color);
+                    }
+                }
+                if let Some(s) = driver {
+                    follow_cols(&mut hoff, s, max_off);
+                }
+            } else {
+                let mut area = egui::ScrollArea::both().id_salt(("conflict_sides", &self.file.path)).auto_shrink(false);
+                if let Some(j) = jump {
+                    area = area.vertical_scroll_offset(j);
+                }
+                // show_rows measures a row with the spacing in force when it starts, so rows must be
+                // drawn with that same (zero) spacing or the highlights drift against the scroll position.
+                ui.spacing_mut().item_spacing.y = 0.0;
+                area.show_rows(ui, row_h, self.rows.len(), |ui, range| {
+                    let content_left = ui.max_rect().left();
+                    for i in range {
+                        let (rect, resp) = ui.allocate_exact_size(Vec2::new(pane_w * 2.0, row_h), Sense::click());
+                        let p = ui.painter_at(rect);
+                        let click = resp.clicked().then(|| resp.interact_pointer_pos()).flatten();
+                        paint_row(ui, &p, i, rect, click, resp.hovered(), 0.0, [0.0; 2]);
+                    }
+                    // The divider runs the full height, also below a short file.
+                    let clip = ui.clip_rect();
+                    ui.painter().vline(content_left + pane_w, clip.y_range(), Stroke::new(1.0_f32, line_col));
+                });
             }
         }
+        self.hoff = hoff;
+        self.voff = voff;
         if let Some((c, side)) = hunk_click {
             let on = self.hunk_on(c, side);
             self.set_hunk(c, side, !on);
@@ -585,12 +674,6 @@ impl ConflictEditor {
         if let Some((c, side, k)) = line_click {
             self.toggle_line(c, side, k);
         }
-    }
-
-    /// Move both panes to the column side `driver` is at (as far as the other one reaches).
-    fn follow(&mut self, driver: usize, max_off: [f32; 2]) {
-        let x = self.hoff[driver].clamp(0.0, max_off[driver]);
-        self.hoff = [x.min(max_off[0]), x.min(max_off[1])];
     }
 
     fn output(&mut self, ui: &mut egui::Ui) {

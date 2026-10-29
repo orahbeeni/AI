@@ -180,6 +180,54 @@ commit "Add a first test"
 printf '.idea/\n.vscode/\n' >> .gitignore
 commit "Ignore editor folders"
 
+# --- files the clash branches will edit differently ------------------------------
+cat > src/shop/OrderService.java <<'TXT'
+package shop;
+
+import java.util.List;
+
+public class OrderService {
+
+    private static final int MAX_ITEMS = 50;
+
+    public Order create(Customer customer, List<Item> items) {
+        validate(items);
+        Order order = new Order(customer);
+        order.addAll(items);
+        return order;
+    }
+
+    private void validate(List<Item> items) {
+        if (items.size() > MAX_ITEMS) {
+            throw new IllegalArgumentException("Too many items");
+        }
+    }
+
+    public void cancel(Order order) {
+        order.setStatus(Status.CANCELLED);
+    }
+}
+TXT
+cat > config.json <<'TXT'
+{
+  "name": "sandbox",
+  "port": 8080,
+  "timeout": 30,
+  "features": ["search"]
+}
+TXT
+cat > docs/report.sql <<'TXT'
+-- Report queries
+SELECT id, name FROM customers WHERE active = 1;
+SELECT id, total FROM orders WHERE status = 'OPEN';
+SELECT COUNT(*) FROM audit_log;
+TXT
+# a tall file, for the vertical scroll bars: 90 numbered lines
+i=1; : > docs/tall.txt
+while [ $i -le 90 ]; do printf 'line %02d: nothing special happens on this line\n' $i >> docs/tall.txt; i=$((i + 1)); done
+printf 'line one\r\nline two\r\nline three\r\n' > docs/windows-crlf.txt
+commit "Add order service, config, report queries and a tall file"
+
 # --- two branches that conflict when merged ------------------------------------
 git checkout -q -b clash/a
 cat > src/web/style.css <<'TXT'
@@ -193,6 +241,53 @@ h1 {
 }
 TXT
 sed -i.bak 's/"Sandbox shop"//' src/web/index.html && rm -f src/web/index.html.bak
+cat > src/shop/OrderService.java <<'TXT'
+package shop;
+
+import java.util.List;
+import java.util.Objects;
+
+public class OrderService {
+
+    private static final int MAX_ITEMS = 75;
+
+    public Order create(Customer customer, List<Item> items) {
+        Objects.requireNonNull(customer, "customer");
+        validate(items);
+        Order order = new Order(customer);
+        order.addAll(items);
+        return order;
+    }
+
+    private void validate(List<Item> items) {
+        if (items.size() > MAX_ITEMS) {
+            throw new TooManyItemsException(items.size(), MAX_ITEMS);
+        }
+    }
+
+    public void cancel(Order order) {
+        order.setStatus(Status.CANCELLED);
+        audit.log("cancelled " + order.getId());
+    }
+}
+TXT
+cat > config.json <<'TXT'
+{
+  "name": "sandbox",
+  "port": 8443,
+  "timeout": 30,
+  "features": ["search", "audit"]
+}
+TXT
+cat > docs/report.sql <<'TXT'
+-- Report queries
+SELECT id, name, email FROM customers WHERE active = 1;
+SELECT id, total FROM orders WHERE status = 'OPEN';
+SELECT COUNT(*) FROM audit_log WHERE actor IS NOT NULL;
+TXT
+sed -i.bak -e 's/^line 12: .*/line 12: edited on clash\/a/' -e 's/^line 13: .*/line 13: also edited on clash\/a/' -e 's/^line 45: .*/line 45: edited on clash\/a/' -e 's/^line 78: .*/line 78: edited on clash\/a/' docs/tall.txt
+printf 'line one\r\nline TWO from a\r\nline three\r\n' > docs/windows-crlf.txt
+rm -f docs/*.bak
 commit "Clash A: serif look" "Thandi Mokoena"
 git checkout -q main
 git checkout -q -b clash/b
@@ -206,6 +301,50 @@ h1 {
     border-bottom: 3px solid #cccccc;
 }
 TXT
+cat > src/shop/OrderService.java <<'TXT'
+package shop;
+
+import java.util.List;
+
+public class OrderService {
+
+    private static final int MAX_ITEMS = 100;
+
+    public Order create(Customer customer, List<Item> items) {
+        validate(items);
+        Order order = new Order(customer);
+        order.addAll(items);
+        order.setSource("web");
+        return order;
+    }
+
+    private void validate(List<Item> items) {
+        if (items.isEmpty()) {
+            throw new IllegalArgumentException("No items");
+        }
+        if (items.size() > MAX_ITEMS) {
+            throw new IllegalArgumentException("Too many items: " + items.size());
+        }
+    }
+}
+TXT
+cat > config.json <<'TXT'
+{
+  "name": "sandbox",
+  "port": 9090,
+  "timeout": 30,
+  "features": ["search", "export"]
+}
+TXT
+cat > docs/report.sql <<'TXT'
+-- Report queries
+SELECT c.id, c.name, c.email, c.phone, c.created_at, c.updated_at, a.street, a.city, a.postal_code, a.country, o.id AS order_id, o.total, o.currency, o.status, o.placed_at FROM customers c LEFT JOIN addresses a ON a.customer_id = c.id LEFT JOIN orders o ON o.customer_id = c.id WHERE c.active = 1 AND o.status IN ('OPEN', 'PAID', 'SHIPPED') ORDER BY o.placed_at DESC;
+SELECT id, total FROM orders WHERE status = 'OPEN';
+SELECT COUNT(*) FROM audit_log WHERE created_at > NOW() - INTERVAL '30 days' AND actor IS NOT NULL AND action IN ('LOGIN', 'LOGOUT', 'CANCEL', 'REFUND', 'EXPORT') GROUP BY actor, action HAVING COUNT(*) > 5 ORDER BY 1 DESC;
+TXT
+sed -i.bak -e 's/^line 12: .*/line 12: edited on clash\/b/' -e 's/^line 14: .*/line 14: edited on clash\/b/' -e 's/^line 45: .*/line 45: edited on clash\/b, differently/' -e 's/^line 60: .*/line 60: edited on clash\/b/' docs/tall.txt
+printf 'line one\r\nline TWO from b\r\nline three\r\n' > docs/windows-crlf.txt
+rm -f docs/*.bak
 commit "Clash B: monospace look" "Sam Ndlovu"
 git checkout -q main
 
@@ -268,8 +407,14 @@ What is in there:
   changes      Cart.java modified in two places (stage hunks), docs/api.md staged,
                src/web/app.js deleted, TODO.txt and scratch/ untracked (a long line in there)
 
-It starts in the middle of a merge of clash/b into clash/a: src/web/style.css is conflicted
-(open the conflict editor from it). Abort the merge to get back to a normal state.
+It starts in the middle of a merge of clash/b into clash/a, with these conflicts to try in the
+conflict editor (abort the merge to get back to a normal state):
+  src/web/style.css          long font lines: tick "Scroll A and B separately" to get the bars
+  src/shop/OrderService.java several conflicts of different sizes (one is edited vs. deleted lines)
+  config.json                two conflicts close together
+  docs/report.sql            very long lines on B, short ones on A
+  docs/tall.txt              90 lines with conflicts at lines 12, 45 (and clean merges at 14, 60, 78)
+  docs/windows-crlf.txt      CRLF line endings, which should survive saving
 
 Things to try: stage a hunk, commit, amend, change a commit's date, create/rename a branch
 with spaces, pin branches, search with "Only matches", stash + checkout.
