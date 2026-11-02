@@ -10,7 +10,7 @@ use crate::config::{Config, Mode, Paths, Peers, Role};
 use crate::engine::Engine;
 use crate::geom::{Rect, Screen, Side};
 use crate::proto::Os;
-use crate::status::{Approval, AudioLink, ClientInfo, ClipEvent, Discovered, Hub, LinkState, PairPrompt, Rtt};
+use crate::status::{Approval, AudioLink, ClientInfo, ClipEvent, Discovered, Hub, LinkState, PairPrompt, PhoneInfo, Rtt};
 
 fn paths(name: &str) -> Paths {
     let dir = std::env::temp_dir().join(format!("wifishare-gui-{name}-{}", std::process::id()));
@@ -139,7 +139,29 @@ fn screenshots() {
             lost: Arc::default(),
         }];
     });
-    render("client-connected", p, hub, [880.0, 820.0], true);
+    // And a phone linked to it.
+    pin(&p, "Pixel 8", Role::Phone, 4);
+    let phone_rtt = Rtt::default();
+    phone_rtt.set(12);
+    hub.update(|s| {
+        s.phones = vec![PhoneInfo {
+            link: 1,
+            name: "Pixel 8".into(),
+            addr: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 77)),
+            since: Instant::now() - Duration::from_secs(900),
+            rtt: phone_rtt,
+        }]
+    });
+    render("client-connected", p.clone(), hub.clone(), [880.0, 1000.0], true);
+    let _answer = hub.ask_pair(PairPrompt {
+        id: 0,
+        peer: "Galaxy Tab".into(),
+        os: Os::Android,
+        addr: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 80)),
+        code: "105 662".into(),
+        incoming: true,
+    });
+    render("client-phone-pairing", p, hub, [880.0, 760.0], false);
 
     // First run: nothing chosen yet.
     let p = paths("fresh");

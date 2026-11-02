@@ -8,9 +8,9 @@ use std::sync::atomic::Ordering;
 
 use egui::{Align, Align2, Color32, CornerRadius, FontId, Frame, Layout, Margin, Pos2, Rect, RichText, Sense, Stroke, Ui, vec2};
 
-use crate::clipnet::human;
 use crate::config::{Config, ShareCfg};
 use crate::files::{Files, Job, JobKind, JobState, Pending, join, split};
+use crate::fsutil::human;
 use crate::proto::{DirEntry, Share};
 
 const ROW: f32 = 24.0;
@@ -628,6 +628,14 @@ impl FilesView {
             ui.colored_label(RED, e);
         }
         self.folders_dialog(ui.ctx(), cx)
+    }
+
+    /// Shows `peer` (a computer or phone) on the right.
+    pub fn show_peer(&mut self, peer: &str) {
+        if self.remote.peer.as_deref() != Some(peer) {
+            self.remote.peer = Some(peer.into());
+            self.remote.loaded = false;
+        }
     }
 
     /// Opens a shared folder of the other computer (for screenshots).

@@ -6,8 +6,9 @@
 //! the server answers directly; that covers networks that drop broadcast in one direction.
 //! Beacons are unauthenticated hints only: the Noise handshake still checks the pinned key.
 
+use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use socket2::{Domain, Protocol, Socket, Type};
@@ -123,7 +124,12 @@ pub async fn announce(beacon: Beacon, udp_port: u16, mut net: watch::Receiver<Ne
 
 /// Client side: report every beacon heard as (beacon, server TCP address). While `probing` is
 /// true, also ask for beacons once a second.
-pub async fn listen(udp_port: u16, found: mpsc::UnboundedSender<(Beacon, SocketAddr)>, mut probing: watch::Receiver<bool>, mut net: watch::Receiver<NetState>) {
+pub async fn listen(
+    udp_port: u16,
+    found: mpsc::UnboundedSender<(Beacon, SocketAddr)>,
+    mut probing: watch::Receiver<bool>,
+    mut net: watch::Receiver<NetState>,
+) {
     loop {
         let (beacons, probes) = match (bind(udp_port), bind(0)) {
             (Ok(b), Ok(p)) => (b, p),
@@ -163,6 +169,45 @@ pub async fn listen(udp_port: u16, found: mpsc::UnboundedSender<(Beacon, SocketA
             }
         }
     }
+}
+
+/// Records a beacon from the machine with `key`; true if it is news (an address not seen recently).
+pub fn note_beacon(beacons: &mut HashMap<SocketAddr, Instant>, b: &Beacon, addr: SocketAddr, key: &[u8]) -> bool {
+    if b.key != key {
+        return false;
+    }
+    let fresh = beacons.get(&addr).is_none_or(|t| t.elapsed() > Duration::from_secs(5));
+    beacons.insert(addr, Instant::now());
+    fresh
+}
+
+/// Addresses to dial for a machine: recent beacons first, then the configured host name
+/// (re-resolved), then the last address that worked.
+pub async fn candidates(
+    host: Option<&str>,
+    port: u16,
+    last: Option<SocketAddr>,
+    beacons: &HashMap<SocketAddr, Instant>,
+) -> Vec<SocketAddr> {
+    let mut out: Vec<SocketAddr> = Vec::new();
+    let mut by_recency: Vec<_> = beacons.iter().collect();
+    by_recency.sort_by_key(|(_, t)| std::cmp::Reverse(**t));
+    out.extend(by_recency.into_iter().map(|(a, _)| *a));
+    if let Some(h) = host {
+        // Re-resolved every time: the server's address may have changed since the last attempt.
+        let target = if h.contains(':') && !h.starts_with('[') && h.parse::<std::net::Ipv6Addr>().is_err() {
+            h.to_string()
+        } else {
+            format!("{h}:{port}")
+        };
+        if let Ok(Ok(addrs)) = tokio::time::timeout(Duration::from_secs(2), tokio::net::lookup_host(target)).await {
+            out.extend(addrs.filter(|a| a.is_ipv4()));
+        }
+    }
+    out.extend(last);
+    let mut seen = HashSet::new();
+    out.retain(|a| seen.insert(*a));
+    out
 }
 
 #[cfg(test)]

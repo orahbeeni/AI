@@ -7,8 +7,8 @@ use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 
 use super::{Files, JobState, join, split};
-use crate::clipnet::human;
 use crate::config::{Config, Identity, Paths, ShareCfg};
+use crate::fsutil::human;
 use crate::status::Hub;
 
 #[derive(Subcommand)]

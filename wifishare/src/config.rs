@@ -54,7 +54,8 @@ pub struct Config {
     pub mode: Option<Mode>,
     /// How this machine introduces itself; the server matches layout entries on it.
     pub name: String,
-    /// TCP port the server listens on; UDP discovery uses the same number.
+    /// TCP port the server listens on; UDP discovery uses the same number. Phones use the
+    /// next one.
     pub port: u16,
     pub network: NetworkCfg,
     pub server: ServerCfg,
@@ -62,7 +63,29 @@ pub struct Config {
     pub clipboard: ClipboardCfg,
     pub audio: AudioCfg,
     pub files: FilesCfg,
+    pub phone: PhoneCfg,
     pub gui: GuiCfg,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PhoneCfg {
+    /// Let paired phones connect (on TCP and UDP `port + 1`) while sharing runs.
+    pub enabled: bool,
+    /// Where files sent from a phone land; the Downloads folder when unset.
+    pub inbox: Option<PathBuf>,
+}
+
+impl Default for PhoneCfg {
+    fn default() -> Self {
+        PhoneCfg { enabled: true, inbox: None }
+    }
+}
+
+impl PhoneCfg {
+    pub fn inbox_dir(&self) -> Option<PathBuf> {
+        self.inbox.clone().or_else(dirs::download_dir).or_else(|| dirs::home_dir().map(|h| h.join("Downloads")))
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -198,6 +221,7 @@ impl Default for Config {
             clipboard: ClipboardCfg::default(),
             audio: AudioCfg::default(),
             files: FilesCfg::default(),
+            phone: PhoneCfg::default(),
             gui: GuiCfg::default(),
         }
     }
@@ -259,6 +283,7 @@ impl Config {
 pub enum Role {
     Server,
     Client,
+    Phone,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -268,7 +293,7 @@ pub struct Peer {
     pub key: String,
     /// The role the *peer* plays for us.
     pub role: Role,
-    /// Last address a connection to this peer succeeded on (servers only).
+    /// Last address a connection to this peer succeeded on (machines this side dials).
     #[serde(default)]
     pub last_addr: Option<String>,
 }
@@ -307,6 +332,19 @@ impl Peers {
 
     pub fn servers(&self) -> impl Iterator<Item = &Peer> {
         self.peers.iter().filter(|p| p.role == Role::Server)
+    }
+
+    /// Notes the address a machine (hex `key`) answered on, for next time.
+    pub fn remember_addr(paths: &Paths, key: &str, addr: std::net::SocketAddr) {
+        let Ok(mut peers) = Peers::load(paths) else { return };
+        if let Some(p) = peers.peers.iter_mut().find(|p| p.key == key) {
+            p.last_addr = Some(addr.to_string());
+            let _ = peers.save(paths);
+        }
+    }
+
+    pub fn phones(&self) -> impl Iterator<Item = &Peer> {
+        self.peers.iter().filter(|p| p.role == Role::Phone)
     }
 }
 
@@ -404,6 +442,10 @@ pub const SAMPLE_CONFIG: &str = r#"# wifishare settings. Every key is optional.
 # name = "Documents"
 # path = "/home/me/Documents"
 # write = false            # true lets the other computer add files and folders
+
+[phone]
+# enabled = true           # let paired phones connect (port + 1) while sharing runs
+# inbox = "/home/me/Downloads"   # where files sent from a phone land (default: Downloads)
 
 [gui]
 # start_sharing = true     # start sharing when the window opens

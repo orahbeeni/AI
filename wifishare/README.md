@@ -2,7 +2,8 @@
 
 Use one keyboard and mouse across computers on the same network, Deskflow/Synergy style, with
 the clipboard (text, rich text, images and files) shared both ways, and optionally one
-computer's sound played on the other. It is built to survive
+computer's sound played on the other. An Android app sends files between your phone and these
+computers (see [Android phones](#android-phones)). It is built to survive
 flaky Wi-Fi: take the server out of range, put it to sleep, or let it come back with a
 different IP, and the client reconnects on its own within a second of the server reappearing.
 
@@ -143,6 +144,33 @@ on the right. Folders are copied whole.
 Opening a remote file and saving straight back to it is not built; copy it, edit it, send it
 back.
 
+## Android phones
+
+The Android app (`../android/wifishare`, built on this crate's networking code) moves files
+between your phone and the Mac or Ubuntu machine, one computer at a time.
+
+- **Share menu.** In any app (Photos, Files, a browser), tap Share, then *wifishare: send to
+  computer*, then pick the computer. The files go to its Downloads folder (`phone.inbox` changes
+  that). The phone cannot see what is in that folder; it can only add to it.
+- **Browsing the computer.** The phone shows the folders the computer shares (the same ones as
+  the Files tab, with the same read-only and *may add files* rules). Select files and folders
+  and tap *Save to phone* to copy them into the phone's Download folder, or *Send files here*
+  to copy files into a folder that allows it.
+- **Browsing the phone.** Once the phone is linked, it shows up in the Files tab's computer list
+  (and under *Phones* on Overview, where *Browse* opens it). The phone shares all of its storage
+  as one folder, "Phone". Computers may add files there unless that is switched off on the
+  phone, and nothing is ever overwritten or deleted.
+- **Switching computers.** Tap the computer's name at the top of the app and pick another one.
+  The phone links to one computer at a time.
+
+Phones work whichever mode the computer runs in (sharing its keyboard, or being controlled),
+because the phone always does the dialling. While sharing runs, the computer listens and
+announces itself on **port + 1** (24901), separately from computer-to-computer traffic. Allow
+that port through a firewall if you have one (Ubuntu: `sudo ufw allow 24901`). Pairing works as
+for computers: pick the computer in the app (or type its address), then compare the 6-digit
+codes on both screens. *Forget* under Phones unpairs a phone. `[phone] enabled = false` turns
+phone connections off.
+
 ## Sound
 
 On Ubuntu, tick **Play this computer's sound on …** in the window's Sound card (or set
@@ -202,6 +230,9 @@ several instances on one machine.
 - Shared folders: the window copies files and folders but does not open them in place, and
   dragging files between the window and the file manager is not supported (use the buttons).
   A server cannot be browsed from a client's command line, only from the window.
+- Phones: Android only. Only one computer is linked at a time, and switching stops copies that
+  are still running with the computer you leave. A computer in *Be controlled* mode accepts
+  phones only after it has been paired with a server.
 - The tray icon exists on Linux only. On macOS and Windows, closing the window quits; leave it
   open or minimized while sharing.
 

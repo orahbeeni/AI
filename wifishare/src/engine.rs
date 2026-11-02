@@ -78,6 +78,7 @@ impl Engine {
         self.hub.update(|s| {
             s.running = false;
             s.clients.clear();
+            s.phones.clear();
             s.active = None;
             s.link = LinkState::Idle;
             s.transfers.clear();

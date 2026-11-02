@@ -24,6 +24,9 @@ jobs:
         run: cargo test
       - name: Release build
         run: cargo build --release
+      # What the Android app (android/wifishare) builds on: networking, pairing, shared folders.
+      - name: Phone engine build
+        run: cargo build --lib --no-default-features
       # Pairing, clipboard text/files both ways, dead-link detection, reconnect, replay and
       # LAN discovery, with file-backed clipboards and logged input (no desktop needed).
       - name: End-to-end

@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">wifishare</string>
+    <string name="share_label">wifishare: send to computer</string>
+</resources>

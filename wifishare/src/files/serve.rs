@@ -10,9 +10,9 @@ use std::time::{Duration, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
-use super::{PART, split, unique_name};
-use crate::clipnet::{safe_join, walk_into};
-use crate::config::{Config, FilesCfg, Paths};
+use super::{INBOX, PART, split, unique_name};
+use crate::config::{Config, Paths};
+use crate::fsutil::{safe_join, walk_into};
 use crate::proto::{DirEntry, FileEntry, FsReq, FsResp, Share};
 use crate::wire::Secured;
 
@@ -22,15 +22,37 @@ const IDLE: Duration = Duration::from_secs(60);
 /// Larger folders are refused rather than listed in one message.
 const MAX_ENTRIES: usize = 200_000;
 
-/// Answers requests until the peer hangs up.
-pub async fn respond(mut s: Secured, paths: Paths) -> Result<()> {
+/// A folder this side answers for.
+pub(super) struct Served {
+    pub name: String,
+    pub path: PathBuf,
+    /// Listed and readable (the phone inbox is not).
+    pub read: bool,
+    pub write: bool,
+}
+
+/// The configured shares, plus the inbox for a phone.
+fn served(cfg: &Config, phone: bool) -> Vec<Served> {
+    let mut out: Vec<Served> =
+        cfg.files.shares.iter().map(|x| Served { name: x.name.clone(), path: x.path.clone(), read: true, write: x.write }).collect();
+    if phone && let Some(inbox) = cfg.phone.inbox_dir() {
+        // Created on first use, so a missing Downloads folder does not refuse every send.
+        let _ = std::fs::create_dir_all(&inbox);
+        out.push(Served { name: INBOX.into(), path: inbox, read: false, write: true });
+    }
+    out
+}
+
+/// Answers requests until the peer hangs up. `phone`: the peer is a phone, which may also send
+/// files into the inbox.
+pub async fn respond(mut s: Secured, paths: Paths, phone: bool) -> Result<()> {
     loop {
         let req: FsReq = match tokio::time::timeout(IDLE, s.reader.recv()).await {
             Ok(Ok(r)) => r,
             _ => return Ok(()),
         };
         // Read fresh each time so shares added or removed in the window apply at once.
-        let cfg = Config::load(&paths).map(|c| c.files).unwrap_or_default();
+        let cfg = served(&Config::load(&paths).unwrap_or_default(), phone);
         let mut streaming = false;
         if let Err(e) = handle(&cfg, req, &mut s, &mut streaming).await {
             log::debug!("files: request failed: {e:#}");
@@ -46,14 +68,14 @@ pub async fn respond(mut s: Secured, paths: Paths) -> Result<()> {
 }
 
 /// `streaming` is set once a transfer's data has started to flow.
-async fn handle(cfg: &FilesCfg, req: FsReq, s: &mut Secured, streaming: &mut bool) -> Result<()> {
+async fn handle(cfg: &[Served], req: FsReq, s: &mut Secured, streaming: &mut bool) -> Result<()> {
     match req {
         FsReq::Shares => {
-            let shares = cfg.shares.iter().map(|x| Share { name: x.name.clone(), write: x.write }).collect();
+            let shares = cfg.iter().filter(|x| x.read).map(|x| Share { name: x.name.clone(), write: x.write }).collect();
             s.writer.send(&FsResp::Shares(shares)).await
         }
         FsReq::List { share, path } => {
-            let (root, dir) = resolve(cfg, &share, &path, false)?;
+            let (root, dir) = resolve_read(cfg, &share, &path)?;
             let entries = tokio::task::spawn_blocking(move || list_dir(&root, &dir)).await??;
             s.writer.send(&FsResp::Listing(entries)).await
         }
@@ -61,7 +83,7 @@ async fn handle(cfg: &FilesCfg, req: FsReq, s: &mut Secured, streaming: &mut boo
             if path.is_empty() {
                 bail!("choose a file or folder inside the share");
             }
-            let (_, real) = resolve(cfg, &share, &path, false)?;
+            let (_, real) = resolve_read(cfg, &share, &path)?;
             let name = split(&path).1.to_string();
             let entries = tokio::task::spawn_blocking(move || -> Result<Vec<FileEntry>> {
                 let mut out = Vec::new();
@@ -96,10 +118,18 @@ async fn handle(cfg: &FilesCfg, req: FsReq, s: &mut Secured, streaming: &mut boo
     }
 }
 
+/// `resolve` for looking at what is there, which the share must allow.
+fn resolve_read(cfg: &[Served], share: &str, rel: &str) -> Result<(PathBuf, PathBuf)> {
+    if cfg.iter().any(|s| s.name == share && !s.read) {
+        bail!("\"{share}\" cannot be browsed");
+    }
+    resolve(cfg, share, rel, false)
+}
+
 /// The canonical root of the share and the canonical path of `rel` inside it, which must exist.
 /// With `write`, the share must also allow changes.
-fn resolve(cfg: &FilesCfg, share: &str, rel: &str, write: bool) -> Result<(PathBuf, PathBuf)> {
-    let s = cfg.shares.iter().find(|s| s.name == share).with_context(|| format!("\"{share}\" is not shared"))?;
+fn resolve(cfg: &[Served], share: &str, rel: &str, write: bool) -> Result<(PathBuf, PathBuf)> {
+    let s = cfg.iter().find(|s| s.name == share).with_context(|| format!("\"{share}\" is not shared"))?;
     if write && !s.write {
         bail!("\"{share}\" is shared read-only");
     }
@@ -113,7 +143,7 @@ fn resolve(cfg: &FilesCfg, share: &str, rel: &str, write: bool) -> Result<(PathB
 }
 
 /// The path for a new item `rel` in a share that allows changes: its folder must exist.
-fn resolve_new(cfg: &FilesCfg, share: &str, rel: &str) -> Result<PathBuf> {
+fn resolve_new(cfg: &[Served], share: &str, rel: &str) -> Result<PathBuf> {
     let (dir, name) = split(rel);
     if name.is_empty() {
         bail!("no name given");
@@ -147,8 +177,8 @@ fn list_dir(root: &Path, dir: &Path) -> Result<Vec<DirEntry>> {
     Ok(out)
 }
 
-async fn read(cfg: &FilesCfg, share: &str, path: &str, offset: u64, size: u64, s: &mut Secured, streaming: &mut bool) -> Result<()> {
-    let (_, real) = resolve(cfg, share, path, false)?;
+async fn read(cfg: &[Served], share: &str, path: &str, offset: u64, size: u64, s: &mut Secured, streaming: &mut bool) -> Result<()> {
+    let (_, real) = resolve_read(cfg, share, path)?;
     let mut file = tokio::fs::File::open(&real).await.context("cannot open the file")?;
     let meta = file.metadata().await?;
     if !meta.is_file() {
@@ -181,7 +211,7 @@ fn part_of(target: &Path) -> PathBuf {
     target.with_file_name(name)
 }
 
-async fn write(cfg: &FilesCfg, share: &str, path: &str, size: u64, exec: bool, s: &mut Secured, streaming: &mut bool) -> Result<()> {
+async fn write(cfg: &[Served], share: &str, path: &str, size: u64, exec: bool, s: &mut Secured, streaming: &mut bool) -> Result<()> {
     let target = resolve_new(cfg, share, path)?;
     if tokio::fs::symlink_metadata(&target).await.is_ok() {
         bail!("\"{}\" already exists there", split(path).1);
@@ -242,10 +272,9 @@ async fn receive(file: &mut tokio::fs::File, mut got: u64, size: u64, s: &mut Se
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
-    use crate::config::ShareCfg;
 
-    fn cfg(root: &Path, write: bool) -> FilesCfg {
-        FilesCfg { shares: vec![ShareCfg { name: "docs".into(), path: root.to_path_buf(), write }] }
+    fn cfg(root: &Path, write: bool) -> Vec<Served> {
+        vec![Served { name: "docs".into(), path: root.to_path_buf(), read: true, write }]
     }
 
     fn scratch(name: &str) -> PathBuf {

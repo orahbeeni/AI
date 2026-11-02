@@ -14,7 +14,7 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 use super::session::{Ctl, Session};
 use super::{Cancelled, Files, PART, fatal, is_transient, join, local, unique_name};
-use crate::clipnet::{safe_join, walk};
+use crate::fsutil::{safe_join, walk};
 use crate::proto::FileEntry;
 
 /// How long a job keeps waiting for a peer that cannot be reached.

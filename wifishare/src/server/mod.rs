@@ -20,6 +20,7 @@ use crate::files::Files;
 use crate::geom::Side;
 use crate::netwatch;
 use crate::pair;
+use crate::phones;
 use crate::platform;
 use crate::proto::{Hello, Msg, Os, PROTOCOL_VERSION};
 use crate::status::{ClientInfo, Hub};
@@ -114,8 +115,9 @@ pub async fn run(cfg: Config, paths: Paths, id: Identity, opts: Options, hub: Ar
         log::info!("no clients paired yet: run `wifishare pair` on the other machine");
     }
 
-    let files = Files::server(paths.clone(), id.clone(), hub.clone(), core.clone());
+    let files = Files::server(paths.clone(), id.clone(), hub.clone());
     hub.set_files(Some(files.clone()));
+    tokio::spawn(phones::run(cfg.clone(), paths.clone(), id.clone(), hub.clone(), files.clone()));
     let shared = Arc::new(Shared {
         cfg: Mutex::new(cfg),
         paths,
@@ -212,7 +214,8 @@ async fn handle(sh: Arc<Shared>, stream: TcpStream, addr: SocketAddr) {
         }
     };
     if purpose == Purpose::Pair {
-        if let Err(e) = pair::serve(&sh, s).await {
+        let desk = pair::Desk { name: sh.name(), paths: &sh.paths, hub: &sh.hub, lock: &sh.pair_lock };
+        if let Err(e) = pair::serve(desk, s, Role::Client).await {
             log::warn!("pairing with {addr} failed: {e:#}");
         }
         return;
@@ -233,7 +236,7 @@ async fn handle(sh: Arc<Shared>, stream: TcpStream, addr: SocketAddr) {
             }
         }
         Purpose::Files => {
-            if let Err(e) = sh.files.accept(s).await {
+            if let Err(e) = sh.files.accept(s, false).await {
                 log::warn!("shared folders with {}: {e:#}", peer.name);
             }
         }
@@ -291,6 +294,7 @@ async fn control(sh: Arc<Shared>, s: Secured, paired_name: String) {
     );
     let side = settings.side;
     let conn = sh.core.lock().unwrap().attach(&name, screen.clone(), settings, link.tx.clone());
+    let files_link = sh.files.attach(&name, link.tx.clone());
     let info =
         ClientInfo { conn, name: name.clone(), os: hello.os, addr: addr.ip(), screen, side, since: Instant::now(), rtt: link.rtt.clone() };
     sh.hub.update(|s| {
@@ -344,6 +348,7 @@ async fn control(sh: Arc<Shared>, s: Secured, paired_name: String) {
         }
     }
     sh.core.lock().unwrap().detach(conn);
+    sh.files.detach(&name, files_link);
     sh.hub.update(|s| s.clients.retain(|c| c.conn != conn));
     log::info!("{name} disconnected");
 }

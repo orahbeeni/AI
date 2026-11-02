@@ -17,6 +17,7 @@ pub enum Os {
     MacOs,
     Windows,
     Other,
+    Android,
 }
 
 impl Os {
@@ -27,6 +28,8 @@ impl Os {
             Os::MacOs
         } else if cfg!(windows) {
             Os::Windows
+        } else if cfg!(target_os = "android") {
+            Os::Android
         } else {
             Os::Other
         }
@@ -117,7 +120,8 @@ pub enum Msg {
     /// "I take sound again": offer it once more if you were told not to.
     AudioWanted,
 
-    /// Server -> client: open a files connection back to me for request `token` (see `files`).
+    /// Open a files connection back to me for request `token` (see `files`); sent by the side
+    /// that was dialled (server -> client, computer -> phone).
     FilesDial {
         token: u64,
     },

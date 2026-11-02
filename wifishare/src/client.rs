@@ -13,7 +13,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use tokio::sync::{mpsc, oneshot, watch};
-use tokio::task::JoinSet;
 
 use crate::audio::LinkAudio;
 use crate::clipboard;
@@ -23,14 +22,14 @@ use crate::discovery::{self, Beacon};
 use crate::files::Files;
 use crate::geom::Screen;
 use crate::netwatch::{self, NetState};
+use crate::phones;
 use crate::platform::{self, Injector};
 use crate::proto::{Button, Hello, Msg, Os, PROTOCOL_VERSION};
 use crate::server::describe_screen;
-use crate::status::{Approval, Discovered, Hub, LinkState};
+use crate::status::{Approval, Hub, LinkState};
 use crate::wire::{self, Link, Purpose, Secured};
 
 const MAX_BACKOFF: Duration = Duration::from_secs(2);
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Wraps the platform injector and remembers what is held, so it can all be released when the
 /// cursor leaves or the link drops (no stuck Ctrl after a Wi-Fi blip).
@@ -137,12 +136,12 @@ fn choose_server(peers: &Peers, hint: Option<&str>) -> Result<Peer> {
 pub async fn locate(cfg: &Config, paths: &Paths, id: &Identity) -> Result<(Peer, SocketAddr)> {
     let server = choose_server(&Peers::load(paths)?, cfg.client.server.as_deref())?;
     let last = server.last_addr.as_deref().and_then(|a| a.parse().ok());
-    let candidates = candidates(cfg.client.server.as_deref(), cfg.port, last, &HashMap::new()).await;
+    let candidates = discovery::candidates(cfg.client.server.as_deref(), cfg.port, last, &HashMap::new()).await;
     if candidates.is_empty() {
         bail!("no address known for {}; set client.server in the config", server.name);
     }
     let key = hex::decode(&server.key)?;
-    let mut s = connect_any(&candidates, id, &key, Purpose::Files).await.with_context(|| format!("cannot reach {}", server.name))?;
+    let mut s = wire::connect_any(&candidates, id, &key, Purpose::Files).await.with_context(|| format!("cannot reach {}", server.name))?;
     let addr = s.peer_addr;
     s.writer.send(&crate::proto::FsOpen { token: None }).await?;
     Ok((server, addr))
@@ -192,7 +191,7 @@ async fn follow(cfg: Config, paths: Paths, id: Identity, server_arg: Option<Stri
         loop {
             tokio::select! {
                 _ = &mut deadline => break,
-                f = found_rx.recv() => if let Some((b, addr)) = f { heard(&hub, &b, addr) },
+                f = found_rx.recv() => if let Some((b, addr)) = f { hub.heard(&b, addr) },
             }
         }
     };
@@ -221,6 +220,7 @@ async fn follow(cfg: Config, paths: Paths, id: Identity, server_arg: Option<Stri
 
     let files = Files::client(paths.clone(), id.clone(), hub.clone(), server_key.clone());
     hub.set_files(Some(files.clone()));
+    tokio::spawn(phones::run(cfg.clone(), paths.clone(), id.clone(), hub.clone(), files.clone()));
 
     let mut beacons: HashMap<SocketAddr, Instant> = HashMap::new();
     let mut last_addr: Option<SocketAddr> = server.last_addr.as_deref().and_then(|a| a.parse().ok());
@@ -233,18 +233,18 @@ async fn follow(cfg: Config, paths: Paths, id: Identity, server_arg: Option<Stri
     loop {
         // Drain beacons heard meanwhile; only ones carrying our server's key count.
         while let Ok((b, addr)) = found_rx.try_recv() {
-            heard(&hub, &b, addr);
-            note_beacon(&mut beacons, &b, addr, &server_key);
+            hub.heard(&b, addr);
+            discovery::note_beacon(&mut beacons, &b, addr, &server_key);
         }
         beacons.retain(|_, seen| seen.elapsed() < Duration::from_secs(30));
         let error = last_error.clone();
         hub.update(|s| s.link = LinkState::Searching { server: server.name.clone(), since: failing_since, error });
 
-        let candidates = candidates(host.as_deref(), cfg.port, last_addr, &beacons).await;
+        let candidates = discovery::candidates(host.as_deref(), cfg.port, last_addr, &beacons).await;
         let attempt = if candidates.is_empty() {
             Err(anyhow::anyhow!("no address known yet"))
         } else {
-            connect_any(&candidates, &id, &server_key, Purpose::Control).await
+            wire::connect_any(&candidates, &id, &server_key, Purpose::Control).await
         };
         match attempt {
             Ok(s) => {
@@ -255,7 +255,7 @@ async fn follow(cfg: Config, paths: Paths, id: Identity, server_arg: Option<Stri
                 }
                 if last_addr != Some(addr) {
                     last_addr = Some(addr);
-                    remember_addr(&paths, &server.key, addr);
+                    Peers::remember_addr(&paths, &server.key, addr);
                 }
                 let started = Instant::now();
                 session(&cfg, &paths, s, &inject, &mut screen, (clip.as_ref(), &files), &mut net_rx, &mut found_rx, &hub).await;
@@ -286,8 +286,8 @@ async fn follow(cfg: Config, paths: Paths, id: Identity, server_arg: Option<Stri
                 _ = &mut deadline => break,
                 f = found_rx.recv() => {
                     let Some((b, addr)) = f else { break };
-                    heard(&hub, &b, addr);
-                    if note_beacon(&mut beacons, &b, addr, &server_key) {
+                    hub.heard(&b, addr);
+                    if discovery::note_beacon(&mut beacons, &b, addr, &server_key) {
                         break;
                     }
                 }
@@ -297,74 +297,6 @@ async fn follow(cfg: Config, paths: Paths, id: Identity, server_arg: Option<Stri
             }
         }
         backoff = (backoff * 2).min(MAX_BACKOFF);
-    }
-}
-
-/// Lists a server heard on the LAN (for the window); entries not heard for 10 s drop out.
-fn heard(hub: &Hub, b: &Beacon, addr: SocketAddr) {
-    hub.update(|s| {
-        s.discovered.retain(|d| d.key != b.key && d.seen.elapsed() < Duration::from_secs(10));
-        s.discovered.push(Discovered { name: b.name.clone(), addr, key: b.key.clone(), seen: Instant::now() });
-        s.discovered.sort_by(|a, b| a.name.cmp(&b.name));
-    });
-}
-
-/// Records a beacon from our server; true if it is news (an address not seen recently).
-fn note_beacon(beacons: &mut HashMap<SocketAddr, Instant>, b: &Beacon, addr: SocketAddr, key: &[u8]) -> bool {
-    if b.key != key {
-        return false;
-    }
-    let fresh = beacons.get(&addr).is_none_or(|t| t.elapsed() > Duration::from_secs(5));
-    beacons.insert(addr, Instant::now());
-    fresh
-}
-
-async fn candidates(host: Option<&str>, port: u16, last: Option<SocketAddr>, beacons: &HashMap<SocketAddr, Instant>) -> Vec<SocketAddr> {
-    let mut out: Vec<SocketAddr> = Vec::new();
-    let mut by_recency: Vec<_> = beacons.iter().collect();
-    by_recency.sort_by_key(|(_, t)| std::cmp::Reverse(**t));
-    out.extend(by_recency.into_iter().map(|(a, _)| *a));
-    if let Some(h) = host {
-        // Re-resolved every time: the server's address may have changed since the last attempt.
-        let target = if h.contains(':') && !h.starts_with('[') && h.parse::<std::net::Ipv6Addr>().is_err() {
-            h.to_string()
-        } else {
-            format!("{h}:{port}")
-        };
-        if let Ok(Ok(addrs)) = tokio::time::timeout(Duration::from_secs(2), tokio::net::lookup_host(target)).await {
-            out.extend(addrs.filter(|a| a.is_ipv4()));
-        }
-    }
-    out.extend(last);
-    let mut seen = HashSet::new();
-    out.retain(|a| seen.insert(*a));
-    out
-}
-
-/// Dials every candidate at once and keeps the first that turns out to be our server.
-async fn connect_any(candidates: &[SocketAddr], id: &Identity, key: &[u8], purpose: Purpose) -> Result<Secured> {
-    let mut set = JoinSet::new();
-    for &addr in candidates {
-        let id = id.clone();
-        set.spawn(async move { wire::connect(addr, &id, purpose, CONNECT_TIMEOUT).await });
-    }
-    let mut last_err = anyhow::anyhow!("no candidates");
-    while let Some(r) = set.join_next().await {
-        match r {
-            Ok(Ok(s)) if s.remote_key == key => return Ok(s),
-            Ok(Ok(s)) => last_err = anyhow::anyhow!("{} is a different wifishare machine", s.peer_addr),
-            Ok(Err(e)) => last_err = e,
-            Err(e) => last_err = e.into(),
-        }
-    }
-    Err(last_err)
-}
-
-fn remember_addr(paths: &Paths, key: &str, addr: SocketAddr) {
-    let Ok(mut peers) = Peers::load(paths) else { return };
-    if let Some(p) = peers.peers.iter_mut().find(|p| p.key == key) {
-        p.last_addr = Some(addr.to_string());
-        let _ = peers.save(paths);
     }
 }
 
@@ -454,7 +386,7 @@ async fn session(
             }
             f = found.recv() => {
                 if let Some((b, addr)) = f {
-                    heard(hub, &b, addr);
+                    hub.heard(&b, addr);
                 }
             }
             _ = screen_tick.tick() => {

@@ -2,11 +2,12 @@
 //! files in either direction.
 //!
 //! Every operation runs on its own connection (`Purpose::Files`), which is always dialled by the
-//! client. The side that makes the requests is the *requester* and the other the *responder*;
-//! when the server is the requester it sends `Msg::FilesDial` over the control link and the
-//! client dials back with the matching token. Transfers are jobs that survive the link dropping:
+//! client (or phone). The side that makes the requests is the *requester* and the other the
+//! *responder*; when the side that was dialled is the requester it sends `Msg::FilesDial` over
+//! the control link and the peer dials back with the matching token. Transfers are jobs that survive the link dropping:
 //! they wait for the peer to come back and carry on from the bytes already on disk.
 
+#[cfg(feature = "desktop")]
 pub mod cli;
 mod jobs;
 mod serve;
@@ -16,21 +17,24 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 pub use self::jobs::{Job, JobKind, JobState};
 pub use self::session::Session;
 use crate::config::{Identity, Paths};
 use crate::proto::{DirEntry, FsOpen, Msg, Share};
-use crate::server::core::ServerCore;
 use crate::status::Hub;
 use crate::wire::{self, Purpose, Secured};
 
-/// How long the server waits for a client to dial back.
+/// The share a phone sends files into (`phone.inbox`). Phones may add files there but not list
+/// it, and it is not offered to computers.
+pub const INBOX: &str = "@inbox";
+/// How long to wait for a peer to dial back.
 const DIAL_BACK: Duration = Duration::from_secs(8);
 /// Suffix of a file still being received; it is renamed when complete and picked up again by a
 /// retry.
@@ -119,13 +123,11 @@ impl<T: Send + 'static> Pending<T> {
     }
 }
 
-enum Endpoint {
-    Server(Arc<Mutex<ServerCore>>),
-    Client {
-        server_key: Vec<u8>,
-        /// Where the control link currently runs; `None` while disconnected.
-        link: Mutex<Option<SocketAddr>>,
-    },
+/// The machine this side dials: a client's server, a phone's computer.
+struct Upstream {
+    key: Vec<u8>,
+    /// Where the control link currently runs; `None` while disconnected.
+    link: Mutex<Option<SocketAddr>>,
 }
 
 pub struct Files {
@@ -133,29 +135,34 @@ pub struct Files {
     id: Identity,
     hub: Arc<Hub>,
     rt: tokio::runtime::Handle,
-    endpoint: Endpoint,
-    /// Server: requests waiting for a client to dial back.
+    upstream: Option<Upstream>,
+    /// Peers that dialled this side (a server's clients, phones): name -> (link id, control link).
+    downstream: Mutex<HashMap<String, (u64, mpsc::UnboundedSender<Msg>)>>,
+    next_link: AtomicU64,
+    /// Requests waiting for a peer to dial back.
     waiting: Mutex<HashMap<u64, oneshot::Sender<Secured>>>,
     jobs: Mutex<Vec<Arc<Job>>>,
 }
 
 impl Files {
     /// Must be called inside the tokio runtime that will run the transfers.
-    pub fn server(paths: Paths, id: Identity, hub: Arc<Hub>, core: Arc<Mutex<ServerCore>>) -> Arc<Files> {
-        Files::new(paths, id, hub, Endpoint::Server(core))
+    pub fn server(paths: Paths, id: Identity, hub: Arc<Hub>) -> Arc<Files> {
+        Files::new(paths, id, hub, None)
     }
 
     pub fn client(paths: Paths, id: Identity, hub: Arc<Hub>, server_key: Vec<u8>) -> Arc<Files> {
-        Files::new(paths, id, hub, Endpoint::Client { server_key, link: Mutex::new(None) })
+        Files::new(paths, id, hub, Some(Upstream { key: server_key, link: Mutex::new(None) }))
     }
 
-    fn new(paths: Paths, id: Identity, hub: Arc<Hub>, endpoint: Endpoint) -> Arc<Files> {
+    fn new(paths: Paths, id: Identity, hub: Arc<Hub>, upstream: Option<Upstream>) -> Arc<Files> {
         Arc::new(Files {
             paths,
             id,
             hub,
             rt: tokio::runtime::Handle::current(),
-            endpoint,
+            upstream,
+            downstream: Mutex::default(),
+            next_link: AtomicU64::new(1),
             waiting: Mutex::default(),
             jobs: Mutex::default(),
         })
@@ -163,54 +170,60 @@ impl Files {
 
     /// Client: the control link came up at `addr` (or went down).
     pub fn set_link(&self, addr: Option<SocketAddr>) {
-        if let Endpoint::Client { link, .. } = &self.endpoint {
-            *link.lock().unwrap() = addr;
+        if let Some(up) = &self.upstream {
+            *up.link.lock().unwrap() = addr;
         }
     }
 
-    /// Opens a connection on which this side makes requests of `peer` (a client's name when this
-    /// is the server; ignored on a client, which has one server).
+    /// A peer that dialled this side is connected; requests for it go over `tx`. Returns the id
+    /// to `detach` it with (a reconnect replaces the entry, and the old link's detach is ignored).
+    pub fn attach(&self, peer: &str, tx: mpsc::UnboundedSender<Msg>) -> u64 {
+        let id = self.next_link.fetch_add(1, Ordering::Relaxed);
+        self.downstream.lock().unwrap().insert(peer.into(), (id, tx));
+        id
+    }
+
+    pub fn detach(&self, peer: &str, id: u64) {
+        let mut down = self.downstream.lock().unwrap();
+        if down.get(peer).is_some_and(|(have, _)| *have == id) {
+            down.remove(peer);
+        }
+    }
+
+    /// Opens a connection on which this side makes requests of `peer`: one that dialled this side
+    /// (by name), or else the machine this side follows.
     pub async fn open(&self, peer: &str) -> Result<Session> {
-        match &self.endpoint {
-            Endpoint::Client { server_key, link } => {
-                let addr = (*link.lock().unwrap()).context("not connected to the server")?;
-                let mut s = wire::connect(addr, &self.id, Purpose::Files, Duration::from_secs(5)).await?;
-                if &s.remote_key != server_key {
-                    bail!("{addr} is a different machine than the server");
-                }
-                s.writer.send(&FsOpen { token: None }).await?;
-                Ok(Session::new(s))
-            }
-            Endpoint::Server(core) => {
-                let conn = self
-                    .hub
-                    .snapshot()
-                    .clients
-                    .iter()
-                    .find(|c| c.name == peer)
-                    .map(|c| c.conn)
-                    .with_context(|| format!("{peer} is not connected"))?;
-                let mut token = [0u8; 8];
-                getrandom::fill(&mut token).map_err(|e| anyhow::anyhow!("no randomness: {e}"))?;
-                let token = u64::from_le_bytes(token);
-                let (tx, rx) = oneshot::channel();
-                self.waiting.lock().unwrap().insert(token, tx);
-                core.lock().unwrap().send_to(conn, Msg::FilesDial { token });
-                let got = tokio::time::timeout(DIAL_BACK, rx).await;
-                self.waiting.lock().unwrap().remove(&token);
-                match got {
-                    Ok(Ok(s)) => Ok(Session::new(s)),
-                    _ => bail!("{peer} did not answer"),
-                }
-            }
+        let down = self.downstream.lock().unwrap().get(peer).map(|(_, tx)| tx.clone());
+        if let Some(tx) = down {
+            let mut token = [0u8; 8];
+            getrandom::fill(&mut token).map_err(|e| anyhow::anyhow!("no randomness: {e}"))?;
+            let token = u64::from_le_bytes(token);
+            let (dialled, rx) = oneshot::channel();
+            self.waiting.lock().unwrap().insert(token, dialled);
+            let _ = tx.send(Msg::FilesDial { token });
+            let got = tokio::time::timeout(DIAL_BACK, rx).await;
+            self.waiting.lock().unwrap().remove(&token);
+            return match got {
+                Ok(Ok(s)) => Ok(Session::new(s)),
+                _ => bail!("{peer} did not answer"),
+            };
         }
+        let Some(up) = &self.upstream else { bail!("{peer} is not connected") };
+        let addr = (*up.link.lock().unwrap()).context("not connected to the server")?;
+        let mut s = wire::connect(addr, &self.id, Purpose::Files, Duration::from_secs(5)).await?;
+        if s.remote_key != up.key {
+            bail!("{addr} is a different machine than the server");
+        }
+        s.writer.send(&FsOpen { token: None }).await?;
+        Ok(Session::new(s))
     }
 
-    /// Server: a paired client opened a files connection.
-    pub async fn accept(self: &Arc<Self>, mut s: Secured) -> Result<()> {
+    /// A paired client or phone opened a files connection. A phone may also drop files into
+    /// the inbox.
+    pub async fn accept(self: &Arc<Self>, mut s: Secured, phone: bool) -> Result<()> {
         let open: FsOpen = tokio::time::timeout(Duration::from_secs(5), s.reader.recv()).await.context("no request")??;
         match open.token {
-            None => serve::respond(s, self.paths.clone()).await,
+            None => serve::respond(s, self.paths.clone(), phone).await,
             Some(token) => match self.waiting.lock().unwrap().remove(&token) {
                 Some(tx) => {
                     let _ = tx.send(s);
@@ -221,7 +234,7 @@ impl Files {
         }
     }
 
-    /// Client: the server asked for a connection to answer its requests on.
+    /// The machine this side follows asked for a connection to answer its requests on.
     pub fn on_dial(self: &Arc<Self>, token: u64) {
         let me = self.clone();
         self.rt.spawn(async move {
@@ -232,14 +245,14 @@ impl Files {
     }
 
     async fn answer(&self, token: u64) -> Result<()> {
-        let Endpoint::Client { server_key, link } = &self.endpoint else { bail!("not a client") };
-        let addr = (*link.lock().unwrap()).context("not connected to the server")?;
+        let Some(up) = &self.upstream else { bail!("nothing to dial back to") };
+        let addr = (*up.link.lock().unwrap()).context("not connected to the server")?;
         let mut s = wire::connect(addr, &self.id, Purpose::Files, Duration::from_secs(5)).await?;
-        if &s.remote_key != server_key {
+        if s.remote_key != up.key {
             bail!("{addr} is a different machine than the server");
         }
         s.writer.send(&FsOpen { token: Some(token) }).await?;
-        serve::respond(s, self.paths.clone()).await
+        serve::respond(s, self.paths.clone(), false).await
     }
 
     pub fn shares(self: &Arc<Self>, peer: &str) -> Pending<Vec<Share>> {

@@ -1,41 +1,15 @@
 //! wifishare: share one keyboard and mouse (and the clipboard) between computers on a LAN.
 
-// Linux cannot be a server yet, so the input-capture half (switching core, key tables) is only
-// exercised by tests there; the macOS and Windows builds use all of it.
-#![cfg_attr(target_os = "linux", allow(dead_code))]
-
-mod audio;
-mod autostart;
-mod client;
-mod clipboard;
-mod clipnet;
-mod config;
-mod discovery;
-mod engine;
-mod files;
-mod geom;
-mod gui;
-mod icon;
-mod instance;
-mod keymap;
-mod logger;
-mod netwatch;
-mod pair;
-mod platform;
-mod proto;
-mod server;
-mod status;
-mod wire;
-
 use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-use crate::config::{Config, Identity, Paths, Peers, Role};
-use crate::geom::Side;
-use crate::status::{Approval, Hub};
+use wifishare::config::{self, Config, Identity, Paths, Peers, Role};
+use wifishare::geom::Side;
+use wifishare::status::{Approval, Hub};
+use wifishare::{autostart, client, files, gui, logger, netwatch, pair, platform, server};
 
 #[derive(Parser)]
 #[command(version, about = "Share a keyboard, mouse and clipboard between computers over Wi-Fi/LAN")]
@@ -177,7 +151,11 @@ fn info(cfg: &Config, paths: &Paths) -> Result<()> {
         println!("paired:      nobody yet (run `wifishare pair` on the client)");
     }
     for p in &peers.peers {
-        let role = if p.role == Role::Server { "server" } else { "client" };
+        let role = match p.role {
+            Role::Server => "server",
+            Role::Client => "client",
+            Role::Phone => "phone",
+        };
         let key = hex::decode(&p.key).map(|k| config::fingerprint(&k)).unwrap_or_default();
         let addr = p.last_addr.as_deref().map(|a| format!(", last seen at {a}")).unwrap_or_default();
         println!("paired:      {} ({role}, key {key}{addr})", p.name);

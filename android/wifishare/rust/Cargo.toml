@@ -1,0 +1,25 @@
+[package]
+name = "wifishare-android"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# The wifishare engine for the Android app, called from Kotlin (`Native.kt`) through JNI.
+[lib]
+name = "wifishare_android"
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1.0.104"
+jni = "0.21.1"
+log = "0.4.34"
+serde_json = "1.0"
+wifishare = { path = "../../../wifishare", default-features = false }
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

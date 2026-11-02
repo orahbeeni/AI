@@ -2,16 +2,14 @@
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::*;
 use crate::config::{Config, FilesCfg, ShareCfg};
-use crate::geom::{Screen, Side};
-use crate::proto::{FsReq, Os};
-use crate::server::core::{ClientSettings, ServerCore};
-use crate::status::{Approval, ClientInfo, Rtt};
+use crate::proto::FsReq;
+use crate::status::Approval;
 
 pub(crate) fn identity() -> Identity {
     let pair = snow::Builder::new(wire::NOISE_PARAMS.parse().unwrap()).generate_keypair().unwrap();
@@ -42,8 +40,7 @@ pub(crate) fn machine(dir: &Path, shares: &[(&str, &Path, bool)]) -> Paths {
 pub(crate) async fn pair(server_paths: Paths, client_paths: Paths) -> (Arc<Files>, Arc<Files>, SocketAddr) {
     let (sid, cid) = (identity(), identity());
     let hub = Hub::new(Approval::Terminal);
-    let core = Arc::new(Mutex::new(ServerCore::new(Screen::single(1920, 1080))));
-    let server = Files::server(server_paths, sid.clone(), hub.clone(), core);
+    let server = Files::server(server_paths, sid.clone(), hub.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let s2 = server.clone();
@@ -54,7 +51,7 @@ pub(crate) async fn pair(server_paths: Paths, client_paths: Paths) -> (Arc<Files
             tokio::spawn(async move {
                 let (purpose, s) = wire::accept(stream, &sid, Duration::from_secs(5)).await.unwrap();
                 assert_eq!(purpose, Purpose::Files);
-                let _ = server.accept(s).await;
+                let _ = server.accept(s, false).await;
             });
         }
     });
@@ -229,26 +226,8 @@ async fn the_server_browses_a_client_through_a_dial_back() {
     let (server, client, _) = pair(machine(&dir.join("s"), &[]), machine(&dir.join("c"), &[("Laptop", &share, true)])).await;
 
     // A fake control link for client "c": messages for it land in `rx`.
-    let Endpoint::Server(core) = &server.endpoint else { unreachable!() };
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let conn = core.lock().unwrap().attach(
-        "c",
-        Screen::single(1920, 1080),
-        ClientSettings { side: Side::Right, speed: 1.0, swap_cmd_ctrl: false },
-        tx,
-    );
-    server.hub.update(|s| {
-        s.clients.push(ClientInfo {
-            conn,
-            name: "c".into(),
-            os: Os::Linux,
-            addr: "127.0.0.1".parse().unwrap(),
-            screen: Screen::single(1920, 1080),
-            side: Side::Right,
-            since: Instant::now(),
-            rtt: Rtt::default(),
-        })
-    });
+    server.attach("c", tx);
     let c2 = client.clone();
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {

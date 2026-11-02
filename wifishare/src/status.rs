@@ -4,10 +4,11 @@
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tokio::sync::oneshot;
 
+use crate::discovery::Beacon;
 use crate::files::Files;
 use crate::geom::{Screen, Side};
 use crate::proto::Os;
@@ -65,6 +66,17 @@ pub enum LinkState {
     },
 }
 
+/// A phone connected to this computer (see `phones`).
+#[derive(Clone, Debug)]
+pub struct PhoneInfo {
+    /// Identifies the link (a reconnect gets a new one).
+    pub link: u64,
+    pub name: String,
+    pub addr: IpAddr,
+    pub since: Instant,
+    pub rtt: Rtt,
+}
+
 /// A server heard on the LAN.
 #[derive(Clone, Debug)]
 pub struct Discovered {
@@ -109,6 +121,7 @@ pub struct Status {
     /// Server: whether this machine's keyboard and mouse are being captured.
     pub capturing: bool,
     pub clients: Vec<ClientInfo>,
+    pub phones: Vec<PhoneInfo>,
     /// Server: the client that has the cursor.
     pub active: Option<String>,
     pub link: LinkState,
@@ -195,6 +208,15 @@ impl Hub {
         *self.state.lock().unwrap() = Status::default();
         self.prompts.lock().unwrap().clear();
         self.notify();
+    }
+
+    /// Lists a machine heard on the LAN; entries not heard for 10 s drop out.
+    pub fn heard(&self, b: &Beacon, addr: SocketAddr) {
+        self.update(|s| {
+            s.discovered.retain(|d| d.key != b.key && d.seen.elapsed() < Duration::from_secs(10));
+            s.discovered.push(Discovered { name: b.name.clone(), addr, key: b.key.clone(), seen: Instant::now() });
+            s.discovered.sort_by(|a, b| a.name.cmp(&b.name));
+        });
     }
 
     pub fn clipboard_event(&self, text: String) {

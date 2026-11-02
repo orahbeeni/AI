@@ -30,6 +30,8 @@ const MAX_FRAME: usize = 65535;
 const TAG_LEN: usize = 16;
 const CHUNK: usize = MAX_FRAME - TAG_LEN - 1;
 const MAX_MESSAGE: usize = 256 * 1024 * 1024;
+/// Per address, when dialling several at once (`connect_any`).
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Purpose {
@@ -145,6 +147,25 @@ fn tune(stream: &TcpStream, purpose: Purpose) {
     let _ = sock.set_tcp_keepalive(&keepalive);
     #[cfg(target_os = "linux")]
     let _ = sock.set_tcp_user_timeout(Some(Duration::from_secs(10)));
+}
+
+/// Dials every candidate at once and keeps the first that turns out to be the machine with `key`.
+pub async fn connect_any(candidates: &[SocketAddr], id: &Identity, key: &[u8], purpose: Purpose) -> Result<Secured> {
+    let mut set = tokio::task::JoinSet::new();
+    for &addr in candidates {
+        let id = id.clone();
+        set.spawn(async move { connect(addr, &id, purpose, CONNECT_TIMEOUT).await });
+    }
+    let mut last_err = anyhow::anyhow!("no candidates");
+    while let Some(r) = set.join_next().await {
+        match r {
+            Ok(Ok(s)) if s.remote_key == key => return Ok(s),
+            Ok(Ok(s)) => last_err = anyhow::anyhow!("{} is a different wifishare machine", s.peer_addr),
+            Ok(Err(e)) => last_err = e,
+            Err(e) => last_err = e.into(),
+        }
+    }
+    Err(last_err)
 }
 
 async fn write_raw(stream: &mut TcpStream, data: &[u8]) -> Result<()> {

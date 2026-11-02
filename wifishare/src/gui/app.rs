@@ -1,5 +1,6 @@
 //! The window's contents.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
@@ -11,9 +12,9 @@ use super::Command;
 use super::files::{self, FilesView};
 use super::layout::{self, DragState, Machine, Placed};
 use crate::autostart;
-use crate::clipnet::human;
 use crate::config::{Config, Identity, Mode, Paths, Peer, Peers, Role};
 use crate::engine::Engine;
+use crate::fsutil::human;
 use crate::geom::{Screen, Side};
 use crate::platform;
 use crate::proto::Os;
@@ -273,11 +274,13 @@ impl App {
                 self.server_overview(ui, st);
                 self.clipboard_card(ui, st);
                 self.sound_card(ui, st);
+                self.phones_card(ui, st);
             }
             Some(Mode::Client) => {
                 self.client_overview(ui, st);
                 self.clipboard_card(ui, st);
                 self.sound_card(ui, st);
+                self.phones_card(ui, st);
             }
         }
     }
@@ -398,12 +401,13 @@ impl App {
 
     fn forget(&mut self, name: &str) {
         let Ok(mut peers) = Peers::load(&self.ctx.paths) else { return };
-        let was_server = peers.peers.iter().any(|p| p.name == name && p.role == Role::Server);
+        // A server is followed, and a phone may still be connected: both need a fresh start.
+        let restart = peers.peers.iter().any(|p| p.name == name && matches!(p.role, Role::Server | Role::Phone));
         peers.peers.retain(|p| p.name != name);
         if peers.save(&self.ctx.paths).is_ok() {
             log::info!("forgot {name}");
             self.refresh_peers(true);
-            if was_server && let Some(mode) = self.mode() {
+            if restart && let Some(mode) = self.mode() {
                 self.engine().start(mode);
             }
         }
@@ -497,6 +501,60 @@ impl App {
         }
     }
 
+    fn phones_card(&mut self, ui: &mut Ui, st: &Status) {
+        let paired: Vec<Peer> = self.peers.iter().filter(|p| p.role == Role::Phone).cloned().collect();
+        let (mut forget, mut browse) = (None, None);
+        card(ui, "Phones", |ui| {
+            if !self.saved.phone.enabled {
+                ui.label(RichText::new("Phone connections are off (Settings).").weak());
+                return;
+            }
+            if paired.is_empty() {
+                ui.label(
+                    RichText::new(format!(
+                        "Install the wifishare app on your Android phone, then pick {} there and compare the codes.",
+                        self.saved.name
+                    ))
+                    .weak(),
+                );
+            }
+            for p in &paired {
+                let live = st.phones.iter().find(|c| c.name == p.name);
+                ui.horizontal(|ui| {
+                    dot(ui, if live.is_some() { GREEN } else { GREY });
+                    ui.label(RichText::new(&p.name).strong());
+                    match live {
+                        Some(l) => {
+                            let ms = l.rtt.get().map(|m| format!("  ·  {m} ms")).unwrap_or_default();
+                            ui.label(RichText::new(format!("{}  ·  for {}{ms}", l.addr, span(l.since.elapsed()))).weak());
+                        }
+                        None => {
+                            ui.label(RichText::new("not connected").weak());
+                        }
+                    }
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.small_button("Forget").clicked() {
+                            forget = Some(p.name.clone());
+                        }
+                        if live.is_some() && ui.small_button("Browse").clicked() {
+                            browse = Some(p.name.clone());
+                        }
+                    });
+                });
+            }
+            if let Some(inbox) = self.saved.phone.inbox_dir() {
+                ui.label(RichText::new(format!("Files shared from a phone go to {}.", inbox.display())).weak());
+            }
+        });
+        if let Some(name) = forget {
+            self.forget(&name);
+        }
+        if let Some(name) = browse {
+            self.files_view.show_peer(&name);
+            self.tab = Tab::Files;
+        }
+    }
+
     fn clipboard_card(&mut self, ui: &mut Ui, st: &Status) {
         card(ui, "Clipboard", |ui| {
             if !self.saved.clipboard.enabled {
@@ -581,6 +639,7 @@ impl App {
             (_, Some(Mode::Server)) => st.clients.iter().map(|c| c.name.clone()).collect(),
             _ => Vec::new(),
         };
+        let peers: Vec<String> = peers.into_iter().chain(st.phones.iter().map(|p| p.name.clone())).collect();
         let cx = files::Ctx { files: self.ctx.hub.files(), cfg: &self.saved, peers: &peers };
         if let Some(cfg) = self.files_view.show(ui, &cx) {
             self.draft.files = cfg.files.clone();
@@ -646,6 +705,19 @@ impl App {
                 ui.end_row();
                 ui.label("Images up to");
                 ui.add(egui::DragValue::new(&mut d.clipboard.max_image_mb).range(1..=4096).suffix(" MB"));
+                ui.end_row();
+            });
+        });
+        section(ui, "Phones", |ui| {
+            let port = d.port.saturating_add(1);
+            ui.checkbox(&mut d.phone.enabled, format!("Let paired phones connect (port {port}) while sharing runs"));
+            egui::Grid::new("phone").num_columns(2).spacing(vec2(16.0, 8.0)).show(ui, |ui| {
+                ui.label("Files sent from a phone go to");
+                let mut inbox = d.phone.inbox.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
+                let default = crate::config::PhoneCfg::default().inbox_dir().map(|p| p.display().to_string()).unwrap_or_default();
+                if ui.add(egui::TextEdit::singleline(&mut inbox).hint_text(default).desired_width(260.0)).changed() {
+                    d.phone.inbox = Some(PathBuf::from(inbox.trim())).filter(|p| !p.as_os_str().is_empty());
+                }
                 ui.end_row();
             });
         });
@@ -805,7 +877,9 @@ fn pair_contents(ui: &mut Ui, p: &PairPrompt, hub: &Hub) {
     let title = if p.incoming { format!("Pair with {}?", p.peer) } else { "Check the code".to_string() };
     ui.heading(title);
     ui.add_space(4.0);
-    if p.incoming {
+    if p.incoming && p.os == Os::Android {
+        ui.label(format!("The phone {} ({}) wants to send files here, see the folders you share, and let you browse it.", p.peer, p.addr));
+    } else if p.incoming {
         ui.label(format!("{} ({}, {}) wants to use this computer's keyboard, mouse and clipboard.", p.peer, os_name(p.os), p.addr));
     } else {
         ui.label(format!("Pairing with {} at {}.", p.peer, p.addr));
@@ -817,7 +891,7 @@ fn pair_contents(ui: &mut Ui, p: &PairPrompt, hub: &Hub) {
     ui.add_space(10.0);
     ui.label(
         RichText::new(if p.incoming {
-            "Allow it only if the other computer shows exactly the same code."
+            "Allow it only if the other device shows exactly the same code."
         } else {
             "The server shows a code too. If it is the same, confirm here and approve it there."
         })
@@ -931,6 +1005,7 @@ fn os_name(os: Os) -> &'static str {
         Os::MacOs => "macOS",
         Os::Windows => "Windows",
         Os::Other => "other",
+        Os::Android => "Android",
     }
 }
 

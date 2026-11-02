@@ -13,7 +13,6 @@ use crate::config::{Config, Identity, Paths, Peers, Role, fingerprint};
 use crate::discovery::{self, Beacon};
 use crate::netwatch;
 use crate::proto::{Hello, Msg, Os, PROTOCOL_VERSION};
-use crate::server::Shared;
 use crate::status::{Approval, Hub, PairPrompt};
 use crate::wire::{self, Purpose, Secured};
 
@@ -64,24 +63,39 @@ async fn ask(hub: &Hub, prompt: PairPrompt, question: &str) -> bool {
                 log::warn!("pairing with {} refused: approve it from a terminal or the wifishare window", prompt.peer);
                 return false;
             }
-            println!("\n  {} '{}' ({:?}, {})", if prompt.incoming { "Pairing request from" } else { "Server" }, prompt.peer, prompt.os, prompt.addr);
+            println!(
+                "\n  {} '{}' ({:?}, {})",
+                if prompt.incoming { "Pairing request from" } else { "Server" },
+                prompt.peer,
+                prompt.os,
+                prompt.addr
+            );
             println!("  Code: {}", prompt.code);
             confirm(question.to_string()).await
         }
     }
 }
 
-/// Server side of a pairing request.
-pub async fn serve(sh: &Shared, mut s: Secured) -> Result<()> {
-    let hello = exchange_hellos(&mut s, &sh.name()).await?;
-    let _turn = sh.pair_lock.lock().await;
+/// Where pairing requests are answered: this machine's name, and one question at a time.
+pub struct Desk<'a> {
+    pub name: String,
+    pub paths: &'a Paths,
+    pub hub: &'a Hub,
+    pub lock: &'a tokio::sync::Mutex<()>,
+}
+
+/// The side that was dialled: a server paired by a client, or a computer paired by a phone
+/// (`role` is what the other machine becomes here).
+pub async fn serve(desk: Desk<'_>, mut s: Secured, role: Role) -> Result<()> {
+    let hello = exchange_hellos(&mut s, &desk.name).await?;
+    let _turn = desk.lock.lock().await;
     log::info!("pairing request from {} ({}), key {}", hello.name, s.peer_addr.ip(), fingerprint(&s.remote_key));
     let prompt = PairPrompt { id: 0, peer: hello.name.clone(), os: hello.os, addr: s.peer_addr.ip(), code: code(&s.hash), incoming: true };
-    let ok = ask(&sh.hub, prompt, "  The other machine shows a code too. Allow it to connect if they match?").await;
+    let ok = ask(desk.hub, prompt, "  The other machine shows a code too. Allow it to connect if they match?").await;
     if finish(&mut s, ok).await? {
-        let mut peers = Peers::load(&sh.paths)?;
-        peers.pin(&hello.name, &s.remote_key, Role::Client);
-        peers.save(&sh.paths)?;
+        let mut peers = Peers::load(desk.paths)?;
+        peers.pin(&hello.name, &s.remote_key, role);
+        peers.save(desk.paths)?;
         log::info!("paired with {}", hello.name);
     } else {
         log::info!("pairing with {} cancelled", hello.name);
@@ -101,7 +115,8 @@ pub async fn run(cfg: Config, paths: Paths, id: Identity, target: Option<String>
     Ok(())
 }
 
-/// Pairs this machine, as a client, with the server at `addr`. Returns the server's name.
+/// Pairs this machine, as a client (or phone), with the server (or computer) at `addr`. Returns
+/// its name.
 pub async fn pair_with(my_name: &str, paths: &Paths, id: &Identity, addr: SocketAddr, hub: &Hub) -> Result<String> {
     let mut s = wire::connect(addr, id, Purpose::Pair, Duration::from_secs(5)).await.context("is wifishare running as a server there?")?;
     let hello = exchange_hellos(&mut s, my_name).await?;
@@ -171,7 +186,7 @@ async fn discover(port: u16) -> Result<SocketAddr> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop"))]
 mod tests {
     use std::sync::Arc;
 
