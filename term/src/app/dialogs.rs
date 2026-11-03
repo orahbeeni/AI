@@ -551,13 +551,14 @@ impl App {
                         ui.label(RichText::new(t).weak().size(12.0));
                     };
                     ui.heading("Alerts");
-                    ui.checkbox(&mut d.desktop_notifications, "Desktop notifications (and taskbar attention) when the window is in the background");
+                    ui.checkbox(&mut d.desktop_notifications, "Desktop notifications when the window is in the background");
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut d.notify_long_commands, "Alert when a command that ran for at least");
                         ui.add(egui::DragValue::new(&mut d.long_command_secs).range(1..=3600).suffix(" s"));
                         ui.label("ends");
                     });
                     ui.checkbox(&mut d.notify_when_focused, "Alert even while I am looking at that terminal");
+                    ui.checkbox(&mut d.taskbar_attention, "Make the taskbar icon shake or flash until I come back to the window");
                     let ctx = ui.ctx().clone();
                     ui.horizontal(|ui| {
                         if ui.button("Send a test notification").on_hover_text("Sent after 5 seconds, so you can switch to another window first").clicked() {

@@ -457,6 +457,8 @@ pub struct Settings {
     pub long_command_secs: u32,
     /// Also notify while looking at the terminal.
     pub notify_when_focused: bool,
+    /// Make the taskbar / dock icon call for attention (shake, flash) when an alert fires out of sight.
+    pub taskbar_attention: bool,
     /// Play a ping whenever an alert is raised.
     pub alert_sound: bool,
     /// A sound file to play instead of the system's ping (wav, ogg, mp3 … depending on the OS's player).
@@ -526,6 +528,7 @@ impl Default for Settings {
             notify_long_commands: true,
             long_command_secs: 10,
             notify_when_focused: false,
+            taskbar_attention: true,
             alert_sound: false,
             alert_sound_file: String::new(),
             command_marks: true,

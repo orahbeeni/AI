@@ -106,12 +106,12 @@ pub fn frame(ctx: &egui::Context) {
     };
     if gap.is_some_and(|g| g > Duration::from_secs(300)) {
         log(&format!("frame after {} s without one", gap.unwrap().as_secs()));
-        DETAIL.store(12, Ordering::Relaxed);
+        DETAIL.store(3, Ordering::Relaxed);
     }
     let left = DETAIL.load(Ordering::Relaxed);
     if left > 0 {
         DETAIL.store(left - 1, Ordering::Relaxed);
-        detail(&format!("  frame {}", 13 - left));
+        detail(&format!("  frame {}", 4 - left));
     }
 }
 

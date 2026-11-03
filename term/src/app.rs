@@ -115,6 +115,8 @@ pub struct App {
     blink_start: Instant,
     toasts: Vec<Toast>,
     last_ping: Option<Instant>,
+    /// The taskbar was asked to call for attention and has not been told to stop yet.
+    attention_asked: bool,
     window_focused: bool,
     last_autosave: Instant,
     /// Rectangles of the tabs and the new-tab button from the last frame, for dropping a terminal on them.
@@ -174,6 +176,7 @@ impl App {
             blink_start: Instant::now(),
             toasts: Vec::new(),
             last_ping: None,
+            attention_asked: false,
             window_focused: true,
             last_autosave: Instant::now(),
             tab_rects: Vec::new(),
@@ -1314,6 +1317,11 @@ impl App {
             self.set_clipboard(&t, false);
         }
         self.window_focused = self.ctx.input(|i| i.viewport().focused).unwrap_or(true);
+        // Coming back to the window ends the call for attention; on X11 it would otherwise stay set (the dock keeps shaking).
+        if self.window_focused && self.attention_asked {
+            self.attention_asked = false;
+            self.ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Reset));
+        }
         self.watch_panes();
         self.autosave();
         for (i, tab) in self.tabs.iter_mut().enumerate() {
@@ -1457,6 +1465,7 @@ impl App {
         if looking && !self.s.notify_when_focused {
             return;
         }
+        crate::diag::log(&format!("alert in terminal {id}: {title} | {body}"));
         if let Some(p) = self.panes.get_mut(&id) {
             p.alert = true;
         }
@@ -1468,8 +1477,9 @@ impl App {
         if self.window_focused {
             self.toasts.push(Toast { pane: id, title: title.clone(), body: body.clone(), until: Instant::now() + Duration::from_secs(12) });
             self.toasts.drain(..self.toasts.len().saturating_sub(4));
-        } else {
+        } else if self.s.taskbar_attention {
             self.ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational));
+            self.attention_asked = true;
         }
         if self.s.desktop_notifications && (!self.window_focused || self.s.notify_when_focused) {
             notify::send(&title, &body);
