@@ -1,0 +1,15 @@
+{
+  "id": "unk_dc1f6a40122d4428",
+  "revision": 2,
+  "question": "Which features have users actually requested most over the years? (No target or forum evidence in the workspace; list is built from general knowledge: reusable components, master pages, dark mode, layers panel, clickable HTML/SVG export, flow map, comments, version history, AI generation, modern device frames.)",
+  "severity": "medium",
+  "domain": "scope",
+  "status": "open",
+  "probes": [
+    "Ask the person which missing features matter most to them",
+    "Capture the vendor's public feature-request / roadmap pages into checks/"
+  ],
+  "evidence_for": [],
+  "evidence_against": [],
+  "resolution": "Still open (estimated, no evidence). Built from general knowledge: reusable components that update everywhere, template/master screens, layers panel with hide/lock, dark-mode screens and dark app theme, clean vs sketch look, smart alignment guides and grid, clickable present mode, flow map, clickable HTML prototype + SVG/PNG export, version history, screen notes and numbered callouts, quick add, AI connection (MCP), 15 modern device frames and ~120 parts. The person should confirm priorities."
+}

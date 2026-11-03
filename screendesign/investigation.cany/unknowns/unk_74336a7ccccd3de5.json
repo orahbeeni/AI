@@ -1,0 +1,14 @@
+{
+  "id": "unk_74336a7ccccd3de5",
+  "revision": 2,
+  "question": "What does 'MCP' mean for the person: an MCP server built into the app so AI assistants can create/edit screens (assumed), or something else?",
+  "severity": "medium",
+  "domain": "scope",
+  "status": "resolved",
+  "probes": [
+    "Ask the person how they want to use MCP"
+  ],
+  "evidence_for": [],
+  "evidence_against": [],
+  "resolution": "Person delegated decisions; chose a built-in MCP server (stdio) that lets AI assistants list/create/edit screens and controls in the same project file, render screens to PNG, with the open app reloading live."
+}

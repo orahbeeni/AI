@@ -1,0 +1,12 @@
+/Users/omar/Documents/private/dev/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/deps/unicode_general_category-7f9e2341349ed43e.d: /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-general-category-1.1.0/src/lib.rs /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-general-category-1.1.0/src/category.rs /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-general-category-1.1.0/src/tables.rs /Users/omar/Documents/private/dev/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/build/unicode-general-category-7592b4da08745de4/out/category.rs
+
+/Users/omar/Documents/private/dev/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/deps/libunicode_general_category-7f9e2341349ed43e.rlib: /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-general-category-1.1.0/src/lib.rs /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-general-category-1.1.0/src/category.rs /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-general-category-1.1.0/src/tables.rs /Users/omar/Documents/private/dev/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/build/unicode-general-category-7592b4da08745de4/out/category.rs
+
+/Users/omar/Documents/private/dev/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/deps/libunicode_general_category-7f9e2341349ed43e.rmeta: /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-general-category-1.1.0/src/lib.rs /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-general-category-1.1.0/src/category.rs /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-general-category-1.1.0/src/tables.rs /Users/omar/Documents/private/dev/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/build/unicode-general-category-7592b4da08745de4/out/category.rs
+
+/Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-general-category-1.1.0/src/lib.rs:
+/Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-general-category-1.1.0/src/category.rs:
+/Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/unicode-general-category-1.1.0/src/tables.rs:
+/Users/omar/Documents/private/dev/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/build/unicode-general-category-7592b4da08745de4/out/category.rs:
+
+# env-dep:OUT_DIR=/Users/omar/Documents/private/dev/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/build/unicode-general-category-7592b4da08745de4/out

@@ -1,0 +1,14 @@
+{
+  "id": "unk_ec983ffd25a4f34b",
+  "revision": 2,
+  "question": "Exact look of the original (control library contents, hand-drawn font, layout of panels) — clean room with no target, built from general knowledge and estimated.",
+  "severity": "low",
+  "domain": "visual",
+  "status": "open",
+  "probes": [
+    "Capture public product screenshots into checks/ for comparison"
+  ],
+  "evidence_for": [],
+  "evidence_against": [],
+  "resolution": "Still open (estimated). Clean room with no target: look built from general knowledge of sketch-style wireframe tools — top parts strip by category, screens/layers on the left, properties on the right, wobbly hand-drawn lines with a comic-style system font. No brand assets or names copied; the app is called Sketchframe."
+}

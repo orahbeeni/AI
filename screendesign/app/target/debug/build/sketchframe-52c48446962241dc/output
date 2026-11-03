@@ -1,0 +1,2 @@
+cargo:rerun-if-changed=windows/sketchframe.rc
+cargo:rerun-if-changed=windows/icon.ico

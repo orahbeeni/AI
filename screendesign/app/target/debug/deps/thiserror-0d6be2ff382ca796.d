@@ -1,0 +1,14 @@
+/Users/omar/Documents/private/dev/AI/screendesign/app/target/debug/deps/thiserror-0d6be2ff382ca796.d: /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/lib.rs /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/aserror.rs /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/display.rs /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/var.rs /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/private.rs /Users/omar/Documents/private/dev/AI/screendesign/app/target/debug/build/thiserror-8d67db7263b33456/out/private.rs
+
+/Users/omar/Documents/private/dev/AI/screendesign/app/target/debug/deps/libthiserror-0d6be2ff382ca796.rlib: /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/lib.rs /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/aserror.rs /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/display.rs /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/var.rs /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/private.rs /Users/omar/Documents/private/dev/AI/screendesign/app/target/debug/build/thiserror-8d67db7263b33456/out/private.rs
+
+/Users/omar/Documents/private/dev/AI/screendesign/app/target/debug/deps/libthiserror-0d6be2ff382ca796.rmeta: /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/lib.rs /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/aserror.rs /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/display.rs /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/var.rs /Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/private.rs /Users/omar/Documents/private/dev/AI/screendesign/app/target/debug/build/thiserror-8d67db7263b33456/out/private.rs
+
+/Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/lib.rs:
+/Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/aserror.rs:
+/Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/display.rs:
+/Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/var.rs:
+/Users/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/private.rs:
+/Users/omar/Documents/private/dev/AI/screendesign/app/target/debug/build/thiserror-8d67db7263b33456/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/omar/Documents/private/dev/AI/screendesign/app/target/debug/build/thiserror-8d67db7263b33456/out

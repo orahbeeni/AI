@@ -1,0 +1,24 @@
+[package]
+name = "sketchframe"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = "0.36.2"
+rfd = "0.17.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+png = "0.18.1"
+dirs = "6"
+resvg = { version = "0.47.0", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 4
