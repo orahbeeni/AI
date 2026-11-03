@@ -1,0 +1,14 @@
+/home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/deps/serde-3c99276b1af1ebff.d: /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/build/serde-3c8af6010ee90b31/out/private.rs
+
+/home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/deps/libserde-3c99276b1af1ebff.rlib: /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/build/serde-3c8af6010ee90b31/out/private.rs
+
+/home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/deps/libserde-3c99276b1af1ebff.rmeta: /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/build/serde-3c8af6010ee90b31/out/private.rs
+
+/home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs:
+/home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs:
+/home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs:
+/home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs:
+/home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs:
+/home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/build/serde-3c8af6010ee90b31/out/private.rs:
+
+# env-dep:OUT_DIR=/home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/build/serde-3c8af6010ee90b31/out

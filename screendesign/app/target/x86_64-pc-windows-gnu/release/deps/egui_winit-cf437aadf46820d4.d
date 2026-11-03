@@ -1,0 +1,11 @@
+/home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/deps/egui_winit-cf437aadf46820d4.d: /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/lib.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/clipboard.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/dropped_file.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/safe_area.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/window_settings.rs
+
+/home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/deps/libegui_winit-cf437aadf46820d4.rlib: /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/lib.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/clipboard.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/dropped_file.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/safe_area.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/window_settings.rs
+
+/home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/deps/libegui_winit-cf437aadf46820d4.rmeta: /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/lib.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/clipboard.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/dropped_file.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/safe_area.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/window_settings.rs
+
+/home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/lib.rs:
+/home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/clipboard.rs:
+/home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/dropped_file.rs:
+/home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/safe_area.rs:
+/home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-winit-0.36.2/src/window_settings.rs:

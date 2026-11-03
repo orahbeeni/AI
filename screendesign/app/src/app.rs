@@ -68,6 +68,14 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext, file: Option<PathBuf>, shot: Option<PathBuf>) -> App {
         render::install_fonts(&cc.egui_ctx);
+        if let Some(rs) = &cc.wgpu_render_state {
+            let i = rs.adapter.get_info();
+            crate::log_startup(&format!("wgpu {:?}: {} ({:?}, driver {} {})", i.backend, i.name, i.device_type, i.driver, i.driver_info));
+        } else if let Some(gl) = &cc.gl {
+            use eframe::glow::HasContext;
+            let (v, r) = unsafe { (gl.get_parameter_string(eframe::glow::VERSION), gl.get_parameter_string(eframe::glow::RENDERER)) };
+            crate::log_startup(&format!("glow: {r} (OpenGL {v})"));
+        }
         let (proj, path, named, status) = if shot.is_some() {
             (model::sample(), std::env::temp_dir().join("sketchframe-shot.json"), false, "Ready".to_string())
         } else if let Some(f) = file {

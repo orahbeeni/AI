@@ -1,0 +1,3 @@
+cargo:rerun-if-changed=windows/sketchframe.rc
+cargo:rerun-if-changed=windows/icon.ico
+cargo:rustc-link-arg-bins=/home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/build/sketchframe-394900c6f2a568fe/out/sketchframe-res.o

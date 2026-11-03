@@ -1,0 +1,14 @@
+/home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/deps/thiserror-07a52bbd453f3791.d: /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/lib.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/aserror.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/display.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/var.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/private.rs /home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/build/thiserror-721188b68eed3a46/out/private.rs
+
+/home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/deps/libthiserror-07a52bbd453f3791.rlib: /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/lib.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/aserror.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/display.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/var.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/private.rs /home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/build/thiserror-721188b68eed3a46/out/private.rs
+
+/home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/deps/libthiserror-07a52bbd453f3791.rmeta: /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/lib.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/aserror.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/display.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/var.rs /home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/private.rs /home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/build/thiserror-721188b68eed3a46/out/private.rs
+
+/home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/lib.rs:
+/home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/aserror.rs:
+/home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/display.rs:
+/home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/var.rs:
+/home/omar/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/private.rs:
+/home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/build/thiserror-721188b68eed3a46/out/private.rs:
+
+# env-dep:OUT_DIR=/home/omar/work/AI/screendesign/app/target/x86_64-pc-windows-gnu/release/build/thiserror-721188b68eed3a46/out

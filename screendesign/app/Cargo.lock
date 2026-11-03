@@ -835,6 +835,7 @@ dependencies = [
  "egui-wgpu",
  "egui-winit",
  "egui_glow",
+ "glow",
  "glutin",
  "glutin-winit",
  "image",
@@ -2969,7 +2970,7 @@ checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
 
 [[package]]
 name = "sketchframe"
-version = "0.1.0"
+version = "0.1.4"
 dependencies = [
  "dirs",
  "eframe",
