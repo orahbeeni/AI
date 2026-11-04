@@ -151,6 +151,16 @@ pub fn build_args(o: &JobOptions, ctx: &ArgContext) -> Vec<String> {
     }
     if o.live_from_start {
         a.push("--live-from-start".into());
+    } else if o.download_sections.is_empty() {
+        // Live HLS is fetched by one ffmpeg with separate video and audio
+        // inputs. Each playlist starts at its own live edge (often one segment,
+        // ~5 s, apart) and ffmpeg rebases every input to 0, which shifts the
+        // audio against the video. Keeping the original timestamps preserves
+        // the real offset; make_zero then shifts both streams together.
+        // (Not with --download-sections: its -t would count from the copied
+        // timestamps.)
+        push_kv(&mut a, "--downloader-args", "ffmpeg_i:-copyts");
+        push_kv(&mut a, "--downloader-args", "ffmpeg_o:-avoid_negative_ts make_zero");
     }
 
     // Format
@@ -425,5 +435,13 @@ mod tests {
         assert_eq!(sanitize_component("My Channel: Live?"), "My_Channel__Live_");
         assert_eq!(sanitize_component("..."), "default");
         assert_eq!(sanitize_component("a/b\\c"), "a_b_c");
+    }
+
+    #[test]
+    fn keeps_av_offset_for_ffmpeg_downloads_except_sections_and_from_start() {
+        let has = |o: &JobOptions| build_args(o, &ctx()).contains(&"ffmpeg_i:-copyts".to_string());
+        assert!(has(&JobOptions { url: "u".into(), ..Default::default() }));
+        assert!(!has(&JobOptions { url: "u".into(), live_from_start: true, ..Default::default() }));
+        assert!(!has(&JobOptions { url: "u".into(), download_sections: vec!["*1:00-2:00".into()], ..Default::default() }));
     }
 }
