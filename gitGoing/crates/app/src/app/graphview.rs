@@ -96,8 +96,10 @@ pub(super) fn history_view(
             egui::TextEdit::singleline(&mut l.search.text)
                 .id(search_id)
                 .hint_text("Search message, author or SHA")
+                .margin(crate::icons::FIELD_MARGIN)
                 .desired_width(280.0),
         );
+        crate::icons::clear_button(ui, &r, &mut l.search.text);
         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             nav = if ui.input(|i| i.modifiers.shift) { -1 } else { 1 };
             r.request_focus();
@@ -120,9 +122,6 @@ pub(super) fn history_view(
                 if ui.small_button("Next").clicked() {
                     nav = 1;
                 }
-            }
-            if ui.small_button("Clear").clicked() {
-                l.search.text.clear();
             }
         }
     });

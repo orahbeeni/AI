@@ -6,7 +6,7 @@ use crate::icons::{self, Icon};
 use eframe::egui::{self, Color32, Pos2, Rect, Response, Sense, Stroke, Vec2};
 use gitgoing_core::diff::ChangeKind;
 
-const ROW_H: f32 = 26.0;
+pub const ROW_H: f32 = 26.0;
 
 pub struct FileRow {
     pub rect: Rect,

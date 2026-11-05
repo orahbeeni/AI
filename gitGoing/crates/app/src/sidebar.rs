@@ -169,11 +169,13 @@ impl Sidebar {
             });
         });
         ui.add_space(2.0);
-        ui.add(
+        let field = ui.add(
             egui::TextEdit::singleline(&mut self.filter)
                 .hint_text("Filter")
+                .margin(crate::icons::FIELD_MARGIN)
                 .desired_width(f32::INFINITY),
         );
+        crate::icons::clear_button(ui, &field, &mut self.filter);
         ui.add_space(4.0);
         let head_full = head.map(|h| format!("refs/heads/{h}"));
         let _ = &head_full;

@@ -440,6 +440,10 @@ pub struct RepoTab {
     push_rejected: bool,
     /// The status-bar "Force push…" button was clicked.
     force_requested: bool,
+    /// A rejected push, explained in a window with the ways forward (the git message).
+    push_dlg: Option<String>,
+    /// Set by that window: pull now (the pull mode is a setting only the caller has).
+    pull_requested: bool,
     /// A squash/rebase plan being computed in the background.
     plan_rx: Option<Receiver<Result<PlanResult, String>>>,
     /// Set by a checkout that failed because uncommitted changes were in the way.
@@ -512,6 +516,8 @@ impl RepoTab {
             force_dlg: None,
             push_rejected: false,
             force_requested: false,
+            push_dlg: None,
+            pull_requested: false,
             plan_rx: None,
             blocked: Arc::new(AtomicBool::new(false)),
             retry: None,
@@ -805,7 +811,8 @@ impl RepoTab {
 
     /// Say that the operation that just finished worked: a toast for the network
     /// operations, a status-bar line for everything else.
-    fn report_done(&mut self, ctx: &egui::Context) {
+    /// `target` is the branch the operation was about, when it wasn't the checked-out one.
+    fn report_done(&mut self, ctx: &egui::Context, target: Option<String>) {
         let moved = self.refs_moved.load(Ordering::Relaxed);
         let info = self.repo.as_ref().and_then(|l| l.info.as_ref());
         let branch = info.and_then(|i| i.head_branch.clone());
@@ -813,6 +820,11 @@ impl RepoTab {
         let (title, detail) = match (self.op_label, moved) {
             ("Fetch", true) => ("Fetched Successfully", None),
             ("Fetch", false) => ("Already Up-to-Date", Some("Nothing new to fetch.".to_owned())),
+            ("Pull", true) if target.is_some() => ("Pulled Successfully", target.map(|t| format!("{t} was fast-forwarded to its upstream."))),
+            ("Pull", false) if target.is_some() => (
+                "Already Up-to-Date",
+                target.map(|t| format!("{t} has nothing new to pull from its upstream.")),
+            ),
             ("Pull", true) => ("Pulled Successfully", None),
             ("Pull", false) => (
                 "Already Up-to-Date",
@@ -837,7 +849,7 @@ impl RepoTab {
         let Some(rx) = &self.op_rx else { return };
         if let Ok(r) = rx.try_recv() {
             self.op_rx = None;
-            self.op_branch = None;
+            let target = self.op_branch.take();
             let pending = self.pending.take();
             match r {
                 Ok(entry) => {
@@ -857,7 +869,7 @@ impl RepoTab {
                             }
                         }
                     }
-                    self.report_done(ctx);
+                    self.report_done(ctx, target);
                 }
                 Err(e) => {
                     self.forget_undo = false;
@@ -878,6 +890,8 @@ impl RepoTab {
                         self.toasts.push(ctx, "Already Up-to-Date", Some("No merge necessary.".to_owned()));
                         self.reload(ctx);
                         return;
+                    } else if self.push_rejected {
+                        self.push_dlg = Some(e.clone());
                     } else {
                         // Say so in a window: a red line in the status bar is easy to miss.
                         let title = if e.contains(" stopped") {
@@ -1015,6 +1029,9 @@ impl RepoTab {
         let toast_bottom = ctx.available_rect().bottom();
         if std::mem::take(&mut self.force_requested) {
             self.open_force_push();
+        }
+        if std::mem::take(&mut self.pull_requested) {
+            self.start_pull(ctx, settings.pull_mode);
         }
         let mut branch_act = None;
         let mut multi_action = None;
@@ -1175,6 +1192,9 @@ impl RepoTab {
                     self.run_op(ctx, "Fetch", move |p| remotes::fetch_remote(p, &n))
                 }
                 Some(SidebarAction::FetchBranch(n, local)) => {
+                    if local && self.op_rx.is_none() {
+                        self.op_branch = Some(n.clone()); // the row spins while it runs
+                    }
                     self.run_op(ctx, "Fetch", move |p| remotes::fetch_branch(p, &n, local))
                 }
                 Some(SidebarAction::PullBranch(n)) => {
@@ -1182,6 +1202,9 @@ impl RepoTab {
                     if head.as_deref() == Some(n.as_str()) {
                         self.start_pull(ctx, settings.pull_mode);
                     } else {
+                        if self.op_rx.is_none() {
+                            self.op_branch = Some(n.clone());
+                        }
                         self.run_op(ctx, "Pull", move |p| remotes::pull_other_branch(p, &n));
                     }
                 }
@@ -1646,16 +1669,40 @@ impl App {
                 let mut active_rect = None;
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 3.0;
+                    let mut rects = Vec::new();
+                    let mut dragged = None;
                     for (i, t) in self.tabs.iter().enumerate() {
                         let path = t.repo_path().unwrap_or_else(|| t.path.clone());
-                        let (act, rect) = icons::tab_button(ui, &t.title(), &path.display().to_string(), i == self.active);
+                        let id = egui::Id::new(("repo_tab", t.id));
+                        let (act, rect, drag_x) = icons::tab_button(ui, id, &t.title(), &path.display().to_string(), i == self.active);
+                        rects.push(rect);
                         if i == self.active {
                             active_rect = Some(rect);
+                        }
+                        if let Some(x) = drag_x {
+                            dragged = Some((i, x));
                         }
                         match act {
                             icons::TabAction::Select => self.active = i,
                             icons::TabAction::Close => close = Some(i),
                             icons::TabAction::None => {}
+                        }
+                    }
+                    // Drag a tab sideways: it swaps places with a neighbour once the pointer
+                    // passes that neighbour's middle, and stays the selected tab.
+                    if let Some((i, x)) = dragged {
+                        self.active = i;
+                        let to = if i > 0 && x < rects[i - 1].center().x {
+                            i - 1
+                        } else if i + 1 < rects.len() && x > rects[i + 1].center().x {
+                            i + 1
+                        } else {
+                            i
+                        };
+                        if to != i {
+                            self.tabs.swap(i, to);
+                            self.active = to;
+                            ctx.request_repaint();
                         }
                     }
                     ui.menu_button(egui::RichText::new(" + ").size(17.0), |ui| {

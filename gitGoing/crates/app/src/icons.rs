@@ -423,19 +423,26 @@ pub enum TabAction {
 
 /// One tab in the tab bar: rounded top corners, a branch icon, the title, and a
 /// close button. The active tab is lifted to the toolbar colour with an accent line.
-/// Returns what the user did, and the tab's rectangle.
-pub fn tab_button(ui: &mut egui::Ui, title: &str, tooltip: &str, active: bool) -> (TabAction, Rect) {
+/// Returns what the user did, the tab's rectangle, and the x of the pointer while the tab
+/// is being dragged. `id` must belong to the tab, not to its place in the bar, so a drag
+/// keeps following the same tab when tabs are reordered under it.
+pub fn tab_button(ui: &mut egui::Ui, id: egui::Id, title: &str, tooltip: &str, active: bool) -> (TabAction, Rect, Option<f32>) {
     let font = egui::TextStyle::Body.resolve(ui.style());
     let galley = ui.painter().layout_no_wrap(title.to_owned(), font.clone(), ui.visuals().text_color());
     let width = (galley.size().x + 22.0 + 30.0 + 14.0).clamp(130.0, 260.0);
-    let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, 32.0), Sense::click());
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 32.0), Sense::hover());
+    let resp = ui.interact(rect, id, Sense::click_and_drag());
     let close_rect = Rect::from_center_size(Pos2::new(rect.right() - 16.0, rect.center().y + 1.0), Vec2::splat(18.0));
     let close = ui.interact(close_rect, resp.id.with("close"), Sense::click());
 
     let v = ui.visuals();
     let radius = egui::CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 };
     let p = ui.painter_at(rect.expand2(Vec2::new(0.0, 2.0)));
-    let hovered = resp.hovered() || close.hovered();
+    let dragging = resp.dragged() && !close.hovered();
+    if dragging {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+    let hovered = resp.hovered() || close.hovered() || dragging;
     let fill = if active {
         v.panel_fill
     } else if hovered {
@@ -484,5 +491,35 @@ pub fn tab_button(ui: &mut egui::Ui, title: &str, tooltip: &str, active: bool) -
     } else {
         TabAction::None
     };
-    (action, rect)
+    (action, rect, dragging.then(|| resp.interact_pointer_pos().map(|p| p.x)).flatten())
 }
+
+/// A text field with a clear (x) button inside its right edge, shown while there is text.
+/// Returns whether the text was cleared. Give the field `.margin(FIELD_MARGIN)` so typing
+/// doesn't run under the button.
+pub fn clear_button(ui: &mut egui::Ui, field: &Response, text: &mut String) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+    let rect = Rect::from_center_size(Pos2::new(field.rect.right() - 13.0, field.rect.center().y), Vec2::splat(16.0));
+    let resp = ui.interact(rect, field.id.with("clear"), Sense::click()).on_hover_text("Clear");
+    let v = ui.visuals();
+    let col = if resp.hovered() { v.strong_text_color() } else { v.weak_text_color() };
+    let c = rect.center();
+    let p = ui.painter();
+    if resp.hovered() {
+        p.circle_filled(c, 8.0, v.widgets.hovered.weak_bg_fill);
+    }
+    let stroke = Stroke::new(1.4_f32, col);
+    p.line_segment([c + Vec2::new(-3.0, -3.0), c + Vec2::new(3.0, 3.0)], stroke);
+    p.line_segment([c + Vec2::new(-3.0, 3.0), c + Vec2::new(3.0, -3.0)], stroke);
+    let cleared = resp.clicked();
+    if cleared {
+        text.clear();
+        field.request_focus();
+    }
+    cleared
+}
+
+/// Margin for a text field that shows [`clear_button`].
+pub const FIELD_MARGIN: egui::Margin = egui::Margin { left: 4, right: 24, top: 2, bottom: 2 };

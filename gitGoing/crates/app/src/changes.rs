@@ -500,6 +500,19 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, c: &mut Changes) -> bool {
                 const HEADER_H: f32 = 28.0;
                 const DIVIDER_H: f32 = 8.0;
                 let both = c.unstaged_open && c.staged_open;
+                // Files that still conflict come first, in a list of their own, so they are in
+                // reach at once and the ordinary changes below are the ones git has no problem with.
+                let (conflicts, rest): (Vec<StatusEntry>, Vec<StatusEntry>) =
+                    s.unstaged.iter().cloned().partition(|e| e.kind == ChangeKind::Conflicted);
+                if !conflicts.is_empty() {
+                    let pitch = filerows::ROW_H + ui.spacing().item_spacing.y;
+                    let conflicts_h = (conflicts.len() as f32 * pitch + 2.0).min(ui.available_height() * 0.4);
+                    filerows::section_header(ui, "Conflicts", conflicts.len(), None, None, None, None);
+                    let list = FileList { title: "Conflicts", entries: &conflicts, staged: false };
+                    // Always the full path: with several conflicts the folder tells them apart.
+                    list_body(ui, conflicts_h, list, sel, &HashSet::new(), busy, ViewMode::Path, &mut act);
+                    ui.add_space(4.0);
+                }
                 let body_total = (ui.available_height() - 2.0 * HEADER_H - if both { DIVIDER_H } else { 0.0 }).max(0.0);
                 let (h_unstaged, h_staged) = section_heights(body_total, c.unstaged_open, c.staged_open, c.split);
 
@@ -510,7 +523,7 @@ pub fn panel(ctx: &egui::Context, ui: &mut egui::Ui, c: &mut Changes) -> bool {
                     sel.iter().filter(|(_, st)| *st == staged).map(|(p, _)| p.clone()).collect()
                 };
                 let (p_un, p_st) = (if m_un.is_empty() { one(false) } else { m_un.clone() }, if m_st.is_empty() { one(true) } else { m_st.clone() });
-                let list = FileList { title: "Unstaged", entries: &s.unstaged, staged: false };
+                let list = FileList { title: "Unstaged", entries: &rest, staged: false };
                 if section_head(ui, &list, &p_un, Some(c.unstaged_open), busy, &mut act) {
                     c.unstaged_open = !c.unstaged_open;
                 }
@@ -879,7 +892,7 @@ fn list_body(
 ) {
     ui.allocate_ui(Vec2::new(ui.available_width(), height), |ui| {
         egui::ScrollArea::vertical()
-            .id_salt(("changes_list", list.staged))
+            .id_salt(("changes_list", list.title, list.staged))
             .auto_shrink(false)
             .show(ui, |ui| file_rows(ui, list, selected, multi, busy, mode, act));
     });

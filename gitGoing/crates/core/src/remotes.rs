@@ -95,8 +95,9 @@ pub fn fetch_branch(repo_path: &Path, name: &str, local: bool) -> Result<(), Str
 }
 
 /// Bring local branch `name` up to its upstream without checking it out: fetch the
-/// upstream branch straight into it. Git only allows this as a fast-forward, so a
-/// branch that has diverged is refused and left untouched.
+/// upstream branch, then fast-forward `name` to it. Only a fast-forward is ever done:
+/// a branch that has diverged is refused and left untouched, and one that is merely
+/// ahead of (or level with) its upstream has nothing to pull and is left as it is.
 pub fn pull_other_branch(repo_path: &Path, name: &str) -> Result<(), String> {
     let repo = Repository::discover(repo_path).map_err(|e| e.message().to_owned())?;
     let b = repo.find_branch(name, BranchType::Local).map_err(|e| e.message().to_owned())?;
@@ -106,14 +107,31 @@ pub fn pull_other_branch(repo_path: &Path, name: &str) -> Result<(), String> {
     gitcmd::plain_name(&remote)?;
     gitcmd::plain_name(&branch)?;
     gitcmd::plain_name(name)?;
-    let spec = format!("refs/heads/{branch}:refs/heads/{name}");
-    gitcmd::run(Some(repo_path), &["fetch", &remote, &spec]).map(|_| ()).map_err(|e| {
-        if e.to_lowercase().contains("non-fast-forward") || e.contains("rejected") {
-            format!("'{name}' has diverged from {up_name}, so it can't be fast-forwarded. Check it out and pull to merge or rebase.")
-        } else {
-            e
-        }
-    })
+    drop((b, up));
+
+    // Fetch first so the upstream is what the remote has now, not what it had at the last fetch.
+    let tracking = format!("refs/remotes/{remote}/{branch}");
+    gitcmd::run(Some(repo_path), &["fetch", &remote, &format!("+refs/heads/{branch}:{tracking}")])?;
+
+    let local = repo.find_branch(name, BranchType::Local).map_err(|e| e.message().to_owned())?;
+    let local_id = local.get().peel_to_commit().map_err(|e| e.message().to_owned())?.id();
+    let up_id = repo
+        .find_reference(&tracking)
+        .and_then(|r| r.peel_to_commit())
+        .map_err(|e| e.message().to_owned())?
+        .id();
+    let (ahead, behind) = repo.graph_ahead_behind(local_id, up_id).map_err(|e| e.message().to_owned())?;
+    if behind == 0 {
+        return Ok(()); // level with, or ahead of, the upstream: nothing to bring in
+    }
+    if ahead > 0 {
+        return Err(format!(
+            "'{name}' has diverged from {up_name} ({ahead} ahead, {behind} behind), so it can't be fast-forwarded. Check it out and pull to merge or rebase."
+        ));
+    }
+    // A fetch from this very repository moves the branch the way `git pull --ff-only` would,
+    // and git itself refuses if the branch is checked out (here or in another worktree).
+    gitcmd::run(Some(repo_path), &["fetch", ".", &format!("{tracking}:refs/heads/{name}")]).map(|_| ())
 }
 
 /// Split `origin/feature/x` into (`origin`, `feature/x`), allowing remote names with slashes.
@@ -208,5 +226,69 @@ mod tests {
 
         remove(&p, "up").unwrap();
         assert!(list(&Repository::open(&p).unwrap()).is_empty());
+    }
+
+    #[test]
+    fn pulling_another_branch_only_fast_forwards() {
+        if gitcmd::run(None, &["--version"]).is_err() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let bare = tmp.path().join("o.git");
+        let g = |dir: &Path, args: &[&str]| gitcmd::run(Some(dir), args).unwrap();
+        gitcmd::run(None, &["init", "-q", "--bare", bare.to_str().unwrap()]).unwrap();
+        let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
+        gitcmd::run(None, &["clone", "-q", bare.to_str().unwrap(), a.to_str().unwrap()]).unwrap();
+        for d in [&a] {
+            g(d, &["config", "user.email", "t@example.com"]);
+            g(d, &["config", "user.name", "T"]);
+        }
+        g(&a, &["checkout", "-q", "-b", "main"]);
+        let commit = |d: &Path, f: &str| {
+            std::fs::write(d.join(f), f).unwrap();
+            g(d, &["add", "."]);
+            g(d, &["commit", "-q", "-m", f]);
+        };
+        commit(&a, "one");
+        g(&a, &["push", "-q", "-u", "origin", "main"]);
+        g(&a, &["branch", "other"]);
+        g(&a, &["push", "-q", "-u", "origin", "other"]);
+        gitcmd::run(None, &["clone", "-q", bare.to_str().unwrap(), b.to_str().unwrap()]).unwrap();
+        g(&b, &["config", "user.email", "t@example.com"]);
+        g(&b, &["config", "user.name", "T"]);
+        g(&b, &["checkout", "-q", "other"]);
+        let tip = |d: &Path, n: &str| g(d, &["rev-parse", n]).trim().to_owned();
+
+        // Someone else pushes to `other`; in `a`, `other` is behind and `main` is checked out.
+        commit(&b, "two");
+        g(&b, &["push", "-q", "origin", "other"]);
+        pull_other_branch(&a, "other").unwrap();
+        assert_eq!(tip(&a, "other"), tip(&b, "other"));
+        assert_eq!(g(&a, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(), "main");
+
+        // Nothing new: fine, and nothing moves.
+        let before = tip(&a, "other");
+        pull_other_branch(&a, "other").unwrap();
+        assert_eq!(tip(&a, "other"), before);
+
+        // Local commits only (ahead): nothing to pull, and it must not be called diverged.
+        g(&a, &["checkout", "-q", "other"]);
+        commit(&a, "three");
+        g(&a, &["checkout", "-q", "main"]);
+        let ahead = tip(&a, "other");
+        pull_other_branch(&a, "other").unwrap();
+        assert_eq!(tip(&a, "other"), ahead);
+
+        // Both sides moved: refused, left as it was.
+        commit(&b, "four");
+        g(&b, &["push", "-q", "origin", "other"]);
+        let err = pull_other_branch(&a, "other").unwrap_err();
+        assert!(err.contains("diverged"), "{err}");
+        assert_eq!(tip(&a, "other"), ahead);
+
+        // The checked-out branch can't be fast-forwarded this way, git refuses it.
+        assert!(pull_other_branch(&a, "main").is_ok());
+        g(&a, &["checkout", "-q", "other"]);
+        assert!(pull_other_branch(&a, "other").is_err());
     }
 }

@@ -13,6 +13,7 @@ impl RepoTab {
         self.dialog_new_branch(ctx);
         self.dialog_new_tag(ctx);
         self.dialog_redate(ctx);
+        self.dialog_push_rejected(ctx);
         self.dialog_force_push(ctx);
         self.dialog_squash(ctx);
         self.dialog_rebase(ctx);
@@ -479,6 +480,78 @@ impl RepoTab {
                 let when = gitgoing_core::redate::parse_when(p, &text)?;
                 gitgoing_core::redate::redate(p, id, when, author, committer, purge).map_err(|e| e.message().to_owned())
             });
+        }
+    }
+
+    /// A push the remote refused: say why in plain words and offer the ways forward.
+    fn dialog_push_rejected(&mut self, ctx: &egui::Context) {
+        // 0 = nothing, 1 = force push, 2 = pull, 3 = close
+        let mut choice = 0;
+        if let Some(raw) = &self.push_dlg {
+            let info = self.repo.as_ref().and_then(|l| l.info.as_ref());
+            let branch = info.and_then(|i| i.head_branch.clone()).unwrap_or_else(|| "this branch".to_owned());
+            let up = info.and_then(|i| i.upstream.clone());
+            let remote = up.as_ref().map_or("the remote branch".to_owned(), |u| format!("'{}'", u.name));
+            let red = Color32::from_rgb(0xe5, 0x53, 0x4b);
+            egui::Window::new("Push rejected")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.set_width(500.0);
+                    ui.label(format!("The remote refused '{branch}' because {remote} has commits that your branch doesn't."));
+                    ui.add_space(4.0);
+                    match &up {
+                        Some(u) if u.ahead > 0 && u.behind > 0 => ui.label(format!(
+                            "Your branch and the remote have each moved on: {} commit(s) here that the remote lacks, {} there that you lack. \
+                             That usually means a commit that was already pushed has since been amended, rebased or re-dated \
+                             (it now has a new hash), or somebody else pushed in the meantime.",
+                            u.ahead, u.behind
+                        )),
+                        _ => ui.label(
+                            "Somebody pushed to this branch after your last fetch, or the branch was rewritten since. \
+                             Fetching shows what changed.",
+                        ),
+                    };
+                    ui.add_space(8.0);
+                    ui.strong("What now?");
+                    ui.add_space(2.0);
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button(egui::RichText::new("Force push…").color(red)).clicked() {
+                            choice = 1;
+                        }
+                        ui.label("Replace the remote's version with yours. Right when those remote commits are your own older versions of the same work.");
+                    });
+                    ui.add_space(2.0);
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("Pull first").clicked() {
+                            choice = 2;
+                        }
+                        ui.label("Bring in the remote's commits, then push. Right when someone else's work is in there that you want to keep.");
+                    });
+                    ui.add_space(6.0);
+                    ui.weak("Force push uses --force-with-lease: it still refuses if the remote has changed since your last fetch, and asks you to confirm first.");
+                    ui.add_space(4.0);
+                    egui::CollapsingHeader::new("Git's message").show(ui, |ui| {
+                        ui.weak(raw);
+                        if ui.small_button("Copy").clicked() {
+                            ui.ctx().copy_text(raw.clone());
+                        }
+                    });
+                    ui.add_space(6.0);
+                    if ui.button("Close").clicked() {
+                        choice = 3;
+                    }
+                });
+        }
+        if choice != 0 {
+            self.push_dlg = None;
+            self.push_rejected = false;
+            match choice {
+                1 => self.force_requested = true,
+                2 => self.pull_requested = true,
+                _ => {}
+            }
         }
     }
 
