@@ -44,6 +44,14 @@ pub struct App {
     pub drag: Drag,
     pub editing: Option<u64>,
     pub clip: Vec<Control>,
+    /// Pictures used by `clip`, so they paste into other projects too.
+    pub clip_images: std::collections::BTreeMap<String, crate::images::ImgRef>,
+    /// Fingerprint of the picture last put on the system clipboard by Copy.
+    pub clip_image: Option<u64>,
+    /// A picture was just pasted by the paste event, so the Ctrl+V release must not paste it again.
+    pub image_pasted: bool,
+    pub last_cmd: f64,
+    pub bg_tool: Option<crate::picture::BgTool>,
     pub quick: String,
     pub focus_quick: bool,
     pub lib_cat: usize,
@@ -68,6 +76,7 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext, file: Option<PathBuf>, shot: Option<PathBuf>) -> App {
         render::install_fonts(&cc.egui_ctx);
+        let file_given = file.is_some();
         if let Some(rs) = &cc.wgpu_render_state {
             let i = rs.adapter.get_info();
             crate::log_startup(&format!("wgpu {:?}: {} ({:?}, driver {} {})", i.backend, i.name, i.device_type, i.driver, i.driver_info));
@@ -76,7 +85,14 @@ impl App {
             let (v, r) = unsafe { (gl.get_parameter_string(eframe::glow::VERSION), gl.get_parameter_string(eframe::glow::RENDERER)) };
             crate::log_startup(&format!("glow: {r} (OpenGL {v})"));
         }
-        let (proj, path, named, status) = if shot.is_some() {
+        let (proj, path, named, status) = if shot.is_some() && file.is_some() {
+            // a picture of this project (the last screen, first picture selected), for testing
+            let f = file.clone().unwrap_or_default();
+            match Project::load(&f) {
+                Ok(p) => (p, std::env::temp_dir().join("sketchframe-shot.json"), false, "Ready".to_string()),
+                Err(e) => (model::sample(), std::env::temp_dir().join("sketchframe-shot.json"), false, e),
+            }
+        } else if shot.is_some() {
             (model::sample(), std::env::temp_dir().join("sketchframe-shot.json"), false, "Ready".to_string())
         } else if let Some(f) = file {
             match Project::load(&f) {
@@ -114,6 +130,11 @@ impl App {
             drag: Drag::None,
             editing: None,
             clip: vec![],
+            clip_images: Default::default(),
+            clip_image: None,
+            image_pasted: false,
+            last_cmd: -10.0,
+            bg_tool: None,
             quick: String::new(),
             focus_quick: false,
             lib_cat: 0,
@@ -134,7 +155,12 @@ impl App {
             shot,
             frames: 0,
         };
-        if app.shot.is_some() {
+        if app.shot.is_some() && file_given {
+            app.cur = app.proj.screens.len() - 1;
+            if let Some(c) = app.proj.screens[app.cur].controls.iter().find(|c| c.kind == "picture") {
+                app.sel = vec![c.id];
+            }
+        } else if app.shot.is_some() {
             // show a phone screen with something selected so the picture shows the editor at work
             app.cur = 1;
             if let Some(c) = app.proj.screens[1].controls.iter().find(|c| c.kind == "card") {
@@ -358,6 +384,9 @@ impl App {
         self.screen_mut().controls.push(c);
         self.sel = vec![id];
         self.status = format!("Added {}", catalog::kind(kind).map(|k| k.name).unwrap_or(kind));
+        if kind == "picture" {
+            self.choose_picture_for(id);
+        }
     }
 
     pub fn delete_selection(&mut self) {
@@ -367,20 +396,26 @@ impl App {
         self.editing = None;
     }
 
-    pub fn copy(&mut self, ctx: &egui::Context) {
-        self.clip = self.selected().into_iter().cloned().collect();
-        if !self.clip.is_empty() {
-            ctx.copy_text(serde_json::to_string(&self.clip).unwrap_or_default());
-            self.status = format!("Copied {}", self.clip.len());
-        }
+    /// Duplicate the selection (without touching the system clipboard).
+    pub fn duplicate(&mut self) {
+        let items: Vec<Control> = self.selected().into_iter().cloned().collect();
+        self.paste_items(items);
     }
 
+    /// Paste: a picture on the clipboard, parts copied from Sketchframe, or text (which becomes a label).
+    /// `text` is what the paste event carried; None when pasting from a menu.
     pub fn paste(&mut self, text: Option<String>) {
+        if self.try_paste_image() {
+            return;
+        }
         let mut items = self.clip.clone();
         if let Some(t) = &text {
-            if let Ok(v) = serde_json::from_str::<Vec<Control>>(t) {
+            if let Ok(p) = serde_json::from_str::<crate::picture::ClipPayload>(t) {
+                self.proj.images.extend(p.images);
+                items = p.controls;
+            } else if let Ok(v) = serde_json::from_str::<Vec<Control>>(t) {
                 items = v;
-            } else if !t.trim().is_empty() && t.trim() != serde_json::to_string(&self.clip).unwrap_or_default() {
+            } else if !t.trim().is_empty() {
                 // plain text becomes a label or paragraph
                 let kind = if t.contains('\n') || t.len() > 60 { "paragraph" } else { "label" };
                 self.add_control(kind, None);
@@ -392,7 +427,13 @@ impl App {
                 }
                 return;
             }
+        } else {
+            self.proj.images.extend(self.clip_images.clone());
         }
+        self.paste_items(items);
+    }
+
+    pub fn paste_items(&mut self, items: Vec<Control>) {
         if items.is_empty() {
             return;
         }
@@ -528,6 +569,7 @@ impl App {
                 _ => {}
             }
         }
+        self.watch_paste_key(ctx, typing);
         let cmd = |k: Key| ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, k));
         let cmd_shift = |k: Key| ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, k));
         let plain = |k: Key| !typing && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, k));
@@ -592,8 +634,7 @@ impl App {
             self.sel = self.screen().controls.iter().filter(|c| !c.locked && !c.hidden).map(|c| c.id).collect();
         }
         if cmd(Key::D) {
-            self.copy(ctx);
-            self.paste(None);
+            self.duplicate();
         }
         if cmd_shift(Key::G) {
             self.ungroup();
@@ -697,6 +738,9 @@ impl App {
                 if ui.button("Open…  ⌘O").clicked() {
                     self.open_dialog();
                 }
+                if ui.button("Insert picture…").on_hover_text("PNG, JPEG, GIF, WebP, BMP, ICO, TIFF or SVG. You can also paste or drop pictures on the screen.").clicked() {
+                    self.insert_pictures_dialog();
+                }
                 if ui.button("Save as…  ⌘S").clicked() {
                     self.save_as_dialog();
                 }
@@ -726,10 +770,15 @@ impl App {
                     self.do_redo();
                 }
                 ui.separator();
-                if ui.button("Duplicate  ⌘D").clicked() {
-                    let ctx = ui.ctx().clone();
+                let ctx = ui.ctx().clone();
+                if ui.add_enabled(!self.sel.is_empty(), egui::Button::new("Copy  ⌘C")).clicked() {
                     self.copy(&ctx);
+                }
+                if ui.button("Paste  ⌘V").clicked() {
                     self.paste(None);
+                }
+                if ui.button("Duplicate  ⌘D").clicked() {
+                    self.duplicate();
                 }
                 if ui.button("Delete  ⌫").clicked() {
                     self.delete_selection();
@@ -1129,7 +1178,7 @@ impl App {
                         ("Shift-click", "Add to the selection"),
                         ("Arrows (Shift = 10)", "Nudge"),
                         ("⌘D", "Duplicate"),
-                        ("⌘C ⌘X ⌘V", "Copy, cut, paste (pasting text makes a label)"),
+                        ("⌘C ⌘X ⌘V", "Copy, cut, paste (pasting text makes a label, pasting a picture adds it)"),
                         ("⌘G / ⇧⌘G", "Group / ungroup"),
                         ("⌘L", "Lock"),
                         ("[ and ]", "Send backward / bring forward"),
@@ -1237,6 +1286,8 @@ impl eframe::App for App {
                 egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| self.flow(ui));
             }
         }
+        self.handle_drops(&ctx);
+        self.bg_tool_window(&ctx);
         self.windows(&ctx);
 
         if self.cur >= self.proj.screens.len() {

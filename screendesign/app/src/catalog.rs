@@ -35,6 +35,7 @@ pub static KINDS: &[Kind] = &[
     k!("arrow", "Arrow", "Basic", 160.0, 40.0, "", 0.0, "Optional label above the arrow. Set Value to 1 for a two-way arrow."),
     k!("bracket", "Curly brace", "Basic", 30.0, 160.0, ""),
     k!("image", "Image", "Basic", 200.0, 140.0, "", 0.0, "Placeholder for a picture. Optional caption."),
+    k!("picture", "My picture", "Basic", 200.0, 140.0, "", 0.0, "Your own picture (PNG, JPEG, GIF, WebP, BMP, SVG…). Click to choose a file, or paste / drop one on the screen. PNG transparency is kept."),
     k!("icon", "Icon", "Basic", 32.0, 32.0, "star", 0.0, "The icon's name, e.g. home, search, user, heart, star, settings."),
     k!("container", "Panel", "Basic", 260.0, 180.0, "Panel title", 0.0, "First line is the title (leave empty for no title bar)."),
     k!("card", "Card", "Basic", 260.0, 280.0, "Card title\nShort description goes here.", 0.0, "First line is the title, the rest is the body. Picture on top."),

@@ -8,7 +8,18 @@ fn main() {
     if os != "windows" || env != "gnu" {
         return;
     }
-    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("sketchframe-res.o");
+    let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let out = out_dir.join("sketchframe-res.o");
+    // the version in the .exe's properties comes from Cargo.toml
+    let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
+    let mut parts: Vec<String> = version.split(['.', '-']).take(3).map(|p| p.parse::<u32>().unwrap_or(0).to_string()).collect();
+    parts.resize(3, "0".into());
+    let rc_text = std::fs::read_to_string("windows/sketchframe.rc")
+        .unwrap_or_default()
+        .replace("@VERSION4@", &format!("{},0", parts.join(",")))
+        .replace("@VERSION@", &version);
+    let rc = out_dir.join("sketchframe.rc");
+    let _ = std::fs::write(&rc, rc_text);
     let windres = std::env::var("WINDRES").unwrap_or_else(|_| {
         if cfg!(windows) {
             "windres".into()
@@ -18,7 +29,8 @@ fn main() {
     });
     let status = std::process::Command::new(&windres)
         .current_dir("windows")
-        .args(["sketchframe.rc", "-O", "coff", "-o"])
+        .arg(&rc)
+        .args(["-O", "coff", "-o"])
         .arg(&out)
         .status();
     match status {

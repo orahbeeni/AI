@@ -84,6 +84,7 @@ fn tools() -> Value {
         "link": {"type": "string", "description": "Screen id or name to open when clicked in present mode"},
         "component": {"type": "string", "description": "For type component: the component screen to show"},
         "name": {"type": "string", "description": "Layer name"},
+        "fit": {"type": "string", "enum": ["stretch", "contain", "cover"], "description": "For type picture: how the picture sits in its box"},
         "locked": {"type": "boolean"}, "hidden": {"type": "boolean"}
     });
     let screen = json!({"type": "string", "description": "Screen id (like s1) or its name"});
@@ -113,6 +114,14 @@ fn tools() -> Value {
          "inputSchema": {"type": "object", "properties": {"screen": screen,
             "controls": {"type": "array", "items": {"type": "object", "properties": control_props.clone(), "required": ["type", "x", "y"]}}},
             "required": ["screen", "controls"]}},
+        {"name": "add_picture", "description": "Add the user's own picture (PNG, JPEG, GIF, WebP, BMP, ICO, TIFF or SVG) to a screen as a 'picture' control. PNG/GIF/WebP/SVG transparency is kept. Give a file path on this computer, or base64 data. Without width/height it keeps the picture's proportions (scaled down to fit the screen). Returns the control id.",
+         "inputSchema": {"type": "object", "properties": {"screen": screen,
+            "path": {"type": "string", "description": "Path of a picture file"},
+            "data": {"type": "string", "description": "Base64 of the picture file, instead of a path"},
+            "name": {"type": "string", "description": "File name for the picture when using data"},
+            "x": {"type": "number", "description": "Left edge"}, "y": {"type": "number", "description": "Top edge"},
+            "width": {"type": "number"}, "height": {"type": "number"},
+            "fit": {"type": "string", "enum": ["stretch", "contain", "cover"]}}, "required": ["screen"]}},
         {"name": "update_controls", "description": "Change fields of existing controls (move, resize, retext, restyle, link…). Only the given fields change.",
          "inputSchema": {"type": "object", "properties": {"screen": screen,
             "updates": {"type": "array", "items": {"type": "object", "properties": {
@@ -218,6 +227,9 @@ fn apply(c: &mut Control, v: &Value, p: &Project) -> Result<(), String> {
     }
     if let Some(x) = b("underline") {
         c.underline = x;
+    }
+    if let Some(s) = st("fit") {
+        c.fit = crate::images::Fit::parse(s).ok_or_else(|| format!("unknown fit '{s}' (stretch, contain or cover)"))?;
     }
     if let Some(s) = st("align") {
         c.align = match s {
@@ -374,6 +386,48 @@ fn call(name: &str, args: &Value, path: &Path) -> Result<Vec<Value>, String> {
             }
             save(&p)?;
             Ok(text(format!("Added {} control(s) to {}: ids {:?}", ids.len(), p.screens[i].id, ids)))
+        }
+        "add_picture" => {
+            use base64::Engine;
+            let i = screen_arg(&p, args)?;
+            let img = if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
+                let path = std::path::Path::new(path);
+                if !crate::images::is_image_path(path) {
+                    return Err("that file is not a picture (use PNG, JPEG, GIF, WebP, BMP, ICO, TIFF or SVG)".into());
+                }
+                let bytes = std::fs::read(path).map_err(|e| format!("can't read {}: {e}", path.display()))?;
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                crate::images::Img::from_bytes(&name, bytes)?
+            } else if let Some(data) = args.get("data").and_then(|v| v.as_str()) {
+                let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|e| format!("data is not valid base64: {e}"))?;
+                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("picture");
+                crate::images::Img::from_bytes(name, bytes)?
+            } else {
+                return Err("give either path or data".into());
+            };
+            let num = |k: &str| args.get(k).and_then(|x| x.as_f64()).map(|x| x as f32);
+            let size = match (num("width"), num("height")) {
+                (Some(w), Some(h)) => Some((w, h)),
+                (Some(w), None) => Some((w, w * img.h / img.w)),
+                (None, Some(h)) => Some((h * img.w / img.h, h)),
+                _ => None,
+            };
+            let at = match (num("x"), num("y")) {
+                (Some(x), Some(y)) => {
+                    let (w, h) = size.unwrap_or((img.w, img.h));
+                    Some((x + w / 2.0, y + h / 2.0))
+                }
+                _ => None,
+            };
+            let id = p.add_picture(i, img, at, size);
+            if let Some(f) = args.get("fit").and_then(|v| v.as_str()) {
+                let fit = crate::images::Fit::parse(f).ok_or_else(|| format!("unknown fit '{f}'"))?;
+                if let Some(c) = p.screens[i].controls.iter_mut().find(|c| c.id == id) {
+                    c.fit = fit;
+                }
+            }
+            save(&p)?;
+            Ok(text(format!("Added picture to {}: control id {id}", p.screens[i].id)))
         }
         "update_controls" => {
             let i = screen_arg(&p, args)?;

@@ -5,7 +5,7 @@ Unicode true
 
 !define NAME "Sketchframe"
 !ifndef VERSION
-  !define VERSION "0.1.4"
+  !error "pass the version: makensis -DVERSION=1.2.3 (windows/build-installer.sh does)"
 !endif
 !define EXE "sketchframe.exe"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${NAME}"
@@ -37,6 +37,10 @@ VIAddVersionKey "FileVersion" "${VERSION}"
 !insertmacro MUI_LANGUAGE "English"
 
 Section "Install"
+  ; a copy that is still running (even hidden) would keep the old .exe locked
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM ${EXE}'
+  Pop $0
+  Sleep 500
   SetOutPath "$INSTDIR"
   File "${EXE_PATH}"
   File "icon.ico"
@@ -57,6 +61,9 @@ Section "Install"
 SectionEnd
 
 Section "Uninstall"
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM ${EXE}'
+  Pop $0
+  Sleep 500
   Delete "$SMPROGRAMS\${NAME}.lnk"
   Delete "$SMPROGRAMS\${NAME} (compatibility graphics).lnk"
   Delete "$DESKTOP\${NAME}.lnk"

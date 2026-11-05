@@ -48,7 +48,7 @@ impl App {
         self.fit_next = false;
     }
 
-    fn hit(&self, p: Pos2) -> Option<u64> {
+    pub fn hit(&self, p: Pos2) -> Option<u64> {
         self.screen().controls.iter().rev().find(|c| !c.hidden && !c.locked && c.contains(p.x, p.y)).map(|c| c.id)
     }
 
@@ -257,6 +257,22 @@ impl App {
                                 y1 = y0 + 4.0;
                             }
                         }
+                        let keep_ratio = !shift && matches!(h, 0 | 2 | 4 | 6) && o.h > 0.0 && self.screen().controls.iter().any(|c| c.id == id && c.kind == "picture" && c.fit == crate::images::Fit::Stretch);
+                        if keep_ratio {
+                            // pictures keep their proportions when dragged by a corner (hold Shift to stretch)
+                            let s = ((x1 - x0) / o.w).max((y1 - y0) / o.h).max(4.0 / o.w.min(o.h));
+                            let (nw, nh) = (o.w * s, o.h * s);
+                            if matches!(h, 0 | 6) {
+                                x0 = x1 - nw;
+                            } else {
+                                x1 = x0 + nw;
+                            }
+                            if matches!(h, 0 | 2) {
+                                y0 = y1 - nh;
+                            } else {
+                                y1 = y0 + nh;
+                            }
+                        }
                         if let Some(c) = self.proj.screens[self.cur].controls.iter_mut().find(|c| c.id == id) {
                             c.x = x0.round();
                             c.y = y0.round();
@@ -322,6 +338,11 @@ impl App {
         }
         if resp.double_clicked() {
             if let Some(id) = cur_model.and_then(|p| self.hit(p)) {
+                if self.screen().controls.iter().any(|c| c.id == id && c.kind == "picture") {
+                    self.sel = vec![id];
+                    self.choose_picture_for(id);
+                    return;
+                }
                 let comp = self.screen().controls.iter().find(|c| c.id == id).and_then(|c| c.component.clone());
                 if let Some(target) = comp.and_then(|k| self.proj.screen_idx(&k)) {
                     self.open_screen(target);
@@ -338,20 +359,36 @@ impl App {
                     self.paste(None);
                     ui.close();
                 }
+                if ui.button("Insert picture…").clicked() {
+                    self.insert_pictures_dialog();
+                    ui.close();
+                }
                 if ui.button("Select all").clicked() {
                     self.sel = self.screen().controls.iter().filter(|c| !c.locked).map(|c| c.id).collect();
                     ui.close();
                 }
                 return;
             }
-            if ui.button("Edit text").clicked() {
+            let pic = self.selected().first().filter(|c| c.kind == "picture").map(|c| c.id);
+            if let Some(id) = pic {
+                if ui.button("Replace picture…").clicked() {
+                    self.choose_picture_for(id);
+                    ui.close();
+                }
+                if ui.button("Make background transparent…").clicked() {
+                    self.open_bg_tool(id);
+                    ui.close();
+                }
+                if ui.button("Save picture as…").clicked() {
+                    self.save_picture_as(id);
+                    ui.close();
+                }
+            } else if ui.button("Edit text").clicked() {
                 self.editing = self.sel.first().copied();
                 ui.close();
             }
             if ui.button("Duplicate").clicked() {
-                let ctx = ui.ctx().clone();
-                self.copy(&ctx);
-                self.paste(None);
+                self.duplicate();
                 ui.close();
             }
             if ui.button("Copy").clicked() {

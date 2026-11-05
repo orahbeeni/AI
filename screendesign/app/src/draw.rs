@@ -125,7 +125,7 @@ pub fn transform(prims: &mut [Prim], ox: f32, oy: f32, sx: f32, sy: f32) {
                 *y = oy + *y * sy;
                 *size *= ts;
             }
-            Prim::Link { r, .. } => {
+            Prim::Link { r, .. } | Prim::Image { r, .. } => {
                 *r = R::new(ox + r.x * sx, oy + r.y * sy, r.w * sx, r.h * sy);
             }
         }
@@ -456,7 +456,7 @@ pub fn control(pen: &mut Pen, env: &Env, c: &Control) {
 
 /// Small preview of a control kind, fitted into `area` (used by the library strip).
 pub fn preview(pen: &mut Pen, project: &Project, kind: &str, area: R) {
-    let mut scratch = Project { version: 1, name: String::new(), screens: vec![], next_id: 900_000, versions: vec![] };
+    let mut scratch = Project { version: 1, name: String::new(), screens: vec![], next_id: 900_000, versions: vec![], images: Default::default() };
     let mut c = scratch.make_control(kind, 0.0, 0.0);
     c.id = kind.bytes().fold(7u64, |a, b| a.wrapping_mul(31).wrapping_add(b as u64));
     if kind == "component" {

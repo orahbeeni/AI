@@ -15,10 +15,12 @@ mod controls;
 mod controls2;
 mod draw;
 mod icons;
+mod images;
 mod inspector;
 mod mcp;
 mod model;
 mod pen;
+mod picture;
 mod render;
 
 use eframe::egui;
@@ -28,6 +30,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(PathBuf::from);
     let file = value("--file");
+    start_log();
     std::panic::set_hook(Box::new(|info| {
         let msg = format!("Sketchframe crashed.\n\n{info}");
         if std::thread::current().name() == Some("main") {
@@ -56,27 +59,33 @@ fn main() {
         Some(icon) => viewport.with_icon(icon),
         None => viewport,
     };
-    // Graphics: the GPU through wgpu first, then WARP (Windows' own software DirectX 12, for
-    // GPUs wgpu skips or drivers that fail), then OpenGL. `--renderer wgpu|warp|glow|dx12|vulkan|gl`
-    // (or SKETCHFRAME_RENDERER) forces one; dx12, vulkan and gl pick a wgpu backend.
+    // Graphics. A driver that crashes takes the whole process down, so on Windows a small launcher
+    // starts the real app as a child with one graphics mode and tries the next when it dies while
+    // starting (see `supervise`). `--renderer dx12|vulkan|gl|warp|glow|wgpu` (or SKETCHFRAME_RENDERER)
+    // forces one mode and skips the launcher.
     let forced = value("--renderer").map(|p| p.to_string_lossy().into_owned()).or_else(|| std::env::var("SKETCHFRAME_RENDERER").ok());
-    let order = match forced.as_deref() {
-        Some("glow") => vec![Gfx::Glow],
-        Some("warp") => vec![Gfx::Warp],
-        Some(b @ ("dx12" | "vulkan" | "gl")) => {
-            std::env::set_var("WGPU_BACKEND", b);
-            vec![Gfx::Wgpu]
-        }
-        Some("wgpu") => vec![Gfx::Wgpu],
-        _ if cfg!(windows) => vec![Gfx::Wgpu, Gfx::Warp, Gfx::Glow],
-        _ => vec![Gfx::Wgpu, Gfx::Glow],
+    if cfg!(windows) && forced.is_none() && shot.is_none() {
+        supervise(&args);
+    }
+    let order = match forced.as_deref().and_then(Gfx::parse) {
+        Some(g) => vec![g],
+        None if cfg!(windows) => vec![Gfx::Dx12, Gfx::Vulkan, Gfx::Warp, Gfx::Glow],
+        None => vec![Gfx::Auto, Gfx::Glow],
     };
     let mut errors = vec![];
     for gfx in order {
         let open = open.clone();
         let shot = shot.clone();
+        if std::env::var("SKETCHFRAME_TEST_CRASH").map(|v| v.split(',').any(|n| n == gfx.name())).unwrap_or(false) {
+            // test hook: pretend this graphics mode crashes the driver
+            log_startup(&format!("test: crashing on purpose in {gfx:?}"));
+            unsafe { std::ptr::null_mut::<u8>().write_volatile(1) };
+        }
         match eframe::run_native("Sketchframe", gfx.options(viewport.clone()), Box::new(move |cc| Ok(Box::new(app::App::new(cc, open, shot))))) {
-            Ok(()) => return,
+            Ok(()) => {
+                log_startup("window closed normally");
+                return;
+            }
             Err(e) => {
                 errors.push(format!("{gfx:?}: {e}"));
                 log_startup(&format!("{gfx:?} failed: {e}"));
@@ -86,47 +95,162 @@ fn main() {
     fail(&format!("Sketchframe could not open its window.\n\n{}", errors.join("\n")));
 }
 
-#[derive(Clone, Copy, Debug)]
+/// Graphics modes. Dx12, Vulkan and Gl are wgpu backends, Warp is Windows' own software DirectX 12,
+/// Glow is the separate OpenGL renderer and Auto lets wgpu choose.
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Gfx {
-    Wgpu,
+    Auto,
+    Dx12,
+    Vulkan,
+    Gl,
     Warp,
     Glow,
 }
 
 impl Gfx {
+    fn name(self) -> &'static str {
+        match self {
+            Gfx::Auto => "wgpu",
+            Gfx::Dx12 => "dx12",
+            Gfx::Vulkan => "vulkan",
+            Gfx::Gl => "gl",
+            Gfx::Warp => "warp",
+            Gfx::Glow => "glow",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Gfx> {
+        [Gfx::Auto, Gfx::Dx12, Gfx::Vulkan, Gfx::Gl, Gfx::Warp, Gfx::Glow].into_iter().find(|g| g.name() == s)
+    }
+
     fn options(self, viewport: egui::ViewportBuilder) -> eframe::NativeOptions {
         use eframe::{egui_wgpu, wgpu};
         let mut o = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, ..Default::default() };
-        match self {
-            // On Windows wgpu's OpenGL backend can start yet show only black (VMware's SVGA3D
-            // driver does), so leave it out there; without a DirectX 12 or Vulkan GPU, wgpu then
-            // lands on WARP.
-            Gfx::Wgpu if cfg!(windows) => {
-                let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
-                setup.instance_descriptor.backends = wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY);
-                o.wgpu_options.wgpu_setup = setup.into();
+        let backends = match self {
+            Gfx::Auto => return o,
+            Gfx::Glow => {
+                o.renderer = eframe::Renderer::Glow;
+                return o;
             }
-            Gfx::Wgpu => {}
-            Gfx::Glow => o.renderer = eframe::Renderer::Glow,
-            Gfx::Warp => {
-                let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
-                setup.instance_descriptor.backends = wgpu::Backends::DX12;
-                setup.native_adapter_selector = Some(std::sync::Arc::new(|adapters, surface| {
-                    for a in adapters {
-                        let i = a.get_info();
-                        log_startup(&format!("dx12 adapter: {} ({:?})", i.name, i.device_type));
-                    }
-                    adapters
-                        .iter()
-                        .find(|a| a.get_info().device_type == wgpu::DeviceType::Cpu && surface.is_none_or(|s| a.is_surface_supported(s)))
-                        .cloned()
-                        .ok_or_else(|| "no WARP (software DirectX 12) adapter".to_string())
-                }));
-                o.wgpu_options.wgpu_setup = setup.into();
-            }
+            Gfx::Dx12 | Gfx::Warp => wgpu::Backends::DX12,
+            Gfx::Vulkan => wgpu::Backends::VULKAN,
+            Gfx::Gl => wgpu::Backends::GL,
+        };
+        let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
+        setup.instance_descriptor.backends = backends;
+        if self == Gfx::Warp {
+            setup.native_adapter_selector = Some(std::sync::Arc::new(|adapters, surface| {
+                for a in adapters {
+                    let i = a.get_info();
+                    log_startup(&format!("dx12 adapter: {} ({:?})", i.name, i.device_type));
+                }
+                adapters
+                    .iter()
+                    .find(|a| a.get_info().device_type == wgpu::DeviceType::Cpu && surface.is_none_or(|s| a.is_surface_supported(s)))
+                    .cloned()
+                    .ok_or_else(|| "no WARP (software DirectX 12) adapter".to_string())
+            }));
         }
+        o.wgpu_options.wgpu_setup = setup.into();
         o
     }
+}
+
+/// How long a start may take before a crash no longer counts as "could not start".
+const START_SECS: f32 = 20.0;
+
+/// Windows launcher: runs this program again as a child with one graphics mode. A graphics driver
+/// that crashes (as Intel's Vulkan driver does on some PCs) only kills the child, and the next mode
+/// is tried. The mode that worked is remembered in renderer.txt and tried first next time.
+fn supervise(args: &[String]) -> ! {
+    let Ok(exe) = std::env::current_exe() else { fail("can't find the program's own file") };
+    let memory = model::data_dir().join("renderer.txt");
+    let mut order = vec![Gfx::Dx12, Gfx::Vulkan, Gfx::Warp, Gfx::Glow];
+    if let Some(g) = std::fs::read_to_string(&memory).ok().and_then(|s| Gfx::parse(s.trim())) {
+        order.retain(|o| *o != g);
+        order.insert(0, g);
+    }
+    let mut failures = vec![];
+    for g in order {
+        let started = std::time::Instant::now();
+        let child = std::process::Command::new(&exe).args(args).arg("--renderer").arg(g.name()).env("SKETCHFRAME_CHILD", "1").spawn();
+        let mut code = None;
+        let mut stayed = false;
+        if let Ok(mut child) = child {
+            loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        code = status.code();
+                        break;
+                    }
+                    Ok(None) => {}
+                    Err(_) => break,
+                }
+                if !stayed && started.elapsed().as_secs_f32() >= START_SECS {
+                    // it has been running long enough: this mode works on this PC
+                    stayed = true;
+                    let _ = std::fs::write(&memory, g.name());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+        }
+        log_startup(&format!("{} ended with {code:?} after {:.1}s", g.name(), started.elapsed().as_secs_f32()));
+        if code == Some(0) || stayed {
+            let _ = std::fs::write(&memory, g.name());
+            std::process::exit(code.unwrap_or(0));
+        }
+        failures.push(format!("{}: {}", g.name(), code.map(|c| format!("exit code {c:#x}")).unwrap_or_else(|| "did not run".into())));
+    }
+    fail(&format!("Sketchframe could not open its window in any graphics mode.\n\n{}", failures.join("\n")));
+}
+
+/// First lines of startup.log: which version started, so a silent failure still leaves a trace.
+fn start_log() {
+    let log = model::data_dir().join("startup.log");
+    if std::fs::metadata(&log).map(|m| m.len() > 50_000).unwrap_or(false) {
+        let _ = std::fs::remove_file(&log);
+    }
+    log_startup(&format!("--- start {} {}", env!("CARGO_PKG_VERSION"), std::env::args().skip(1).collect::<Vec<_>>().join(" ")));
+    #[cfg(windows)]
+    install_crash_log();
+}
+
+/// Windows: a crash that is not a Rust panic (access violation, stack overflow…) writes crash.log.
+#[cfg(windows)]
+fn install_crash_log() {
+    #[repr(C)]
+    struct ExceptionRecord {
+        code: u32,
+        flags: u32,
+        next: *const ExceptionRecord,
+        address: *const u8,
+    }
+    #[repr(C)]
+    struct ExceptionPointers {
+        record: *const ExceptionRecord,
+        context: *const u8,
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetUnhandledExceptionFilter(f: Option<unsafe extern "system" fn(*const ExceptionPointers) -> i32>) -> *const u8;
+        fn GetModuleHandleW(name: *const u16) -> *const u8;
+    }
+    unsafe extern "system" fn filter(p: *const ExceptionPointers) -> i32 {
+        let rec = &*(*p).record;
+        let base = GetModuleHandleW(std::ptr::null()) as usize;
+        let msg = format!(
+            "Sketchframe {} crashed: exception {:#010x} at {:#x} (module offset {:#x})",
+            env!("CARGO_PKG_VERSION"),
+            rec.code,
+            rec.address as usize,
+            (rec.address as usize).wrapping_sub(base)
+        );
+        let _ = std::fs::create_dir_all(model::data_dir());
+        let _ = std::fs::write(model::data_dir().join("crash.log"), &msg);
+        log_startup(&msg);
+        1
+    }
+    unsafe { SetUnhandledExceptionFilter(Some(filter)) };
 }
 
 /// Appends a line to startup.log in the data folder, to see which graphics path a machine used.
@@ -145,7 +269,9 @@ fn fail(msg: &str) -> ! {
     let _ = std::fs::write(&log, msg);
     eprintln!("{msg}");
     #[cfg(windows)]
-    message_box(&format!("{msg}\n\nDetails were saved to {}", log.display()));
+    if std::env::var_os("SKETCHFRAME_CHILD").is_none() {
+        message_box(&format!("{msg}\n\nDetails were saved to {}", log.display()));
+    }
     std::process::exit(1);
 }
 

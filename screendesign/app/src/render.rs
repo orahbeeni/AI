@@ -177,6 +177,16 @@ pub fn paint(painter: &egui::Painter, prims: &[Prim], origin: Pos2, zoom: f32, s
                     painter.line_segment([Pos2::new(pos.x, yy), Pos2::new(pos.x + size_v.x, yy)], Stroke::new((px / 14.0).max(0.8), c32(*color)));
                 }
             }
+            Prim::Image { r, img, fit, alpha } => {
+                let (dst, uv) = crate::images::fit_rect(*r, img.w, img.h, *fit);
+                let rect = egui::Rect::from_min_size(tp(&[dst.x, dst.y]), egui::vec2(dst.w * zoom, dst.h * zoom));
+                let px = dst.w * zoom * painter.ctx().pixels_per_point();
+                if let Some(tex) = crate::images::texture(painter.ctx(), img, px) {
+                    painter.image(tex, rect, uv, Color32::WHITE.gamma_multiply(*alpha));
+                } else {
+                    painter.rect_filled(rect, 0.0, Color32::from_gray(225));
+                }
+            }
             Prim::Link { .. } => {}
         }
     }
@@ -231,6 +241,18 @@ pub fn svg_body(prims: &[Prim], sketch: bool, out: &mut String, links: bool) {
                     esc(s)
                 ));
             }
+            Prim::Image { r, img, fit, alpha } => {
+                out.push_str(&format!(
+                    "<image x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" preserveAspectRatio=\"{}\" opacity=\"{:.3}\" href=\"{}\"/>\n",
+                    r.x,
+                    r.y,
+                    r.w,
+                    r.h,
+                    fit.svg_aspect(),
+                    alpha,
+                    img.data_uri()
+                ));
+            }
             Prim::Link { r, target } => {
                 if links {
                     out.push_str(&format!(
@@ -280,18 +302,22 @@ pub fn screen_svg(project: &Project, idx: usize, sketch: bool, with_frame: bool)
 
 static FONTDB: OnceLock<std::sync::Arc<resvg::usvg::fontdb::Database>> = OnceLock::new();
 
-pub fn svg_to_png(svg: &str, scale: f32) -> Result<Vec<u8>, String> {
-    use resvg::{tiny_skia, usvg};
-    let db = FONTDB
+/// System fonts for drawing SVG text (loaded once).
+pub fn fontdb() -> std::sync::Arc<resvg::usvg::fontdb::Database> {
+    FONTDB
         .get_or_init(|| {
-            let mut db = usvg::fontdb::Database::new();
+            let mut db = resvg::usvg::fontdb::Database::new();
             db.load_system_fonts();
             db.set_sans_serif_family("Arial");
             std::sync::Arc::new(db)
         })
-        .clone();
+        .clone()
+}
+
+pub fn svg_to_png(svg: &str, scale: f32) -> Result<Vec<u8>, String> {
+    use resvg::{tiny_skia, usvg};
     let mut opt = usvg::Options::default();
-    opt.fontdb = db;
+    opt.fontdb = fontdb();
     let tree = usvg::Tree::from_str(svg, &opt).map_err(|e| e.to_string())?;
     let size = tree.size();
     let w = ((size.width() * scale).ceil() as u32).clamp(1, 8000);

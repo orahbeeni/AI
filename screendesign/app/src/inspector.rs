@@ -119,6 +119,7 @@ impl App {
         };
         let mut open_component = None;
         let mut action: Option<&str> = None;
+        let pic = self.proj.screens[self.cur].controls[idx].image.as_deref().and_then(|i| self.proj.images.get(i)).cloned();
         {
             let c = &mut self.proj.screens[self.cur].controls[idx];
             let kind = catalog::kind(&c.kind);
@@ -139,15 +140,60 @@ impl App {
                 }
             });
             let help = kind.map(|k| k.help).unwrap_or("");
-            ui.label(RichText::new("Text").strong());
-            let multiline = c.text.contains('\n') || help.contains("line") || c.kind == "paragraph";
-            if multiline {
-                ui.add(egui::TextEdit::multiline(&mut c.text).desired_rows(4).desired_width(f32::INFINITY));
+            if c.kind == "picture" {
+                ui.label(RichText::new("Picture").strong());
+                match &pic {
+                    Some(img) => {
+                        ui.label(format!("{} · {}×{} px · {}", img.name, img.w, img.h, img.mime.trim_start_matches("image/").trim_end_matches("+xml").to_uppercase()));
+                    }
+                    None => {
+                        ui.weak("No picture yet. Choose a file, or paste or drop one.");
+                    }
+                }
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button(if pic.is_some() { "Replace…" } else { "Choose…" }).clicked() {
+                        action = Some("pic_choose");
+                    }
+                    if let Some(img) = &pic {
+                        if ui.button("Original size").on_hover_text("Size the part to the picture's own pixels").clicked() {
+                            c.w = img.w;
+                            c.h = img.h;
+                        }
+                        if ui.button("Match proportions").on_hover_text("Keep the width, change the height to fit the picture").clicked() {
+                            c.h = (c.w * img.h / img.w).round().max(1.0);
+                        }
+                    }
+                });
+                if let Some(img) = &pic {
+                    ui.horizontal_wrapped(|ui| {
+                        if !img.is_svg() && ui.button("Make background transparent…").clicked() {
+                            action = Some("pic_bg");
+                        }
+                        if ui.button("Copy picture").clicked() {
+                            action = Some("pic_copy");
+                        }
+                        if ui.button("Save as…").clicked() {
+                            action = Some("pic_save");
+                        }
+                    });
+                }
+                egui::ComboBox::from_id_salt("fit").selected_text(c.fit.label()).width(220.0).show_ui(ui, |ui| {
+                    for f in crate::images::Fit::ALL {
+                        ui.selectable_value(&mut c.fit, f, f.label());
+                    }
+                });
+                ui.weak("Transparent PNG, GIF, WebP and SVG pictures stay transparent. Fill below colours the area behind the picture. Dragging a corner keeps the proportions; hold Shift to stretch.");
             } else {
-                ui.add(egui::TextEdit::singleline(&mut c.text).desired_width(f32::INFINITY));
-            }
-            if !help.is_empty() {
-                ui.weak(help);
+                ui.label(RichText::new("Text").strong());
+                let multiline = c.text.contains('\n') || help.contains("line") || c.kind == "paragraph";
+                if multiline {
+                    ui.add(egui::TextEdit::multiline(&mut c.text).desired_rows(4).desired_width(f32::INFINITY));
+                } else {
+                    ui.add(egui::TextEdit::singleline(&mut c.text).desired_width(f32::INFINITY));
+                }
+                if !help.is_empty() {
+                    ui.weak(help);
+                }
             }
             if c.kind == "icon" || c.kind == "icon_button" || c.kind == "fab" {
                 egui::ComboBox::from_id_salt("icon").selected_text(c.text.clone()).width(200.0).height(300.0).show_ui(ui, |ui| {
@@ -293,10 +339,13 @@ impl App {
             Some("fwd") => self.arrange(1),
             Some("back") => self.arrange(-1),
             Some("bottom") => self.arrange(-2),
-            Some("dup") => {
+            Some("dup") => self.duplicate(),
+            Some("pic_choose") => self.choose_picture_for(id),
+            Some("pic_bg") => self.open_bg_tool(id),
+            Some("pic_save") => self.save_picture_as(id),
+            Some("pic_copy") => {
                 let ctx = ui.ctx().clone();
                 self.copy(&ctx);
-                self.paste(None);
             }
             Some("del") => self.delete_selection(),
             Some("center") => {

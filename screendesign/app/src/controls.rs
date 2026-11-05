@@ -72,6 +72,22 @@ pub fn draw_kind(pen: &mut Pen, env: &Env, c: &Control, r: R) {
                 pen.text_in(R::new(r.x, r.b() - fs * 1.6, r.w, fs * 1.4), text, fs * 0.85, fg, 0.5);
             }
         }
+        "picture" => match c.image.as_deref().and_then(|id| env.project.images.get(id)) {
+            Some(img) => {
+                if let Some(f) = pen.fill_over {
+                    pen.rect(r, 0.0, Some(f), None);
+                }
+                pen.image(r, img.clone(), c.fit);
+            }
+            None => {
+                dashed_round(pen, r, 4.0, 1.0, mid);
+                let s = (r.w.min(r.h) * 0.3).min(40.0);
+                icon(pen, "image", R::new(r.cx() - s / 2.0, r.cy() - s / 2.0 - 6.0, s, s), mid);
+                if r.h > 60.0 && r.w > 90.0 {
+                    pen.text_in(R::new(r.x, r.cy() + s / 2.0 - 2.0, r.w, fs * 1.6), "Double-click to choose", fs * 0.8, mid, 0.5);
+                }
+            }
+        },
         "icon" => icon(pen, text.trim(), r, fg),
         "container" => {
             pen.boxed(r, 4.0);

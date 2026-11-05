@@ -1,8 +1,8 @@
 1 ICON "icon.ico"
 
 1 VERSIONINFO
-FILEVERSION 0,1,4,0
-PRODUCTVERSION 0,1,4,0
+FILEVERSION @VERSION4@
+PRODUCTVERSION @VERSION4@
 BEGIN
   BLOCK "StringFileInfo"
   BEGIN
@@ -10,8 +10,8 @@ BEGIN
     BEGIN
       VALUE "FileDescription", "Sketchframe screen designer"
       VALUE "ProductName", "Sketchframe"
-      VALUE "FileVersion", "0.1.4"
-      VALUE "ProductVersion", "0.1.4"
+      VALUE "FileVersion", "@VERSION@"
+      VALUE "ProductVersion", "@VERSION@"
       VALUE "OriginalFilename", "sketchframe.exe"
     END
   END

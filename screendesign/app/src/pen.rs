@@ -43,6 +43,8 @@ impl R {
 pub enum Prim {
     Path { pts: Vec<[f32; 2]>, closed: bool, fill: Option<Rgba>, stroke: Option<(f32, Rgba)>, convex: bool },
     Text { x: f32, y: f32, s: String, size: f32, color: Rgba, bold: bool, italic: bool, underline: bool, mono: bool, hx: f32 },
+    /// A picture from the project, drawn in the box `r`.
+    Image { r: R, img: crate::images::ImgRef, fit: crate::images::Fit, alpha: f32 },
     /// A clickable area for exported prototypes.
     Link { r: R, target: String },
 }
@@ -452,6 +454,10 @@ impl<'a> Pen<'a> {
             let w = if i + 1 == lines { r.w * 0.6 } else { r.w * (0.86 + 0.1 * ((i * 7 % 3) as f32 / 2.0)) };
             self.rect(R::new(r.x, y, w.min(r.w), 5.0), 2.5, Some(c), None);
         }
+    }
+
+    pub fn image(&mut self, r: R, img: crate::images::ImgRef, fit: crate::images::Fit) {
+        self.out.push(Prim::Image { r, img, fit, alpha: self.alpha });
     }
 
     pub fn link(&mut self, r: R, target: &str) {

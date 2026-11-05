@@ -1,7 +1,9 @@
 //! The project file: screens made of controls. Shared by the editor and the MCP server.
 
 use crate::catalog;
+use crate::images::{self, Fit, ImgRef};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +100,12 @@ pub struct Control {
     /// Layer name shown in the layers list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// For "picture" controls: the id of the picture in the project's `images`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// For "picture" controls: how the picture sits in its box.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub fit: Fit,
 }
 
 impl Control {
@@ -165,6 +173,9 @@ pub struct Project {
     pub next_id: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub versions: Vec<Snapshot>,
+    /// Pictures used by "picture" controls, stored inside the project file.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "images::store")]
+    pub images: BTreeMap<String, ImgRef>,
 }
 
 fn one() -> u32 {
@@ -183,7 +194,7 @@ pub fn now_secs() -> u64 {
 
 impl Project {
     pub fn empty() -> Project {
-        let mut p = Project { version: 1, name: "Untitled".into(), screens: vec![], next_id: 1, versions: vec![] };
+        let mut p = Project { version: 1, name: "Untitled".into(), screens: vec![], next_id: 1, versions: vec![], images: BTreeMap::new() };
         p.add_screen("Home", "phone_island");
         p
     }
@@ -257,7 +268,51 @@ impl Project {
             group: None,
             component: None,
             name: None,
+            image: None,
+            fit: Fit::Stretch,
         }
+    }
+
+    /// Stores a picture (once, however often it is added) and returns its id.
+    pub fn add_image(&mut self, img: images::Img) -> String {
+        let id = img.id();
+        self.images.entry(id.clone()).or_insert_with(|| std::sync::Arc::new(img));
+        id
+    }
+
+    /// A new picture on screen `idx`, centred on (cx, cy) when `at` is given. Large pictures are
+    /// scaled down to fit the screen; `size` overrides the size.
+    pub fn add_picture(&mut self, idx: usize, img: images::Img, at: Option<(f32, f32)>, size: Option<(f32, f32)>) -> u64 {
+        let (mut w, mut h) = (img.w, img.h);
+        let (sw, sh) = (self.screens[idx].w, self.screens[idx].h);
+        let room = 0.9;
+        if w > sw * room || h > sh * room {
+            let s = (sw * room / w).min(sh * room / h);
+            w *= s;
+            h *= s;
+        }
+        if let Some((sw, sh)) = size {
+            w = sw;
+            h = sh;
+        }
+        let (w, h) = (w.round().max(8.0), h.round().max(8.0));
+        let (cx, cy) = at.unwrap_or((sw / 2.0, sh / 2.0));
+        let name = img.name.clone();
+        let image = self.add_image(img);
+        let mut c = self.make_control("picture", (cx - w / 2.0).round(), (cy - h / 2.0).round());
+        c.name = Some(name);
+        c.w = w;
+        c.h = h;
+        c.image = Some(image);
+        let id = c.id;
+        self.screens[idx].controls.push(c);
+        id
+    }
+
+    /// Pictures still used by some part (of a screen or of a saved version).
+    fn used_images(&self) -> std::collections::HashSet<&str> {
+        let screens = self.screens.iter().chain(self.versions.iter().flat_map(|v| v.screens.iter()));
+        screens.flat_map(|s| s.controls.iter()).filter_map(|c| c.image.as_deref()).collect()
     }
 
     pub fn load(path: &Path) -> Result<Project, String> {
@@ -273,7 +328,16 @@ impl Project {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let s = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        let used = self.used_images();
+        let s = if self.images.keys().all(|k| used.contains(k.as_str())) {
+            serde_json::to_string_pretty(self)
+        } else {
+            // leave pictures nobody uses any more out of the file
+            let mut p = self.clone();
+            p.images.retain(|k, _| used.contains(k.as_str()));
+            serde_json::to_string_pretty(&p)
+        }
+        .map_err(|e| e.to_string())?;
         let tmp = path.with_extension("tmp");
         std::fs::write(&tmp, s).map_err(|e| format!("can't write {}: {e}", tmp.display()))?;
         std::fs::rename(&tmp, path).map_err(|e| format!("can't save {}: {e}", path.display()))
@@ -327,7 +391,7 @@ pub fn current_file() -> PathBuf {
 
 /// A small demo project so a fresh start isn't empty.
 pub fn sample() -> Project {
-    let mut p = Project { version: 1, name: "Sample app".into(), screens: vec![], next_id: 1, versions: vec![] };
+    let mut p = Project { version: 1, name: "Sample app".into(), screens: vec![], next_id: 1, versions: vec![], images: BTreeMap::new() };
     let login = p.add_screen("Sign in", "phone_island");
     let home = p.add_screen("Home feed", "phone_island");
     let web = p.add_screen("Web dashboard", "browser");
