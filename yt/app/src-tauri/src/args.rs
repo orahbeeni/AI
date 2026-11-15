@@ -12,6 +12,28 @@ pub struct WaitRange {
     pub max: u32,
 }
 
+/// Turn the downloaded audio/video into a text transcript with Whisper.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TranscribeOptions {
+    /// A model name from `transcribe::MODELS`.
+    pub model: String,
+    /// Any of "txt" (with periodic [HH:MM:SS] marks), "srt", "vtt".
+    pub formats: Vec<String>,
+    /// ISO code such as "en", or "auto" to detect it.
+    pub language: String,
+    /// Seconds between the [HH:MM:SS] marks in the text transcript.
+    pub interval_secs: u32,
+    /// Label who is speaking: "off", "auto" (work out how many) or a number of speakers (2–8).
+    pub speakers: String,
+}
+
+impl Default for TranscribeOptions {
+    fn default() -> Self {
+        TranscribeOptions { model: "small".into(), formats: vec!["txt".into()], language: "auto".into(), interval_secs: 30, speakers: "off".into() }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct JobOptions {
@@ -65,12 +87,20 @@ pub struct JobOptions {
     pub cookies_browser: Option<String>,
     pub cookies_file: Option<String>,
     pub rate_limit: Option<String>,
+    /// Random pause (seconds) before each video, to stay under the site's rate limits.
+    /// `None` = automatic (the UI turns it on for big batches); 0–0 = off.
+    pub pause_between: Option<WaitRange>,
+    /// Don't run alongside other downloads (and don't let others start while this runs).
+    pub one_at_a_time: bool,
     pub proxy: Option<String>,
     pub retries: Option<u32>,
     pub concurrent_fragments: Option<u32>,
 
     // Files
     pub restrict_filenames: bool,
+
+    /// Set to also write a transcript once the download has finished.
+    pub transcribe: Option<TranscribeOptions>,
 
     /// Anything else, typed the way you would on the command line.
     pub extra_args: Option<String>,
@@ -129,6 +159,10 @@ pub fn common_flags(o: &JobOptions, ctx: &ArgContext) -> Vec<String> {
     a
 }
 
+/// The file name pattern used when none is chosen. The "[id]" at the end is what lets a continued job
+/// recognise videos it already saved.
+pub const DEFAULT_TEMPLATE: &str = "%(upload_date>%Y-%m-%d|unknown-date)s - %(title)s [%(id)s].%(ext)s";
+
 pub fn build_args(o: &JobOptions, ctx: &ArgContext) -> Vec<String> {
     let mut a = progress_flags();
     a.extend(common_flags(o, ctx));
@@ -136,8 +170,13 @@ pub fn build_args(o: &JobOptions, ctx: &ArgContext) -> Vec<String> {
     if !o.output_dir.trim().is_empty() {
         push_kv(&mut a, "-P", o.output_dir.trim());
     }
-    if let Some(t) = nonempty(&o.output_template) {
-        push_kv(&mut a, "-o", t);
+    // Files start with the upload date (2026-11-14 - Title [id].ext) unless a name pattern was chosen.
+    // Not for streams that are waited for or recorded live: they may have no date yet, and the
+    // "Scheduled / Live" preset is meant to be the plain yt-dlp command.
+    match nonempty(&o.output_template) {
+        Some(t) => push_kv(&mut a, "-o", t),
+        None if o.wait_for_video.is_none() && !o.live_from_start => push_kv(&mut a, "-o", DEFAULT_TEMPLATE),
+        None => {}
     }
     if o.restrict_filenames {
         a.push("--restrict-filenames".into());
@@ -246,6 +285,14 @@ pub fn build_args(o: &JobOptions, ctx: &ArgContext) -> Vec<String> {
     }
 
     // Network
+    if let Some(p) = o.pause_between.as_ref().filter(|p| p.max > 0) {
+        let (min, max) = (p.min.min(p.max), p.max);
+        push_kv(&mut a, "--sleep-interval", min.to_string());
+        if max > min {
+            push_kv(&mut a, "--max-sleep-interval", max.to_string());
+        }
+        push_kv(&mut a, "--sleep-requests", "1");
+    }
     if let Some(r) = nonempty(&o.rate_limit) {
         push_kv(&mut a, "--limit-rate", r);
     }
@@ -443,5 +490,19 @@ mod tests {
         assert!(has(&JobOptions { url: "u".into(), ..Default::default() }));
         assert!(!has(&JobOptions { url: "u".into(), live_from_start: true, ..Default::default() }));
         assert!(!has(&JobOptions { url: "u".into(), download_sections: vec!["*1:00-2:00".into()], ..Default::default() }));
+    }
+
+    #[test]
+    fn pause_between_videos_becomes_sleep_flags() {
+        let with = |p: Option<WaitRange>| build_args(&JobOptions { url: "u".into(), pause_between: p, ..Default::default() }, &ctx());
+        let a = with(Some(WaitRange { min: 5, max: 20 }));
+        let at = |f: &str| a.iter().position(|x| x == f).map(|i| a[i + 1].clone());
+        assert_eq!(at("--sleep-interval").as_deref(), Some("5"));
+        assert_eq!(at("--max-sleep-interval").as_deref(), Some("20"));
+        assert_eq!(at("--sleep-requests").as_deref(), Some("1"));
+        // A fixed pause needs no max; off and automatic add nothing.
+        assert!(!with(Some(WaitRange { min: 8, max: 8 })).contains(&"--max-sleep-interval".to_string()));
+        assert!(!with(Some(WaitRange { min: 0, max: 0 })).contains(&"--sleep-interval".to_string()));
+        assert!(!with(None).contains(&"--sleep-interval".to_string()));
     }
 }

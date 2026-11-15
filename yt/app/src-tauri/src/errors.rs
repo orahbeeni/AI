@@ -6,10 +6,29 @@ pub struct Explained {
     pub hint: String,
 }
 
+/// Did the site push back because we are asking too fast (as opposed to a
+/// problem with one particular video)? Retrying straight away only makes it worse.
+pub fn is_rate_limited(raw: &str) -> bool {
+    let l = raw.to_lowercase();
+    l.contains("http error 429") || l.contains("too many requests") || l.contains("not a bot") || (l.contains("sign in to confirm you") && !l.contains("age"))
+}
+
+/// yt-dlp found the file already downloaded, then ffmpeg failed while re-tagging it (typically
+/// because the old file carries cover art the new tagging pass can't copy).
+pub fn is_retag_failure<'a>(raw: &str, mut log: impl Iterator<Item = &'a str>) -> bool {
+    raw.to_lowercase().contains("conversion failed") && log.any(|l| l.contains("has already been downloaded"))
+}
+
 pub fn explain(raw: &str) -> Option<Explained> {
     let l = raw.to_lowercase();
     let e = |m: &str, h: &str| Some(Explained { message: m.into(), hint: h.into() });
 
+    if l.contains("conversion failed") {
+        return e(
+            "ffmpeg couldn't convert or tag the file.",
+            "Open Details to see ffmpeg's reason. If the file is already in the folder, delete it and retry.",
+        );
+    }
     if l.contains("not a bot") || l.contains("sign in to confirm you") && !l.contains("age") {
         return e(
             "YouTube wants proof you are not a bot.",
@@ -106,5 +125,22 @@ mod tests {
     #[test]
     fn upcoming_live_event() {
         assert!(explain("This live event will begin in 2 hours").unwrap().hint.contains("Wait"));
+    }
+
+    #[test]
+    fn rate_limits_are_told_apart_from_other_failures() {
+        assert!(is_rate_limited("ERROR: [youtube] abc: Sign in to confirm you’re not a bot."));
+        assert!(is_rate_limited("ERROR: unable to download video data: HTTP Error 429: Too Many Requests"));
+        assert!(!is_rate_limited("ERROR: [youtube] abc: Sign in to confirm your age."));
+        assert!(!is_rate_limited("ERROR: Video unavailable"));
+        assert!(!is_rate_limited("ERROR: Private video"));
+    }
+
+    #[test]
+    fn retag_failures_are_recognised() {
+        let log = ["[download] x.opus has already been downloaded", "[Metadata] Adding metadata"];
+        assert!(is_retag_failure("Postprocessing: Conversion failed!", log.iter().copied()));
+        assert!(!is_retag_failure("Postprocessing: Conversion failed!", ["[download] 100%"].iter().copied()));
+        assert!(!is_retag_failure("HTTP Error 403", log.iter().copied()));
     }
 }

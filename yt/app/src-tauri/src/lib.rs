@@ -3,11 +3,13 @@ mod binaries;
 mod commands;
 mod disk;
 mod errors;
+mod existing;
 mod jobs;
 mod parser;
 mod paths;
 mod platform;
 mod store;
+mod transcribe;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -108,8 +110,11 @@ pub fn run() {
             commands::preview_command,
             commands::list_jobs,
             commands::job_log,
+            commands::job_log_path,
             commands::add_job,
             commands::cancel_job,
+            commands::queue_paused_until,
+            commands::resume_queue,
             commands::retry_job,
             commands::remove_job,
             commands::clear_finished,
@@ -119,6 +124,15 @@ pub fn run() {
             commands::check_subscription_now,
             commands::reveal_path,
             commands::open_path,
+            commands::whisper_status,
+            commands::whisper_install_engine,
+            commands::whisper_remove_engine,
+            commands::whisper_download_model,
+            commands::whisper_delete_model,
+            commands::whisper_download_speakers,
+            commands::whisper_delete_speakers,
+            commands::transcribe_job,
+            commands::transcribe_file,
             commands::quit_app,
         ])
         .build(tauri::generate_context!())

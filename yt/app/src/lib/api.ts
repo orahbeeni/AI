@@ -1,4 +1,4 @@
-import type { AddJob, ApiError, AppInfo, BinInfo, BinaryProgress, Job, JobOptions, Settings, Subscription } from './types';
+import type { AddJob, ApiError, AppInfo, BinInfo, BinaryProgress, Job, JobOptions, Settings, Subscription, TranscribeOptions, WhisperStatus } from './types';
 import * as mock from './mock';
 
 export const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -29,6 +29,7 @@ export const api = {
   previewCommand: (options: JobOptions) => call<string>('preview_command', { options }),
   listJobs: () => call<Job[]>('list_jobs'),
   jobLog: (id: string) => call<string[]>('job_log', { id }),
+  jobLogPath: (id: string) => call<string | null>('job_log_path', { id }),
   addJob: (job: AddJob) => call<Job>('add_job', { job }),
   cancelJob: (id: string) => call<void>('cancel_job', { id }),
   retryJob: (id: string) => call<void>('retry_job', { id }),
@@ -40,6 +41,17 @@ export const api = {
   checkSubNow: (id: string) => call<boolean>('check_subscription_now', { id }),
   revealPath: (path: string) => call<void>('reveal_path', { path }),
   openPath: (path: string) => call<void>('open_path', { path }),
+  whisperStatus: () => call<WhisperStatus>('whisper_status'),
+  whisperInstallEngine: () => call<WhisperStatus>('whisper_install_engine'),
+  whisperRemoveEngine: () => call<WhisperStatus>('whisper_remove_engine'),
+  whisperDownloadModel: (name: string) => call<WhisperStatus>('whisper_download_model', { name }),
+  whisperDeleteModel: (name: string) => call<WhisperStatus>('whisper_delete_model', { name }),
+  whisperDownloadSpeakers: () => call<WhisperStatus>('whisper_download_speakers'),
+  whisperDeleteSpeakers: () => call<WhisperStatus>('whisper_delete_speakers'),
+  transcribeJob: (id: string, options: TranscribeOptions) => call<void>('transcribe_job', { id, options }),
+  transcribeFile: (path: string, options: TranscribeOptions) => call<Job>('transcribe_file', { path, options }),
+  queuePausedUntil: () => call<number | null>('queue_paused_until'),
+  resumeQueue: () => call<void>('resume_queue'),
   quit: () => call<void>('quit_app'),
 };
 
@@ -55,6 +67,18 @@ export async function pickFolder(current?: string): Promise<string | null> {
   const { open } = await import('@tauri-apps/plugin-dialog');
   const r = await open({ directory: true, multiple: false, defaultPath: current || undefined });
   return typeof r === 'string' ? r : null;
+}
+
+/** Choose audio or video files that are already on this computer. */
+export async function pickMediaFiles(): Promise<string[]> {
+  if (!inTauri) return mock.pickMediaFiles();
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const r = await open({
+    directory: false,
+    multiple: true,
+    filters: [{ name: 'Audio and video', extensions: ['mp4', 'mkv', 'webm', 'mov', 'avi', 'ts', 'mp3', 'm4a', 'opus', 'ogg', 'flac', 'wav', 'aac'] }],
+  });
+  return Array.isArray(r) ? r : typeof r === 'string' ? [r] : [];
 }
 
 export async function pickFile(): Promise<string | null> {

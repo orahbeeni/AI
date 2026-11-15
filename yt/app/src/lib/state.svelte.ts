@@ -1,7 +1,7 @@
 import { api, on, onWindowFocus, readClipboard, toApiError } from './api';
 import { BUILTIN_PRESETS } from './defaults';
 import { isUrl } from './format';
-import type { ApiError, AppInfo, BinaryProgress, Job, Preset, Settings, Subscription } from './types';
+import type { ApiError, AppInfo, BinaryProgress, Job, Preset, Settings, Subscription, WhisperStatus } from './types';
 
 export type Page = 'download' | 'queue' | 'subs' | 'settings' | 'about';
 
@@ -23,6 +23,11 @@ export const app = $state({
   toasts: [] as Toast[],
   binProgress: {} as Record<string, BinaryProgress>,
   installing: false,
+  /** Transcription engine + models (null until first loaded). */
+  whisper: null as WhisperStatus | null,
+  whisperBusy: false,
+  /** Unix time the queue resumes at after the site rate-limited us. */
+  pausedUntil: null as number | null,
   latestYtdlp: null as string | null,
   /** A URL handed over from the clipboard watcher or drag & drop. */
   incomingUrl: null as string | null,
@@ -88,6 +93,27 @@ export async function installTools(names: string[]) {
   }
 }
 
+export async function refreshWhisper() {
+  try { app.whisper = await api.whisperStatus(); } catch { /* the engine is optional */ }
+}
+
+/** Run an engine/model action, showing progress and refreshing the list afterwards. */
+export async function whisperAction(run: () => Promise<WhisperStatus>, done?: string) {
+  if (app.whisperBusy) return;
+  app.whisperBusy = true;
+  try {
+    app.whisper = await run();
+    if (done) toast('ok', done);
+  } catch (e) {
+    toastError(e);
+  } finally {
+    app.whisperBusy = false;
+    for (const k of Object.keys(app.binProgress)) if (k === 'whisper' || k === 'speakers' || k.startsWith('model:')) delete app.binProgress[k];
+  }
+}
+
+export const modelLabel = (name: string) => app.whisper?.models.find(m => m.name === name)?.label ?? name;
+
 export async function checkForYtdlpUpdate() {
   try {
     app.latestYtdlp = await api.latestYtdlp();
@@ -112,11 +138,22 @@ export async function init() {
   try {
     const [settings, info, jobs, subs] = await Promise.all([api.getSettings(), api.appInfo(), api.listJobs(), api.listSubs()]);
     app.settings = settings; app.info = info; app.jobs = jobs; app.subs = subs;
+    refreshWhisper();
+    api.queuePausedUntil().then(t => { app.pausedUntil = t; }).catch(() => {});
     applyTheme(settings.theme);
   } catch (e) { toastError(e); }
   await on<Job>('job-update', upsertJob);
+  await on<{ until: number | null }>('queue-paused', p => {
+    const was = app.pausedUntil;
+    app.pausedUntil = p.until;
+    if (p.until && !was) toast('info', 'YouTube is limiting requests — downloads paused', { hint: 'New downloads start again by themselves in about 15 minutes. Waiting is the only thing that helps.', action: { label: 'View queue', run: () => (app.page = 'queue') } });
+  });
   await on<string>('job-removed', id => { app.jobs = app.jobs.filter(j => j.id !== id); });
-  await on<BinaryProgress>('binary-progress', p => { app.binProgress[p.name] = p; });
+  await on<BinaryProgress>('binary-progress', p => {
+    app.binProgress[p.name] = p;
+    // A job can set up the engine or a model by itself; keep the lists in step.
+    if (p.stage === 'done' && (p.name === 'whisper' || p.name === 'speakers' || p.name.startsWith('model:'))) refreshWhisper();
+  });
   await on<void>('subscriptions-changed', async () => { app.subs = await api.listSubs(); });
   await onWindowFocus(checkClipboard);
   app.ready = true;

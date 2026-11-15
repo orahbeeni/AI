@@ -4,6 +4,7 @@
   import { api } from '../api';
   import { isActive, isFinished } from '../format';
   import { app, toastError } from '../state.svelte';
+  import { dur } from '../format';
   import type { Job } from '../types';
 
   const waiting = $derived(app.jobs.filter(j => j.status === 'waiting'));
@@ -11,6 +12,19 @@
   const queued = $derived(app.jobs.filter(j => j.status === 'queued'));
   const finished = $derived(app.jobs.filter(isFinished).sort((a, b) => (b.finishedAt ?? b.createdAt) - (a.finishedAt ?? a.createdAt)));
   const empty = $derived(app.jobs.length === 0);
+
+  // Counts down while the queue is paused after a rate limit; clears itself when the time is up.
+  let now = $state(Date.now() / 1000);
+  $effect(() => {
+    if (!app.pausedUntil) return;
+    now = Date.now() / 1000;
+    const t = setInterval(() => {
+      now = Date.now() / 1000;
+      if (app.pausedUntil && now >= app.pausedUntil) app.pausedUntil = null;
+    }, 1000);
+    return () => clearInterval(t);
+  });
+  const resumeAt = $derived(app.pausedUntil ? new Date(app.pausedUntil * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '');
   const groups = $derived<[string, Job[]][]>([
     ['Running', running], ['Waiting for scheduled start', waiting], ['Up next', queued], ['Finished', finished],
   ]);
@@ -22,6 +36,15 @@
       <p class="muted">{running.length} running · {waiting.length} waiting for a start · {queued.length} queued · {finished.length} finished</p></div>
     {#if finished.length}<button class="btn" onclick={() => api.clearFinished().catch(toastError)}><Icon name="trash" size={16} /> Clear finished</button>{/if}
   </header>
+
+  {#if app.pausedUntil}
+    <div class="notice warn pause" role="status">
+      <Icon name="clock" size={20} />
+      <div class="grow"><b>Paused — YouTube is limiting requests.</b>
+        <div class="small">New downloads start again at <b>{resumeAt}</b> (in {dur(Math.max(0, app.pausedUntil - now))}). Downloads already running carry on. Waiting is what helps: trying again straight away makes the block last longer.</div></div>
+      <button class="btn sm" onclick={() => api.resumeQueue().catch(toastError)}>Resume now</button>
+    </div>
+  {/if}
 
   {#if empty}
     <div class="empty card">
@@ -43,6 +66,7 @@
 
 <style>
   .wrap { max-width: 980px; margin: 0 auto; padding: 26px 28px 40px; display: flex; flex-direction: column; gap: 20px; }
+  .pause { align-items: center; }
   .empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 48px 20px; text-align: center; color: var(--muted); }
   .empty h2 { color: var(--text); }
 </style>

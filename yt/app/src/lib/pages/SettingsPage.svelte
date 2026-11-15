@@ -2,7 +2,8 @@
   import Icon from '../components/Icon.svelte';
   import { api, pickFolder, pickFile } from '../api';
   import { bytes, shortName } from '../format';
-  import { app, checkForYtdlpUpdate, installTools, saveSettings, toast, ytdlpUpdateAvailable } from '../state.svelte';
+  import { app, checkForYtdlpUpdate, installTools, saveSettings, toast, whisperAction, ytdlpUpdateAvailable } from '../state.svelte';
+  import { transcribeMinutesPerHour } from '../format';
 
   const s = $derived(app.settings);
   const WHAT: Record<string, string> = {
@@ -52,6 +53,69 @@
     <div class="row wrap">
       <button class="btn" disabled={app.installing} onclick={() => installTools(['yt-dlp', 'ffmpeg', 'ffprobe', 'deno'])}>Install / update everything</button>
     </div>
+  </section>
+
+  <section class="card pad col">
+    <h2>Transcription</h2>
+    <p class="muted small">Turns a download into text with time stamps, using Whisper on this computer — nothing is uploaded. Turn it on per download under Options → Transcript. The engine and models are fetched automatically the first time you need them; you can also get them ahead of time here.</p>
+    {#if app.whisper}
+      <div class="tools">
+        <div class="tool">
+          <div class="grow col" style="gap:2px">
+            <div class="row" style="gap:8px"><b>Whisper engine</b>
+              <span class="pill {app.whisper.engineInstalled ? 'ok' : 'err'}">{app.whisper.engineInstalled ? 'Installed' : 'Not installed'}</span></div>
+            <span class="muted small">A private Python environment with faster-whisper (about 500 MB). Does not touch any Python on your computer.</span>
+            {#if prog('whisper') && prog('whisper').stage !== 'done'}
+              <div class="progress indeterminate" style="margin-top:6px"><i></i></div>
+              <span class="muted small">{prog('whisper').stage}{prog('whisper').stage === 'downloading' ? ` ${bytes(prog('whisper').downloaded)}` : ''}…</span>
+            {/if}
+          </div>
+          {#if app.whisper.engineInstalled}
+            <button class="btn sm" disabled={app.whisperBusy} onclick={() => whisperAction(api.whisperRemoveEngine, 'Transcription engine removed')}>Remove</button>
+          {:else}
+            <button class="btn sm" disabled={app.whisperBusy} onclick={() => whisperAction(api.whisperInstallEngine, 'Transcription engine installed')}>Install</button>
+          {/if}
+        </div>
+        <div class="tool">
+          <div class="grow col" style="gap:2px">
+            <div class="row" style="gap:8px"><b>Speaker labels</b>
+              <span class="muted small">{app.whisper.speakersMb} MB</span>
+              {#if app.whisper.speakersInstalled}<span class="pill ok">Downloaded</span>{/if}</div>
+            <span class="muted small">Two small models that tell voices apart, so the transcript can say “Speaker 1”, “Speaker 2”… Approximate.</span>
+            {#if prog('speakers') && prog('speakers').stage !== 'done'}
+              <div class="progress" class:indeterminate={!prog('speakers').total} style="margin-top:6px"><i style="width:{prog('speakers').total ? (prog('speakers').downloaded / (prog('speakers').total ?? 1)) * 100 : 40}%"></i></div>
+              <span class="muted small">{prog('speakers').stage}{prog('speakers').stage === 'downloading' ? ` ${bytes(prog('speakers').downloaded)}` : ''}…</span>
+            {/if}
+          </div>
+          {#if app.whisper.speakersInstalled}
+            <button class="btn sm ghost danger" disabled={app.whisperBusy} onclick={() => whisperAction(api.whisperDeleteSpeakers)}>Delete</button>
+          {:else}
+            <button class="btn sm" disabled={app.whisperBusy} onclick={() => whisperAction(api.whisperDownloadSpeakers, 'Speaker models downloaded')}>Download</button>
+          {/if}
+        </div>
+        {#each app.whisper.models as m (m.name)}
+          {@const mp = prog('model:' + m.name)}
+          <div class="tool">
+            <div class="grow col" style="gap:2px">
+              <div class="row" style="gap:8px"><b>{m.label}</b>
+                <span class="muted small">{m.sizeMb >= 1000 ? (m.sizeMb / 1000).toFixed(1) + ' GB' : m.sizeMb + ' MB'}</span>
+                {#if m.installed}<span class="pill ok">Downloaded</span>{/if}
+                {#if transcribeMinutesPerHour(m.name)}<span class="muted small">≈ {transcribeMinutesPerHour(m.name)} min per audio hour</span>{/if}</div>
+              <span class="muted small">{m.hint}</span>
+              {#if mp && mp.stage !== 'done'}
+                <div class="progress" style="margin-top:6px"><i style="width:{mp.total ? (mp.downloaded / mp.total) * 100 : 40}%"></i></div>
+                <span class="muted small">downloading {bytes(mp.downloaded)}{mp.total ? ` of ${bytes(mp.total)}` : ''}…</span>
+              {/if}
+            </div>
+            {#if m.installed}
+              <button class="btn sm ghost danger" disabled={app.whisperBusy} onclick={() => whisperAction(() => api.whisperDeleteModel(m.name))}>Delete</button>
+            {:else}
+              <button class="btn sm" disabled={app.whisperBusy} onclick={() => whisperAction(() => api.whisperDownloadModel(m.name), `${m.label} model downloaded`)}>Download</button>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    {/if}
   </section>
 
   <section class="card pad col">

@@ -12,6 +12,15 @@ export function speed(n?: number | null): string {
   return n ? `${bytes(n)}/s` : '';
 }
 
+/** 45 -> "45s", 200 -> "3m 20s", 4325 -> "1h 12m" */
+export function dur(sec?: number | null): string {
+  if (sec == null || !isFinite(sec)) return '—';
+  const s = Math.max(0, Math.round(sec));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+  return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`;
+}
+
 /** 3725 -> "1:02:05", 65 -> "1:05" */
 export function clock(sec?: number | null): string {
   if (sec == null || !isFinite(sec)) return '—';
@@ -116,3 +125,11 @@ export function normalizeProbe(raw: any, url: string): Probe {
   const kind: Probe['kind'] = status === 'is_upcoming' ? 'upcoming' : status === 'is_live' ? 'live' : 'video';
   return { ...base, kind, formats, subtitleLangs: Object.keys(raw.subtitles ?? {}), entries: [] };
 }
+
+/**
+ * Measured minutes of CPU time to transcribe one hour of speech (see the
+ * benchmark table in the README) on an Intel i7-6700HQ, 4 cores / 8 threads.
+ * Newer machines are faster; this only sets expectations.
+ */
+const MINUTES_PER_HOUR: Record<string, number> = { tiny: 6, base: 5, small: 12, medium: 30, turbo: 32, 'large-v3': 57 };
+export const transcribeMinutesPerHour = (model: string): number | null => MINUTES_PER_HOUR[model] ?? null;

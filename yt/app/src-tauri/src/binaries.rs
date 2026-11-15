@@ -26,14 +26,14 @@ pub struct BinInfo {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ProgressEvent<'a> {
-    name: &'a str,
-    stage: &'a str,
-    downloaded: u64,
-    total: Option<u64>,
+pub(crate) struct ProgressEvent<'a> {
+    pub name: &'a str,
+    pub stage: &'a str,
+    pub downloaded: u64,
+    pub total: Option<u64>,
 }
 
-fn emit(host: &dyn Host, ev: ProgressEvent) {
+pub(crate) fn emit(host: &dyn Host, ev: ProgressEvent) {
     host.emit("binary-progress", serde_json::to_value(ev).unwrap_or_default());
 }
 
@@ -115,7 +115,7 @@ pub async fn inspect(paths: &Paths, settings: &Settings) -> Vec<BinInfo> {
     out
 }
 
-fn client() -> Result<reqwest::Client, String> {
+pub(crate) fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .user_agent(concat!("YTGrab/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(std::time::Duration::from_secs(20))
@@ -123,7 +123,7 @@ fn client() -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
-async fn download_to(host: &dyn Host, name: &str, url: &str, dest: &Path) -> Result<(), String> {
+pub(crate) async fn download_to(host: &dyn Host, name: &str, url: &str, dest: &Path) -> Result<(), String> {
     let resp = client()?.get(url).send().await.map_err(|e| format!("download failed: {e}"))?;
     if !resp.status().is_success() {
         return Err(format!("download failed: HTTP {} for {url}", resp.status()));
@@ -146,7 +146,7 @@ async fn download_to(host: &dyn Host, name: &str, url: &str, dest: &Path) -> Res
     Ok(())
 }
 
-fn sha256_file(path: &Path) -> std::io::Result<String> {
+pub(crate) fn sha256_file(path: &Path) -> std::io::Result<String> {
     let mut f = std::fs::File::open(path)?;
     let mut h = Sha256::new();
     let mut buf = vec![0u8; 1 << 16];
@@ -169,7 +169,7 @@ pub fn checksum_for(sums: &str, asset: &str) -> Option<String> {
     })
 }
 
-fn replace_file(tmp: &Path, dest: &Path) -> Result<(), String> {
+pub(crate) fn replace_file(tmp: &Path, dest: &Path) -> Result<(), String> {
     let _ = std::fs::remove_file(dest);
     std::fs::rename(tmp, dest)
         .or_else(|_| std::fs::copy(tmp, dest).map(|_| ()).and_then(|_| std::fs::remove_file(tmp)))

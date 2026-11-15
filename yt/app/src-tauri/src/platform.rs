@@ -48,6 +48,28 @@ pub fn exe_name_for(os: Os, base: &str) -> String {
     }
 }
 
+/// The uv release archive to download for a platform (uv builds and manages the
+/// private Python environment that runs Whisper).
+pub fn uv_asset(os: Os, arch: Arch) -> &'static str {
+    match (os, arch) {
+        (Os::Windows, Arch::X64) => "uv-x86_64-pc-windows-msvc.zip",
+        (Os::Windows, Arch::Arm64) => "uv-aarch64-pc-windows-msvc.zip",
+        (Os::MacOs, Arch::X64) => "uv-x86_64-apple-darwin.tar.gz",
+        (Os::MacOs, Arch::Arm64) => "uv-aarch64-apple-darwin.tar.gz",
+        (Os::Linux, Arch::X64) => "uv-x86_64-unknown-linux-gnu.tar.gz",
+        (Os::Linux, Arch::Arm64) => "uv-aarch64-unknown-linux-gnu.tar.gz",
+    }
+}
+
+/// Where a virtual environment keeps its Python executable.
+pub fn venv_python(venv: &Path) -> std::path::PathBuf {
+    if os() == Os::Windows {
+        venv.join("Scripts").join("python.exe")
+    } else {
+        venv.join("bin").join("python")
+    }
+}
+
 /// The yt-dlp release asset to download for a platform.
 pub fn ytdlp_asset(os: Os, arch: Arch) -> &'static str {
     match (os, arch) {
@@ -80,6 +102,30 @@ pub fn deno_triple(os: Os, arch: Arch) -> &'static str {
         (Os::Linux, Arch::X64) => "x86_64-unknown-linux-gnu",
         (Os::Linux, Arch::Arm64) => "aarch64-unknown-linux-gnu",
     }
+}
+
+/// Why a helper process ended, for messages. `None` when it simply succeeded.
+pub fn describe_exit(status: &std::process::ExitStatus) -> Option<String> {
+    if status.success() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(sig) = status.signal() {
+            return Some(match sig {
+                9 => "it was shut down by the system (signal 9), which almost always means the computer ran out of memory".to_string(),
+                // earlyoom and systemd-oomd stop the biggest program with SIGTERM when memory runs low.
+                15 => "it was stopped by the system (signal 15), usually a low-memory guard such as earlyoom because the computer was running out of memory".to_string(),
+                n => format!("it was shut down by the system (signal {n})"),
+            });
+        }
+    }
+    status.code().map(|c| match c {
+        // Windows reports a failed allocation as 0xC0000017 / exit code -1073741801.
+        -1073741801 => "the computer ran out of memory".to_string(),
+        c => format!("it exited with code {c}"),
+    })
 }
 
 /// Prepare a child process: no flashing console window on Windows, and its own
@@ -182,5 +228,20 @@ mod tests {
         }
         assert_eq!(ytdlp_asset(Os::Windows, Arch::X64), "yt-dlp.exe");
         assert_eq!(ffmpeg_suffix(Os::MacOs, Arch::Arm64), "darwin-arm64");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod exit_tests {
+    use super::describe_exit;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus;
+
+    #[test]
+    fn a_stop_by_the_system_is_explained() {
+        assert!(describe_exit(&ExitStatus::from_raw(0)).is_none());
+        assert!(describe_exit(&ExitStatus::from_raw(9)).unwrap().contains("ran out of memory"));
+        assert!(describe_exit(&ExitStatus::from_raw(15)).unwrap().contains("earlyoom"));
+        assert_eq!(describe_exit(&ExitStatus::from_raw(1 << 8)).unwrap(), "it exited with code 1");
     }
 }

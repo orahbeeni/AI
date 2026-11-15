@@ -1,25 +1,37 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import FormatTable from './FormatTable.svelte';
-  import { BROWSERS, capSort, FILENAME_TEMPLATES, FILENAME_TOKENS, SPONSOR_CATEGORIES } from '../defaults';
+  import TranscriptFields from './TranscriptFields.svelte';
+  import { BROWSERS, capSort, DEFAULT_TEMPLATE, DEFAULT_TRANSCRIBE, FILENAME_TEMPLATES, FILENAME_TOKENS, SPONSOR_CATEGORIES } from '../defaults';
   import { clock, parseClock } from '../format';
   import { pickFile } from '../api';
+  import { app } from '../state.svelte';
   import type { JobOptions, Probe } from '../types';
 
-  let { draft = $bindable(), probe = null }: { draft: JobOptions; probe?: Probe | null } = $props();
+  let { draft = $bindable(), probe = null, tab = $bindable('quality') }: { draft: JobOptions; probe?: Probe | null; tab?: string } = $props();
 
   const TABS = [
-    ['quality', 'Quality', 'film'], ['audio', 'Audio', 'music'], ['live', 'Live & scheduled', 'live'],
+    ['quality', 'Quality', 'film'], ['audio', 'Audio', 'music'], ['transcript', 'Transcript', 'tag'], ['live', 'Live & scheduled', 'live'],
     ['subs', 'Subtitles', 'tag'], ['extras', 'Extras', 'shield'], ['playlist', 'Playlist', 'queue'],
     ['clip', 'Clip', 'scissors'], ['name', 'File names', 'folder'], ['net', 'Network & sign-in', 'sliders'],
     ['adv', 'Advanced', 'terminal'],
   ] as const;
-  let tab = $state<(typeof TABS)[number][0]>('quality');
 
   // --- quality shortcuts
   const heights = [2160, 1440, 1080, 720, 480, 360];
   let cap = $derived(heights.find(h => draft.formatSort === capSort(h)) ?? 0);
   function setCap(h: number) { draft.formatSort = h ? capSort(h) : null; if (h && draft.format?.includes('height<=')) draft.format = null; }
+
+  // A video preset's format would make yt-dlp fetch the whole video just to pull the audio out of it.
+  function setAudioOnly(on: boolean) {
+    draft.audioOnly = on;
+    if (on) { draft.format = null; draft.formatSort = null; }
+  }
+
+  // --- transcript
+  function setTranscribe(on: boolean) {
+    draft.transcribe = on ? { ...DEFAULT_TRANSCRIBE, model: (app.settings?.lastModel as string | undefined) ?? DEFAULT_TRANSCRIBE.model } : null;
+  }
 
   // --- live
   const waiting = $derived(!!draft.waitForVideo);
@@ -48,7 +60,11 @@
     title: probe?.title ?? 'My Video', uploader: probe?.channel ?? 'Some Channel', upload_date: '20260930', id: 'dQw4w9WgXcQ',
     resolution: '1920x1080', playlist: probe?.kind === 'playlist' ? probe.title : 'My Playlist', playlist_index: '01', ext: draft.audioOnly ? (draft.audioFormat ?? 'mp3') : (draft.container ?? 'mp4'),
   });
-  const example = $derived((draft.outputTemplate || '%(title)s [%(id)s].%(ext)s').replace(/%\((\w+)\)s/g, (_, k) => sample[k] ?? k));
+  const example = $derived((draft.outputTemplate || DEFAULT_TEMPLATE).replace(/%\((\w+)(?:>([^)|]*))?(?:\|[^)]*)?\)s/g, (_, k, fmt) => {
+    const v = sample[k] ?? k;
+    // A date pattern such as %Y-%m-%d is shown filled in.
+    return fmt && /^\d{8}$/.test(v) ? fmt.replace('%Y', v.slice(0, 4)).replace('%m', v.slice(4, 6)).replace('%d', v.slice(6)) : v;
+  }));
 
   async function chooseCookieFile() { const f = await pickFile(); if (f) draft.cookiesFile = f; }
   const num = (v: string) => (v.trim() === '' ? null : Math.max(0, Number(v)));
@@ -93,7 +109,7 @@
 
     {:else if tab === 'audio'}
       <div class="col">
-        <label class="check"><input type="checkbox" bind:checked={draft.audioOnly} />
+        <label class="check"><input type="checkbox" checked={draft.audioOnly} onchange={(e) => setAudioOnly(e.currentTarget.checked)} />
           <div><b>Audio only</b><div class="hint">Skip the video and save just the sound.</div></div></label>
         <div class="grid2">
           <label class="field">Format
@@ -107,6 +123,15 @@
             </select>
           </label>
         </div>
+      </div>
+
+    {:else if tab === 'transcript'}
+      <div class="col">
+        <label class="check"><input type="checkbox" checked={!!draft.transcribe} onchange={(e) => setTranscribe(e.currentTarget.checked)} />
+          <div><b>Write a transcript when the download finishes</b>
+            <div class="hint">Uses Whisper and runs on this computer — nothing is uploaded. Tick <i>Audio only</i> on the Audio tab to keep the download small.</div></div></label>
+        {#if draft.transcribe}<TranscriptFields bind:t={draft.transcribe} />
+        {/if}
       </div>
 
     {:else if tab === 'live'}
@@ -202,12 +227,12 @@
     {:else if tab === 'name'}
       <div class="col">
         <label class="field">Pattern
-          <select value={FILENAME_TEMPLATES.some(t => t[0] === draft.outputTemplate) ? draft.outputTemplate : ''}
-            onchange={(e) => (draft.outputTemplate = e.currentTarget.value || draft.outputTemplate)}>
+          <select value={FILENAME_TEMPLATES.some(t => t[0] === (draft.outputTemplate || DEFAULT_TEMPLATE)) ? (draft.outputTemplate || DEFAULT_TEMPLATE) : ''}
+            onchange={(e) => (draft.outputTemplate = e.currentTarget.value === DEFAULT_TEMPLATE ? '' : (e.currentTarget.value || draft.outputTemplate))}>
             <option value="">Custom…</option>
             {#each FILENAME_TEMPLATES as [v, l]}<option value={v}>{l}</option>{/each}
           </select></label>
-        <input type="text" placeholder="%(title)s [%(id)s].%(ext)s" bind:value={draft.outputTemplate} aria-label="File name pattern" />
+        <input type="text" placeholder={DEFAULT_TEMPLATE} bind:value={draft.outputTemplate} aria-label="File name pattern" />
         <div class="row wrap" style="gap:6px">
           {#each FILENAME_TOKENS as [tok, label]}
             <button class="chip" onclick={() => (draft.outputTemplate = (draft.outputTemplate ?? '') + tok)} title={tok}>+ {label}</button>
@@ -257,6 +282,5 @@
   .tabs button:hover { background: var(--panel); color: var(--text); }
   .tabs button.on { background: var(--panel); color: var(--accent); box-shadow: var(--shadow); }
   .body { padding: 18px; min-width: 0; }
-  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  @media (max-width: 1050px) { .opts { grid-template-columns: 1fr; } .tabs { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--line); } .grid2 { grid-template-columns: 1fr; } }
+  @media (max-width: 1050px) { .opts { grid-template-columns: 1fr; } .tabs { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--line); } }
 </style>

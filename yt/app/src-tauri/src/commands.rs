@@ -1,10 +1,11 @@
 //! The functions the web UI can call.
 
-use crate::args::{self, JobOptions};
+use crate::args::{self, JobOptions, TranscribeOptions};
 use crate::binaries::{self, BinInfo};
 use crate::errors;
 use crate::jobs::{make_id, AddJob, Job, Shared};
 use crate::platform;
+use crate::transcribe::{self, WhisperStatus};
 use crate::store::{Settings, Subscription};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -68,6 +69,62 @@ pub async fn install_tools(st: State<'_, Shared>, names: Vec<String>) -> ApiResu
         binaries::install(st.host.as_ref(), &st.paths, name).await?;
     }
     Ok(binaries::inspect(&st.paths, &st.settings()).await)
+}
+
+#[tauri::command]
+pub fn whisper_status(st: State<'_, Shared>) -> WhisperStatus {
+    transcribe::status(&st.paths)
+}
+
+#[tauri::command]
+pub async fn whisper_install_engine(st: State<'_, Shared>) -> ApiResult<WhisperStatus> {
+    transcribe::install_engine(st.host.as_ref(), &st.paths).await?;
+    Ok(transcribe::status(&st.paths))
+}
+
+#[tauri::command]
+pub fn whisper_remove_engine(st: State<'_, Shared>) -> ApiResult<WhisperStatus> {
+    transcribe::remove_engine(&st.paths)?;
+    Ok(transcribe::status(&st.paths))
+}
+
+/// Downloads the model (and the engine, if it is missing).
+#[tauri::command]
+pub async fn whisper_download_model(st: State<'_, Shared>, name: String) -> ApiResult<WhisperStatus> {
+    transcribe::download_model(st.host.as_ref(), &st.paths, &name).await?;
+    Ok(transcribe::status(&st.paths))
+}
+
+/// Downloads the speaker models (and the engine, or its speaker package, if missing).
+#[tauri::command]
+pub async fn whisper_download_speakers(st: State<'_, Shared>) -> ApiResult<WhisperStatus> {
+    transcribe::download_speakers(st.host.as_ref(), &st.paths).await?;
+    Ok(transcribe::status(&st.paths))
+}
+
+#[tauri::command]
+pub fn whisper_delete_speakers(st: State<'_, Shared>) -> ApiResult<WhisperStatus> {
+    transcribe::delete_speakers(&st.paths)?;
+    Ok(transcribe::status(&st.paths))
+}
+
+#[tauri::command]
+pub fn whisper_delete_model(st: State<'_, Shared>, name: String) -> ApiResult<WhisperStatus> {
+    transcribe::delete_model(&st.paths, &name)?;
+    Ok(transcribe::status(&st.paths))
+}
+
+/// Make a transcript for a download that has already finished.
+#[tauri::command]
+pub fn transcribe_job(st: State<'_, Shared>, id: String, options: TranscribeOptions) -> ApiResult<()> {
+    st.inner().transcribe_existing(&id, options)?;
+    Ok(())
+}
+
+/// Queue a transcript for a video or audio file that is already on this computer.
+#[tauri::command]
+pub fn transcribe_file(st: State<'_, Shared>, path: String, options: TranscribeOptions) -> ApiResult<Job> {
+    Ok(st.inner().add_local(&path, options)?)
 }
 
 #[tauri::command]
@@ -181,6 +238,13 @@ pub fn job_log(st: State<'_, Shared>, id: String) -> Vec<String> {
     st.log_of(&id)
 }
 
+/// Where this job's full log file is, if it has one.
+#[tauri::command]
+pub fn job_log_path(st: State<'_, Shared>, id: String) -> Option<String> {
+    let p = st.log_path(&id);
+    p.is_file().then(|| p.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 pub fn add_job(st: State<'_, Shared>, job: AddJob) -> Job {
     st.inner().add(job)
@@ -189,6 +253,17 @@ pub fn add_job(st: State<'_, Shared>, job: AddJob) -> Job {
 #[tauri::command]
 pub fn cancel_job(st: State<'_, Shared>, id: String) {
     st.inner().cancel(&id)
+}
+
+/// Unix time the queue resumes at after a rate limit, or null.
+#[tauri::command]
+pub fn queue_paused_until(st: State<'_, Shared>) -> Option<i64> {
+    st.paused_until()
+}
+
+#[tauri::command]
+pub fn resume_queue(st: State<'_, Shared>) {
+    st.inner().resume_queue()
 }
 
 #[tauri::command]

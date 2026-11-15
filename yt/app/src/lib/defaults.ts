@@ -1,4 +1,4 @@
-import type { JobOptions, Preset } from './types';
+import type { JobOptions, Preset, TranscribeOptions } from './types';
 
 export function blankOptions(url = '', outputDir = ''): JobOptions {
   return {
@@ -62,8 +62,12 @@ export const FILENAME_TOKENS: [string, string][] = [
   ['%(playlist_index)s', 'Number in playlist'], ['%(ext)s', 'Extension'],
 ];
 
+/** Used when no pattern is chosen. Keep in step with DEFAULT_TEMPLATE in args.rs. */
+export const DEFAULT_TEMPLATE = '%(upload_date>%Y-%m-%d|unknown-date)s - %(title)s [%(id)s].%(ext)s';
+
 export const FILENAME_TEMPLATES: [string, string][] = [
-  ['%(title)s [%(id)s].%(ext)s', 'Title [id] (default)'],
+  [DEFAULT_TEMPLATE, 'Date - Title [id] (default)'],
+  ['%(title)s [%(id)s].%(ext)s', 'Title [id]'],
   ['%(title)s.%(ext)s', 'Title only'],
   ['%(uploader)s/%(title)s.%(ext)s', 'Channel folder / Title'],
   ['%(upload_date)s - %(title)s.%(ext)s', 'Date - Title'],
@@ -71,3 +75,39 @@ export const FILENAME_TEMPLATES: [string, string][] = [
 ];
 
 export const BROWSERS = ['chrome', 'firefox', 'edge', 'brave', 'chromium', 'opera', 'safari', 'vivaldi'];
+
+export type BulkMode = 'quick' | 'steady' | 'careful';
+
+/**
+ * How carefully to fetch many videos. YouTube slows or blocks IP addresses that ask for lots of
+ * videos quickly, so the careful modes go one at a time with random pauses between videos.
+ */
+export const BULK_MODES: Record<BulkMode, { label: string; short: string; hint: string; pause: { min: number; max: number } | null }> = {
+  quick: { label: 'Quick', short: 'No pauses', pause: null,
+    hint: 'No pauses, a couple of videos at the same time. Fine for a handful of videos.' },
+  steady: { label: 'Steady', short: 'One at a time, short pauses', pause: { min: 5, max: 20 },
+    hint: 'One video at a time with a random 5–20 second pause. A good default for 10–100 videos.' },
+  careful: { label: 'Careful', short: 'One at a time, long pauses', pause: { min: 20, max: 60 },
+    hint: 'One video at a time with a random 20–60 second pause. For hundreds of videos, overnight runs, or after YouTube has blocked you.' },
+};
+/** "Auto" switches from Quick to Steady at this many videos. */
+export const AUTO_BULK_FROM = 10;
+export const resolveBulkMode = (mode: BulkMode | 'auto' | null | undefined, count: number): BulkMode =>
+  mode && mode !== 'auto' ? mode : count >= AUTO_BULK_FROM ? 'steady' : 'quick';
+
+export const DEFAULT_TRANSCRIBE: TranscribeOptions = { model: 'small', formats: ['txt'], language: 'auto', intervalSecs: 30, speakers: 'off' };
+
+export const SPEAKER_CHOICES: [string, string][] = [
+  ['off', 'Don\'t label speakers'], ['auto', 'Detect speakers automatically'],
+  ['2', '2 people'], ['3', '3 people'], ['4', '4 people'], ['5', '5 people'], ['6', '6 people'],
+];
+
+export const TRANSCRIBE_LANGUAGES: [string, string][] = [
+  ['auto', 'Detect automatically'], ['en', 'English'], ['af', 'Afrikaans'], ['ar', 'Arabic'], ['fa', 'Persian'], ['ur', 'Urdu'],
+  ['hi', 'Hindi'], ['id', 'Indonesian'], ['tr', 'Turkish'], ['fr', 'French'], ['de', 'German'], ['es', 'Spanish'],
+  ['pt', 'Portuguese'], ['it', 'Italian'], ['nl', 'Dutch'], ['ru', 'Russian'], ['zh', 'Chinese'], ['ja', 'Japanese'],
+];
+
+export const TIMESTAMP_INTERVALS: [number, string][] = [
+  [15, 'Every 15 seconds'], [30, 'Every 30 seconds'], [60, 'Every minute'], [120, 'Every 2 minutes'], [300, 'Every 5 minutes'],
+];
