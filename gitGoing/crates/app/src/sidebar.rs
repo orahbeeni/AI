@@ -28,6 +28,10 @@ pub enum SidebarAction {
     /// Pull this local branch alone (short name), checked out or not.
     PullBranch(String),
     DeleteRemoteBranch(String),
+    /// Rename a local branch (short name).
+    Rename(String),
+    /// Rename a branch on its remote (`origin/name`).
+    RenameRemoteBranch(String),
     SetUpstream(String),
     PushTag(String),
     DeleteRemoteTag(String),
@@ -330,6 +334,10 @@ impl Sidebar {
                                 ui.close_menu();
                             }
                             ui.separator();
+                            if ui.button("Rename on remote…").clicked() {
+                                act = Some(SidebarAction::RenameRemoteBranch(full.clone()));
+                                ui.close_menu();
+                            }
                             if ui.button("Delete branch on remote…").clicked() {
                                 act = Some(SidebarAction::DeleteRemoteBranch(full.clone()));
                                 ui.close_menu();
@@ -852,6 +860,10 @@ fn local_branch_row(
         }
         if ui.button("Set upstream…").clicked() {
             *act = Some(SidebarAction::SetUpstream(full.to_owned()));
+            ui.close_menu();
+        }
+        if ui.button("Rename…").clicked() {
+            *act = Some(SidebarAction::Rename(full.to_owned()));
             ui.close_menu();
         }
         if ui.add_enabled(!current, egui::Button::new("Delete…")).clicked() {

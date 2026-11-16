@@ -20,6 +20,7 @@ impl RepoTab {
         self.dialog_remote(ctx);
         self.dialog_comment(ctx);
         self.dialog_upstream(ctx);
+        self.dialog_rename(ctx);
         self.dialog_confirm(ctx);
         self.file_windows(ctx);
     }
@@ -875,6 +876,95 @@ impl RepoTab {
                 RemoteDlgKind::Add => self.run_op(ctx, "Add remote", move |p| remotes::add(p, &name, &text)),
                 RemoteDlgKind::EditUrl => self.run_op(ctx, "Edit remote", move |p| remotes::set_url(p, &name, &text)),
                 RemoteDlgKind::Rename => self.run_op(ctx, "Rename remote", move |p| remotes::rename(p, &name, &text)),
+            }
+        }
+    }
+
+    /// Rename a local branch, and optionally the remote branch it tracks; or a remote-only branch.
+    fn dialog_rename(&mut self, ctx: &egui::Context) {
+        let mut go = false;
+        let mut close = false;
+        if let Some(d) = &mut self.rename_dlg {
+            let (title, current) = match &d.target {
+                RenameTarget::Local { old, .. } => ("Rename branch", old.clone()),
+                RenameTarget::Remote { remote, branch } => ("Rename branch on remote", format!("{remote}/{branch}")),
+            };
+            egui::Window::new(title)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.set_width(400.0);
+                    ui.label(format!("New name for '{current}':"));
+                    let r = ui.add(egui::TextEdit::singleline(&mut d.name).desired_width(f32::INFINITY));
+                    if !d.focused {
+                        r.request_focus();
+                        d.focused = true;
+                    }
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    match &d.target {
+                        RenameTarget::Local { tracked: Some((remote, rb)), .. } => {
+                            ui.checkbox(&mut d.also_remote, format!("Also rename {remote}/{rb} on the remote"));
+                            if d.also_remote {
+                                ui.weak("The new name is published and the old one deleted there. Anyone who has the old branch will have to switch to the new one.");
+                            }
+                        }
+                        RenameTarget::Local { tracked: None, .. } => {
+                            ui.weak("This branch has no remote branch; only the local name changes.");
+                        }
+                        RenameTarget::Remote { .. } => {
+                            ui.weak("The new name is published and the old one deleted on the remote. Local branches tracking it follow along; anyone else who has the old branch will have to switch.");
+                        }
+                    }
+                    let name = branches::sanitize_name(&d.name);
+                    let same = match &d.target {
+                        RenameTarget::Local { old, .. } => name == *old,
+                        RenameTarget::Remote { branch, .. } => name == *branch,
+                    };
+                    let ok = !name.is_empty() && !same;
+                    let label = match (&d.target, d.also_remote) {
+                        (RenameTarget::Local { .. }, true) => "Rename here and on the remote",
+                        (RenameTarget::Local { .. }, false) => "Rename",
+                        (RenameTarget::Remote { .. }, _) => "Rename on the remote",
+                    };
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(ok, egui::Button::new(label)).clicked() || (enter && ok) {
+                            go = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+        }
+        if close {
+            self.rename_dlg = None;
+        }
+        if !go {
+            return;
+        }
+        let Some(d) = self.rename_dlg.take() else { return };
+        let new = branches::sanitize_name(&d.name);
+        match d.target {
+            RenameTarget::Local { old, tracked } => {
+                let remote = tracked.filter(|_| d.also_remote);
+                self.rename_moves = vec![(format!("refs/heads/{old}"), format!("refs/heads/{new}"))];
+                if let Some((r, rb)) = &remote {
+                    self.rename_moves.push((format!("refs/remotes/{r}/{rb}"), format!("refs/remotes/{r}/{new}")));
+                }
+                self.run_op(ctx, "Rename branch", move |p| {
+                    let new = branches::rename(p, &old, &new).map_err(|e| e.message().to_owned())?;
+                    if let Some((r, rb)) = remote {
+                        remotes::rename_remote_branch(p, &r, &rb, &new)
+                            .map_err(|e| format!("Renamed '{old}' to '{new}' locally, but not on the remote: {e}"))?;
+                    }
+                    Ok::<(), String>(())
+                });
+            }
+            RenameTarget::Remote { remote, branch } => {
+                self.rename_moves = vec![(format!("refs/remotes/{remote}/{branch}"), format!("refs/remotes/{remote}/{new}"))];
+                self.run_op(ctx, "Rename branch", move |p| remotes::rename_remote_branch(p, &remote, &branch, &new).map(|_| ()));
             }
         }
     }

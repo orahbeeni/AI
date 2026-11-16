@@ -152,6 +152,64 @@ pub fn delete_remote_branch(repo_path: &Path, remote: &str, branch: &str) -> Res
     gitcmd::run(Some(repo_path), &["push", remote, "--delete", branch]).map(|_| ())
 }
 
+/// Split `origin/feature/x` into (`origin`, `feature/x`) using the repository's remote names.
+pub fn parse_remote_branch(repo_path: &Path, full: &str) -> Option<(String, String)> {
+    split_remote_branch(&Repository::discover(repo_path).ok()?, full).ok()
+}
+
+/// The remote branch a local branch tracks, as (remote, branch name on the remote).
+pub fn tracked_remote_branch(repo_path: &Path, local: &str) -> Option<(String, String)> {
+    let repo = Repository::discover(repo_path).ok()?;
+    let up = repo.find_branch(local, BranchType::Local).ok()?.upstream().ok()?;
+    let full = up.name().ok().flatten()?.to_owned();
+    split_remote_branch(&repo, &full).ok()
+}
+
+/// Rename `old` to `new` on `remote`: publish the commit under the new name, then delete
+/// the old one (git has no rename for remote branches). Local branches that tracked
+/// `remote/old` are pointed at `remote/new`. Nothing is forced: if `new` already exists
+/// on the remote with different history, git refuses and the old branch is left alone.
+pub fn rename_remote_branch(repo_path: &Path, remote: &str, old: &str, new: &str) -> Result<String, String> {
+    gitcmd::plain_name(remote)?;
+    gitcmd::plain_name(old)?;
+    let new = crate::branches::sanitize_name(new);
+    gitcmd::plain_name(&new)?;
+    if !Branch::name_is_valid(&new).unwrap_or(false) {
+        return Err(format!("'{new}' is not a valid branch name"));
+    }
+    if new == old {
+        return Err("that is already the branch's name".to_owned());
+    }
+    let repo = Repository::discover(repo_path).map_err(|e| e.message().to_owned())?;
+    if repo.find_reference(&format!("refs/remotes/{remote}/{old}")).is_err() {
+        return Err(format!("{remote}/{old} is not known here; fetch first"));
+    }
+    // Local branches that follow the old name (found now: deleting it removes the tracking ref).
+    let old_tracking = format!("{remote}/{old}");
+    let followers: Vec<String> = repo
+        .branches(Some(BranchType::Local))
+        .map_err(|e| e.message().to_owned())?
+        .flatten()
+        .filter(|(b, _)| b.upstream().ok().and_then(|u| u.name().ok().flatten().map(str::to_owned)).as_deref() == Some(old_tracking.as_str()))
+        .filter_map(|(b, _)| b.name().ok().flatten().map(str::to_owned))
+        .collect();
+    drop(repo);
+    gitcmd::run(Some(repo_path), &["push", remote, &format!("refs/remotes/{remote}/{old}:refs/heads/{new}")])?;
+    if let Err(e) = gitcmd::run(Some(repo_path), &["push", remote, "--delete", old]) {
+        return Err(format!(
+            "'{new}' was created on {remote}, but the old branch '{old}' could not be deleted there: {e}"
+        ));
+    }
+    // They follow the new one.
+    let repo = Repository::discover(repo_path).map_err(|e| e.message().to_owned())?;
+    for name in followers {
+        if let Ok(mut b) = repo.find_branch(&name, BranchType::Local) {
+            let _ = b.set_upstream(Some(&format!("{remote}/{new}")));
+        }
+    }
+    Ok(new)
+}
+
 pub fn push_tag(repo_path: &Path, tag: &str) -> Result<(), String> {
     let remote = default_remote(repo_path)?;
     gitcmd::run(Some(repo_path), &["push", &remote, &format!("refs/tags/{tag}")]).map(|_| ())
@@ -291,4 +349,36 @@ mod tests {
         g(&a, &["checkout", "-q", "other"]);
         assert!(pull_other_branch(&a, "other").is_err());
     }
+    #[test]
+    fn rename_a_branch_on_the_remote_and_follow_it_locally() {
+        let remote_dir = tempfile::tempdir().unwrap();
+        Repository::init_bare(remote_dir.path()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        let repo = Repository::init(p).unwrap();
+        let mut cfg = repo.config().unwrap();
+        cfg.set_str("user.name", "T").unwrap();
+        cfg.set_str("user.email", "t@example.com").unwrap();
+        cfg.set_bool("commit.gpgsign", false).unwrap();
+        std::fs::write(p.join("a"), "1").unwrap();
+        crate::status::stage(p, &["a".into()]).unwrap();
+        crate::status::commit(p, "c").unwrap();
+        add(p, "origin", remote_dir.path().to_str().unwrap()).unwrap();
+        crate::branches::create_and_checkout(p, "feature").unwrap();
+        crate::remote::push(p).unwrap(); // publishes feature and sets its upstream
+        assert_eq!(tracked_remote_branch(p, "feature"), Some(("origin".into(), "feature".into())));
+
+        crate::branches::rename(p, "feature", "feature-2").unwrap();
+        // The upstream still names the old remote branch.
+        assert_eq!(tracked_remote_branch(p, "feature-2"), Some(("origin".into(), "feature".into())));
+        assert!(rename_remote_branch(p, "origin", "feature", "bad..name").is_err());
+        rename_remote_branch(p, "origin", "feature", "feature-2").unwrap();
+
+        let remote = Repository::open_bare(remote_dir.path()).unwrap();
+        assert!(remote.find_reference("refs/heads/feature-2").is_ok());
+        assert!(remote.find_reference("refs/heads/feature").is_err(), "old name is gone on the remote");
+        assert!(repo.find_reference("refs/remotes/origin/feature").is_err());
+        assert_eq!(tracked_remote_branch(p, "feature-2"), Some(("origin".into(), "feature-2".into())));
+    }
+
 }

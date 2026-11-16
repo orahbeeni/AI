@@ -97,7 +97,7 @@ pub fn checkout_remote(repo_path: &Path, full_name: &str) -> Result<(), git2::Er
 }
 
 /// Trim a branch name and replace inner whitespace with underscores.
-fn sanitize_name(name: &str) -> String {
+pub fn sanitize_name(name: &str) -> String {
     name.trim().chars().map(|c| if c.is_whitespace() { '_' } else { c }).collect()
 }
 
@@ -132,6 +132,32 @@ pub fn create_at(repo_path: &Path, name: &str, id: git2::Oid, checkout: bool) ->
         checkout_new(&repo, name)?;
     }
     Ok(())
+}
+
+/// Whether a reference (full name such as `refs/heads/x`) exists.
+pub fn ref_exists(repo_path: &Path, full: &str) -> bool {
+    Repository::discover(repo_path).is_ok_and(|r| r.find_reference(full).is_ok())
+}
+
+/// Rename a local branch (as `git branch -m`). The checked-out branch can be renamed;
+/// its upstream setting and reflog move with it. Returns the name actually used,
+/// since whitespace in `new` becomes underscores.
+pub fn rename(repo_path: &Path, old: &str, new: &str) -> Result<String, git2::Error> {
+    let new = sanitize_name(new);
+    crate::gitlog::equiv(repo_path, format!("git branch -m {} {}", crate::gitlog::quote(old), crate::gitlog::quote(&new)));
+    if !Branch::name_is_valid(&new)? {
+        return Err(err(format!("'{new}' is not a valid branch name")));
+    }
+    let repo = Repository::discover(repo_path)?;
+    let mut b = repo.find_branch(old, BranchType::Local)?;
+    if new == old {
+        return Err(err("that is already the branch's name"));
+    }
+    if repo.find_branch(&new, BranchType::Local).is_ok() {
+        return Err(err(format!("a branch named '{new}' already exists")));
+    }
+    b.rename(&new, false)?;
+    Ok(new)
 }
 
 pub fn delete(repo_path: &Path, name: &str) -> Result<(), git2::Error> {
@@ -173,6 +199,35 @@ mod tests {
         checkout(p, &first).unwrap();
         delete(p, "feature").unwrap();
         assert!(repo.find_branch("feature", BranchType::Local).is_err());
+    }
+
+    #[test]
+    fn rename_moves_head_and_upstream_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        let repo = Repository::init(p).unwrap();
+        let sig = git2::Signature::now("T", "t@example.com").unwrap();
+        std::fs::write(p.join("a"), "1").unwrap();
+        let mut idx = repo.index().unwrap();
+        idx.add_path(Path::new("a")).unwrap();
+        idx.write().unwrap();
+        let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "c", &tree, &[]).unwrap();
+        let first = repo.head().unwrap().shorthand().unwrap().to_owned();
+        create_and_checkout(p, "old-name").unwrap();
+        checkout(p, &first).unwrap();
+
+        assert!(rename(p, "old-name", "bad..name").is_err());
+        assert!(rename(p, "old-name", &first).is_err(), "target exists");
+        assert!(rename(p, "old-name", "old-name").is_err());
+        assert!(rename(p, "missing", "x").is_err());
+        assert_eq!(rename(p, "old-name", " new name ").unwrap(), "new_name");
+        assert!(repo.find_branch("old-name", BranchType::Local).is_err());
+        assert!(repo.find_branch("new_name", BranchType::Local).is_ok());
+
+        // The checked-out branch can be renamed; HEAD follows.
+        assert_eq!(rename(p, &first, "trunk").unwrap(), "trunk");
+        assert_eq!(repo.head().unwrap().shorthand(), Some("trunk"));
     }
 
     #[test]

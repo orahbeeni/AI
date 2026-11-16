@@ -334,6 +334,23 @@ struct UpstreamDlg {
     options: Vec<String>,
 }
 
+/// What the "Rename branch" window renames.
+enum RenameTarget {
+    /// A local branch, and the remote branch it tracks (remote, name there), if any.
+    Local { old: String, tracked: Option<(String, String)> },
+    /// A branch that exists only on a remote.
+    Remote { remote: String, branch: String },
+}
+
+/// The open "Rename branch" window.
+struct RenameDlg {
+    target: RenameTarget,
+    name: String,
+    /// Also rename the tracked remote branch (local renames only).
+    also_remote: bool,
+    focused: bool,
+}
+
 /// Right-click actions on a commit row.
 enum CommitAction {
     CherryPick(gitgoing_core::Oid),
@@ -433,6 +450,10 @@ pub struct RepoTab {
     forget_undo: bool,
     remote_dlg: Option<RemoteDlg>,
     upstream_dlg: Option<UpstreamDlg>,
+    rename_dlg: Option<RenameDlg>,
+    /// (old, new) full reference names of a rename in flight, so hidden/pinned/comment
+    /// settings can follow the branch once it has happened.
+    rename_moves: Vec<(String, String)>,
     rebase_dlg: Option<RebaseDlg>,
     squash_dlg: Option<SquashDlg>,
     force_dlg: Option<ForceDlg>,
@@ -511,6 +532,8 @@ impl RepoTab {
             forget_undo: false,
             remote_dlg: None,
             upstream_dlg: None,
+            rename_dlg: None,
+            rename_moves: Vec::new(),
             rebase_dlg: None,
             squash_dlg: None,
             force_dlg: None,
@@ -785,6 +808,28 @@ impl RepoTab {
         }
     }
 
+    /// After a rename, make the hidden / pinned / comment settings of the old branch name
+    /// follow the branch. Judged by what exists now, so a half-finished rename (local done,
+    /// remote refused) still keeps the local branch's settings.
+    fn apply_rename_moves(&mut self) {
+        let moves = std::mem::take(&mut self.rename_moves);
+        let Some(path) = self.repo_path() else { return };
+        for (old, new) in moves {
+            if branches::ref_exists(&path, &old) || !branches::ref_exists(&path, &new) {
+                continue;
+            }
+            if self.hidden.remove(&old) {
+                self.hidden.insert(new.clone());
+            }
+            for p in self.pinned.iter_mut().filter(|p| **p == old) {
+                *p = new.clone();
+            }
+            if let Some(c) = self.comments.remove(&old) {
+                self.comments.insert(new, c);
+            }
+        }
+    }
+
     /// Re-read history, sidebar and status after the repo changed.
     fn reload(&mut self, ctx: &egui::Context) {
         let Some(path) = self.repo_path() else { return };
@@ -851,6 +896,7 @@ impl RepoTab {
             self.op_rx = None;
             let target = self.op_branch.take();
             let pending = self.pending.take();
+            self.apply_rename_moves();
             match r {
                 Ok(entry) => {
                     match pending {
@@ -1209,6 +1255,28 @@ impl RepoTab {
                     }
                 }
                 Some(SidebarAction::DeleteRemoteBranch(n)) => self.confirm = Some(Confirm::DeleteRemoteBranch(n)),
+                Some(SidebarAction::Rename(old)) => {
+                    let tracked = repo_path.as_ref().and_then(|p| remotes::tracked_remote_branch(p, &old));
+                    self.rename_dlg = Some(RenameDlg {
+                        name: old.clone(),
+                        target: RenameTarget::Local { old, tracked },
+                        also_remote: false,
+                        focused: false,
+                    });
+                }
+                Some(SidebarAction::RenameRemoteBranch(full)) => {
+                    match repo_path.as_ref().and_then(|p| remotes::parse_remote_branch(p, &full)) {
+                        Some((remote, branch)) => {
+                            self.rename_dlg = Some(RenameDlg {
+                                name: branch.clone(),
+                                target: RenameTarget::Remote { remote, branch },
+                                also_remote: false,
+                                focused: false,
+                            });
+                        }
+                        None => self.notice = Some((format!("'{full}' doesn't belong to a known remote"), true)),
+                    }
+                }
                 Some(SidebarAction::SetUpstream(local)) => {
                     let options = self
                         .repo

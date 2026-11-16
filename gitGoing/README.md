@@ -12,7 +12,7 @@ expected to work (all dependencies are cross-platform) but have not been run yet
 - Streaming commit graph with lanes, branch/tag chips, search, keyboard navigation
 - Stage and unstage files, hunks, or individual lines; discard changes; commit; amend
 - Diff view: unified or side by side, whole-file view, word-level highlights, syntax colours
-- Branches, remotes, tags, stashes in a filterable sidebar; checkout, create, delete, merge, rebase
+- Branches, remotes, tags, stashes in a filterable sidebar; checkout, create, rename (locally, and on the remote), delete, merge, rebase
 - Fetch, pull (merge / fast-forward only / rebase), push, force push with lease
 - Cherry-pick, revert, reset, undo and redo of ref-changing operations
 - Interactive rebase, and squashing several commits (with a conflict check before it runs)
