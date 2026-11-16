@@ -451,6 +451,8 @@ pub struct RepoTab {
     remote_dlg: Option<RemoteDlg>,
     upstream_dlg: Option<UpstreamDlg>,
     rename_dlg: Option<RenameDlg>,
+    /// What a single-branch fetch found out, for the toast (set by the running operation).
+    fetch_note: Arc<std::sync::Mutex<Option<(String, String)>>>,
     /// (old, new) full reference names of a rename in flight, so hidden/pinned/comment
     /// settings can follow the branch once it has happened.
     rename_moves: Vec<(String, String)>,
@@ -533,6 +535,7 @@ impl RepoTab {
             remote_dlg: None,
             upstream_dlg: None,
             rename_dlg: None,
+            fetch_note: Arc::new(std::sync::Mutex::new(None)),
             rename_moves: Vec::new(),
             rebase_dlg: None,
             squash_dlg: None,
@@ -858,6 +861,12 @@ impl RepoTab {
     /// operations, a status-bar line for everything else.
     /// `target` is the branch the operation was about, when it wasn't the checked-out one.
     fn report_done(&mut self, ctx: &egui::Context, target: Option<String>) {
+        // A single-branch fetch knows more than "something moved": use its own wording.
+        let note = self.fetch_note.lock().ok().and_then(|mut n| n.take());
+        if let Some((title, text)) = note {
+            self.toasts.push(ctx, title, Some(text));
+            return;
+        }
         let moved = self.refs_moved.load(Ordering::Relaxed);
         let info = self.repo.as_ref().and_then(|l| l.info.as_ref());
         let branch = info.and_then(|i| i.head_branch.clone());
@@ -1241,7 +1250,20 @@ impl RepoTab {
                     if local && self.op_rx.is_none() {
                         self.op_branch = Some(n.clone()); // the row spins while it runs
                     }
-                    self.run_op(ctx, "Fetch", move |p| remotes::fetch_branch(p, &n, local))
+                    if local {
+                        // Fetches the upstream and fast-forwards the branch if it can; says what it found.
+                        let note = self.fetch_note.clone();
+                        self.run_op(ctx, "Fetch", move |p| {
+                            let r = remotes::fetch_and_update_branch(p, &n)?;
+                            let (title, text) = r.message(&n);
+                            if let Ok(mut slot) = note.lock() {
+                                *slot = Some((title.to_owned(), text));
+                            }
+                            Ok::<(), String>(())
+                        })
+                    } else {
+                        self.run_op(ctx, "Fetch", move |p| remotes::fetch_branch(p, &n, false))
+                    }
                 }
                 Some(SidebarAction::PullBranch(n)) => {
                     let head = self.repo.as_ref().and_then(|l| l.info.as_ref()).and_then(|i| i.head_branch.clone());

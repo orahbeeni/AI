@@ -5,6 +5,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use egui_kittest::kittest::Queryable;
 use super::app::{App, AppCtx, Tab};
 use crate::config::{Config, Mode, Paths, Peers, Role};
 use crate::engine::Engine;
@@ -250,4 +251,29 @@ fn files_tab_screenshot() {
     settle(&mut h);
     h.render().expect("render").save(std::path::Path::new(&dir).join("files-dialog.png")).unwrap();
     println!("wrote the files screenshots to {}", dir.to_string_lossy());
+}
+
+/// Ticking "add files" on a share in the "Folders I share" window is saved, so it is still
+/// ticked when the window is opened again.
+#[test]
+fn allowing_uploads_to_a_share_is_remembered() {
+    let p = paths("share-write");
+    let share = std::env::temp_dir();
+    let mut cfg = Config { mode: Some(Mode::Client), ..Config::default() };
+    cfg.files.shares.push(crate::config::ShareCfg { name: "temp".into(), path: share, write: false });
+    cfg.save(&p).unwrap();
+    let hub = Hub::new(Approval::Gui);
+    let engine = Arc::new(Mutex::new(Engine::new(p.clone(), hub.clone())));
+    let ctx = AppCtx { engine, hub, paths: p.clone(), commands: None, has_tray: true, quit: Default::default(), start_minimized: false };
+    let mut h = egui_kittest::Harness::builder().with_size([900.0, 700.0]).build_eframe(|cc| App::new(cc, ctx));
+    h.state_mut().set_tab(Tab::Files);
+    h.state_mut().files_view().open_folders();
+    h.run_steps(3);
+    h.get_by_label("Let the other computer add files and folders").click();
+    h.run_steps(3);
+    assert!(Config::load(&p).unwrap().files.shares[0].write, "saved to the config file");
+    // Closed and opened again: still ticked.
+    h.state_mut().files_view().open_folders();
+    h.run_steps(3);
+    assert!(Config::load(&p).unwrap().files.shares[0].write);
 }

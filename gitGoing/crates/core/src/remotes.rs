@@ -94,11 +94,63 @@ pub fn fetch_branch(repo_path: &Path, name: &str, local: bool) -> Result<(), Str
     gitcmd::run(Some(repo_path), &["fetch", &remote, &spec]).map(|_| ())
 }
 
-/// Bring local branch `name` up to its upstream without checking it out: fetch the
-/// upstream branch, then fast-forward `name` to it. Only a fast-forward is ever done:
-/// a branch that has diverged is refused and left untouched, and one that is merely
-/// ahead of (or level with) its upstream has nothing to pull and is left as it is.
-pub fn pull_other_branch(repo_path: &Path, name: &str) -> Result<(), String> {
+/// How a local branch stands against its upstream after fetching.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BranchSync {
+    /// Nothing to pull. `ahead` commits are local only (not pushed).
+    UpToDate { ahead: usize },
+    /// The branch was fast-forwarded by this many commits.
+    FastForwarded { commits: usize },
+    /// Both sides have new commits; merging or rebasing is needed.
+    Diverged { ahead: usize, behind: usize },
+    /// The branch is checked out and behind: only a pull can update it.
+    BehindCurrent { behind: usize },
+}
+
+/// The result of [`fetch_and_update_branch`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BranchFetch {
+    /// The upstream, e.g. `origin/main`.
+    pub upstream: String,
+    /// The fetch brought something new (the remote-tracking branch moved).
+    pub tracking_moved: bool,
+    pub sync: BranchSync,
+}
+
+impl BranchFetch {
+    /// A title and a sentence for the user saying what happened to `name`.
+    pub fn message(&self, name: &str) -> (&'static str, String) {
+        let up = &self.upstream;
+        let pushed = |ahead: usize| if ahead > 0 { format!(" It has {ahead} local commit(s) not pushed yet.") } else { String::new() };
+        match self.sync {
+            BranchSync::FastForwarded { commits } => (
+                "Fetched and Updated",
+                format!("{name} moved forward {commits} commit(s) to match {up}."),
+            ),
+            BranchSync::UpToDate { ahead } if self.tracking_moved => {
+                ("Fetched", format!("{up} has new commits, but {name} is not behind it.{}", pushed(ahead)))
+            }
+            BranchSync::UpToDate { ahead } => {
+                ("Already Up-to-Date", format!("{name} has everything {up} has.{}", pushed(ahead)))
+            }
+            BranchSync::Diverged { ahead, behind } => (
+                "Fetched, but Not Updated",
+                format!(
+                    "{name} has diverged from {up}: {ahead} commit(s) of its own and {behind} new one(s) on the remote, so it can't be fast-forwarded. Check it out and pull to merge or rebase."
+                ),
+            ),
+            BranchSync::BehindCurrent { behind } => (
+                "Fetched, but Not Updated",
+                format!("{up} is {behind} commit(s) ahead of the checked-out branch {name}. Use Pull to bring them in."),
+            ),
+        }
+    }
+}
+
+/// Fetch a local branch's upstream, then fast-forward the branch to it when that is
+/// possible without touching the working tree. A branch that has diverged, or is checked
+/// out, is left alone; the result says which, so the caller can explain.
+pub fn fetch_and_update_branch(repo_path: &Path, name: &str) -> Result<BranchFetch, String> {
     let repo = Repository::discover(repo_path).map_err(|e| e.message().to_owned())?;
     let b = repo.find_branch(name, BranchType::Local).map_err(|e| e.message().to_owned())?;
     let up = b.upstream().map_err(|_| format!("'{name}' has no upstream branch. Set one first."))?;
@@ -107,11 +159,15 @@ pub fn pull_other_branch(repo_path: &Path, name: &str) -> Result<(), String> {
     gitcmd::plain_name(&remote)?;
     gitcmd::plain_name(&branch)?;
     gitcmd::plain_name(name)?;
+    let is_head = b.is_head();
     drop((b, up));
 
     // Fetch first so the upstream is what the remote has now, not what it had at the last fetch.
     let tracking = format!("refs/remotes/{remote}/{branch}");
+    let tracking_id = |repo: &Repository| repo.find_reference(&tracking).ok().and_then(|r| r.target());
+    let before = tracking_id(&repo);
     gitcmd::run(Some(repo_path), &["fetch", &remote, &format!("+refs/heads/{branch}:{tracking}")])?;
+    let tracking_moved = tracking_id(&repo) != before;
 
     let local = repo.find_branch(name, BranchType::Local).map_err(|e| e.message().to_owned())?;
     let local_id = local.get().peel_to_commit().map_err(|e| e.message().to_owned())?.id();
@@ -121,17 +177,35 @@ pub fn pull_other_branch(repo_path: &Path, name: &str) -> Result<(), String> {
         .map_err(|e| e.message().to_owned())?
         .id();
     let (ahead, behind) = repo.graph_ahead_behind(local_id, up_id).map_err(|e| e.message().to_owned())?;
+    let done = |sync| Ok(BranchFetch { upstream: up_name.clone(), tracking_moved, sync });
     if behind == 0 {
-        return Ok(()); // level with, or ahead of, the upstream: nothing to bring in
+        return done(BranchSync::UpToDate { ahead }); // level with, or ahead of, the upstream
     }
     if ahead > 0 {
-        return Err(format!(
-            "'{name}' has diverged from {up_name} ({ahead} ahead, {behind} behind), so it can't be fast-forwarded. Check it out and pull to merge or rebase."
-        ));
+        return done(BranchSync::Diverged { ahead, behind });
+    }
+    if is_head {
+        return done(BranchSync::BehindCurrent { behind });
     }
     // A fetch from this very repository moves the branch the way `git pull --ff-only` would,
-    // and git itself refuses if the branch is checked out (here or in another worktree).
-    gitcmd::run(Some(repo_path), &["fetch", ".", &format!("{tracking}:refs/heads/{name}")]).map(|_| ())
+    // and git itself refuses if the branch is checked out in another worktree.
+    gitcmd::run(Some(repo_path), &["fetch", ".", &format!("{tracking}:refs/heads/{name}")])?;
+    done(BranchSync::FastForwarded { commits: behind })
+}
+
+/// Bring local branch `name` up to its upstream without checking it out. Only a
+/// fast-forward is ever done: a branch that has diverged is refused and left untouched,
+/// and one that is merely ahead of (or level with) its upstream has nothing to pull.
+pub fn pull_other_branch(repo_path: &Path, name: &str) -> Result<(), String> {
+    let r = fetch_and_update_branch(repo_path, name)?;
+    match r.sync {
+        BranchSync::Diverged { ahead, behind } => Err(format!(
+            "'{name}' has diverged from {} ({ahead} ahead, {behind} behind), so it can't be fast-forwarded. Check it out and pull to merge or rebase.",
+            r.upstream
+        )),
+        BranchSync::BehindCurrent { .. } => Err(format!("'{name}' is checked out; use Pull to update it.")),
+        BranchSync::UpToDate { .. } | BranchSync::FastForwarded { .. } => Ok(()),
+    }
 }
 
 /// Split `origin/feature/x` into (`origin`, `feature/x`), allowing remote names with slashes.
@@ -284,6 +358,78 @@ mod tests {
 
         remove(&p, "up").unwrap();
         assert!(list(&Repository::open(&p).unwrap()).is_empty());
+    }
+
+    #[test]
+    fn fetching_a_branch_updates_it_when_it_can_and_says_why_when_it_cannot() {
+        if gitcmd::run(None, &["--version"]).is_err() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let bare = tmp.path().join("o.git");
+        let g = |dir: &Path, args: &[&str]| gitcmd::run(Some(dir), args).unwrap();
+        gitcmd::run(None, &["init", "-q", "--bare", bare.to_str().unwrap()]).unwrap();
+        let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
+        gitcmd::run(None, &["clone", "-q", bare.to_str().unwrap(), a.to_str().unwrap()]).unwrap();
+        for d in [&a] {
+            g(d, &["config", "user.email", "t@example.com"]);
+            g(d, &["config", "user.name", "T"]);
+            g(d, &["config", "commit.gpgsign", "false"]);
+        }
+        g(&a, &["checkout", "-q", "-b", "main"]);
+        let commit = |d: &Path, f: &str| {
+            std::fs::write(d.join(f), f).unwrap();
+            g(d, &["add", "."]);
+            g(d, &["commit", "-q", "-m", f]);
+        };
+        commit(&a, "one");
+        g(&a, &["push", "-q", "-u", "origin", "main"]);
+        g(&a, &["branch", "other"]);
+        g(&a, &["push", "-q", "-u", "origin", "other"]);
+        gitcmd::run(None, &["clone", "-q", bare.to_str().unwrap(), b.to_str().unwrap()]).unwrap();
+        g(&b, &["config", "user.email", "t@example.com"]);
+        g(&b, &["config", "user.name", "T"]);
+        g(&b, &["config", "commit.gpgsign", "false"]);
+        g(&b, &["checkout", "-q", "other"]);
+        let tip = |d: &Path, n: &str| g(d, &["rev-parse", n]).trim().to_owned();
+
+        // Nothing new.
+        let r = fetch_and_update_branch(&a, "other").unwrap();
+        assert_eq!(r.sync, BranchSync::UpToDate { ahead: 0 });
+        assert_eq!(r.message("other").0, "Already Up-to-Date");
+
+        // Someone pushes: the branch is fast-forwarded by the fetch itself.
+        commit(&b, "two");
+        g(&b, &["push", "-q", "origin", "other"]);
+        let r = fetch_and_update_branch(&a, "other").unwrap();
+        assert_eq!(r.sync, BranchSync::FastForwarded { commits: 1 });
+        assert!(r.tracking_moved);
+        assert_eq!(tip(&a, "other"), tip(&b, "other"));
+
+        // Diverged: refreshed remote-side, branch untouched, and the message says why.
+        g(&a, &["checkout", "-q", "other"]);
+        commit(&a, "mine");
+        g(&a, &["checkout", "-q", "main"]);
+        commit(&b, "three");
+        g(&b, &["push", "-q", "origin", "other"]);
+        let mine = tip(&a, "other");
+        let r = fetch_and_update_branch(&a, "other").unwrap();
+        assert_eq!(r.sync, BranchSync::Diverged { ahead: 1, behind: 1 });
+        assert_eq!(tip(&a, "other"), mine);
+        let (title, text) = r.message("other");
+        assert_eq!(title, "Fetched, but Not Updated");
+        assert!(text.contains("diverged") && text.contains("origin/other"), "{text}");
+        // Fetching again finds nothing new, but the explanation stays true.
+        let again = fetch_and_update_branch(&a, "other").unwrap();
+        assert!(!again.tracking_moved && matches!(again.sync, BranchSync::Diverged { .. }));
+
+        // The checked-out branch is never moved by a fetch.
+        g(&b, &["checkout", "-q", "main"]);
+        commit(&b, "four");
+        g(&b, &["push", "-q", "origin", "main"]);
+        let r = fetch_and_update_branch(&a, "main").unwrap();
+        assert_eq!(r.sync, BranchSync::BehindCurrent { behind: 1 });
+        assert!(r.message("main").1.contains("Pull"));
     }
 
     #[test]

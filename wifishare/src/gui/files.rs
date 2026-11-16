@@ -797,28 +797,30 @@ impl FilesView {
             }
             ui.add_space(6.0);
             ui.separator();
-            ui.label(RichText::new("Share the folder open on the left").strong());
-            ui.label(RichText::new(self.local.dir.display().to_string()).weak().size(12.0));
-            ui.horizontal(|ui| {
-                ui.label("Name");
-                ui.add(egui::TextEdit::singleline(&mut self.share_name).desired_width(180.0));
-                ui.checkbox(&mut self.share_write, "Allow adding files");
-            });
             let name = self.share_name.trim().to_string();
             let taken = cfg.files.shares.iter().any(|s| s.name == name);
-            let already = cfg.files.shares.iter().any(|s| s.path == self.local.dir);
-            ui.horizontal(|ui| {
-                let button = ui.add_enabled(!name.is_empty() && !taken && !already, egui::Button::new("Share this folder"));
-                if button.clicked() {
-                    cfg.files.shares.push(ShareCfg { name: name.clone(), path: self.local.dir.clone(), write: self.share_write });
-                    edited = true;
-                }
-                if already {
-                    ui.label(RichText::new("This folder is already shared.").weak());
-                } else if taken {
-                    ui.colored_label(AMBER, "Another shared folder already has that name.");
-                }
-            });
+            // A folder that is already shared is changed in its own entry above; a second
+            // checkbox here would only look as if it did the same.
+            if cfg.files.shares.iter().any(|s| s.path == self.local.dir) {
+                ui.label(RichText::new(format!("The folder open on the left ({}) is already shared.", self.local.dir.display())).weak());
+            } else {
+                ui.label(RichText::new("Share the folder open on the left").strong());
+                ui.label(RichText::new(self.local.dir.display().to_string()).weak().size(12.0));
+                ui.horizontal(|ui| {
+                    ui.label("Name");
+                    ui.add(egui::TextEdit::singleline(&mut self.share_name).desired_width(180.0));
+                    ui.checkbox(&mut self.share_write, "Let the other computer add files");
+                });
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!name.is_empty() && !taken, egui::Button::new("Share this folder")).clicked() {
+                        cfg.files.shares.push(ShareCfg { name: name.clone(), path: self.local.dir.clone(), write: self.share_write });
+                        edited = true;
+                    }
+                    if taken {
+                        ui.colored_label(AMBER, "Another shared folder already has that name.");
+                    }
+                });
+            }
             ui.add_space(6.0);
             if ui.button("Close").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 close = true;

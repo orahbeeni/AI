@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 .kilo
 .DS_Store
+.agents/
+
+3d/
+3d2/
+photoedittest/

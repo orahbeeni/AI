@@ -1,0 +1,3 @@
+# Handoff
+
+Cutline now supports removing stretches: Mark start (I) / Mark end (O) at the playhead, Remove (X/Delete), Undo (Ctrl+Z), and red markers on the timeline that restore a cut when clicked. Cuts are stored per clip in source time (ClipItem.removed), so they follow a clip when it's reordered; plan::kept_ranges/merge_ranges feed Settings.removed, and the preview plays only the kept pieces. Verified: 21 unit + 8 real-FFmpeg tests, and a GUI run under Xvfb where a removed 8.4 s stretch gave a 19.6 s export from 28 s of clips. Shortcuts now use egui_wants_keyboard_input (focused() wrongly blocked Space after clicking the timeline). Windows/macOS still not run live.

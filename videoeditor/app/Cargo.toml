@@ -1,0 +1,35 @@
+[package]
+name = "cutline"
+version = "0.1.0"
+edition = "2021"
+description = "A simple desktop video editor that does its work with FFmpeg"
+
+[lib]
+name = "cutline"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cutline"
+path = "src/main.rs"
+
+[dependencies]
+# Linux builds use X11 (XWayland on Wayland desktops) on purpose: winit has no
+# drag and drop on its Wayland backend.
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "x11", "persistence", "clipboard", "links"] }
+rfd = "0.17"
+serde_json = "1"
+png = "0.18"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+winit = "0.30"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 4

@@ -1,0 +1,13 @@
+{
+  "id": "unk_cba8f0a4f04bd1f0",
+  "revision": 1,
+  "question": "Does the app run correctly on real Windows and macOS computers?",
+  "severity": "medium",
+  "domain": "platforms",
+  "status": "open",
+  "probes": [
+    "Run the built app on Windows and on a Mac: drop files, export, view the console"
+  ],
+  "evidence_for": [],
+  "evidence_against": []
+}
