@@ -17,7 +17,11 @@ export default class ScreenshotAnnotate extends Extension {
         this._job = null;
 
         const ui = Main.screenshotUI;
-        this._annotateBtn = this._makeToggle('document-edit-symbolic', 'Annotate after capture', 'annotate');
+        this._annotateBtn = this._makeButton(
+            'document-edit-symbolic', 'Capture and annotate (Shift+Enter)');
+        this._annotateBtn.connect('clicked',
+            () => this._captureAndAnnotate().catch(logError));
+        this._annotateNext = false;
         this._sysBtn = this._makeToggle('audio-speakers-symbolic', 'Record system audio', 'system');
         this._micBtn = this._makeToggle('audio-input-microphone-symbolic', 'Record microphone', 'mic');
         for (const b of [this._micBtn, this._sysBtn, this._annotateBtn])
@@ -26,17 +30,20 @@ export default class ScreenshotAnnotate extends Extension {
         // Annotate is for screenshots, the audio toggles are for screencasts.
         const syncMode = () => {
             const cast = ui._castButton.checked;
-            this._annotateBtn.visible = !cast;
+            this._annotateBtn.visible = this._canAnnotate();
             this._sysBtn.visible = this._micBtn.visible = cast;
         };
         ui._castButton.connectObject('notify::checked', syncMode, this);
+        ui.connectObject('notify::visible', syncMode, this);
         syncMode();
 
         ui.connectObject(
             'screenshot-taken', (_ui, file) => {
-                if (this._annotateBtn.checked && ui._currentMode !== 'SCREENSHOT_ONLY')
+                if (this._annotateNext)
                     this._launchAnnotator(file);
             },
+            // Seen before the focused button or the UI's own Enter handling.
+            'captured-event', (_ui, event) => this._onKeyEvent(event),
             'notify::screencast-in-progress', () => this._onScreencastState(ui), this);
 
         // After the stock recorder has stopped and finalised the video, add the audio.
@@ -57,22 +64,27 @@ export default class ScreenshotAnnotate extends Extension {
             this._origStop = null;
         }
         this._killRecorders();
+        this._annotateNext = false;
         for (const b of [this._annotateBtn, this._sysBtn, this._micBtn])
             b?.destroy();
         this._annotateBtn = this._sysBtn = this._micBtn = null;
     }
 
     // ---- UI helpers
-    _makeToggle(icon, name, key) {
-        const b = new St.Button({
+    _makeButton(icon, name) {
+        return new St.Button({
             style_class: 'screenshot-annotate-button',
-            toggle_mode: true,
-            checked: this._state[key] === true,
             accessible_name: name,
             can_focus: true,
             y_align: Clutter.ActorAlign.CENTER,
             child: new St.Icon({icon_name: icon}),
         });
+    }
+
+    _makeToggle(icon, name, key) {
+        const b = this._makeButton(icon, name);
+        b.toggle_mode = true;
+        b.checked = this._state[key] === true;
         b.connect('notify::checked', () => {
             this._state[key] = b.checked;
             this._saveState();
@@ -81,6 +93,39 @@ export default class ScreenshotAnnotate extends Extension {
     }
 
     // ---- screenshot annotation
+    // Not offered while recording video, or when another app asked for the screenshot.
+    _canAnnotate() {
+        const ui = Main.screenshotUI;
+        // 2 is the shell's private UIMode.SCREENSHOT_ONLY.
+        return !ui._castButton.checked && ui._currentMode !== 2;
+    }
+
+    _onKeyEvent(event) {
+        if (event.type() !== Clutter.EventType.KEY_PRESS ||
+            !(event.get_state() & Clutter.ModifierType.SHIFT_MASK))
+            return Clutter.EVENT_PROPAGATE;
+
+        const enterKeys = [Clutter.KEY_Return, Clutter.KEY_KP_Enter, Clutter.KEY_ISO_Enter];
+        if (!enterKeys.includes(event.get_key_symbol()) || !this._canAnnotate())
+            return Clutter.EVENT_PROPAGATE;
+
+        this._captureAndAnnotate().catch(logError);
+        return Clutter.EVENT_STOP;
+    }
+
+    // Does what the Capture button does, then opens the result in the editor.
+    async _captureAndAnnotate() {
+        if (this._annotateNext || !this._canAnnotate())
+            return;
+        // 'screenshot-taken' is emitted before this call resolves.
+        this._annotateNext = true;
+        try {
+            await Main.screenshotUI._onCaptureButtonClicked();
+        } finally {
+            this._annotateNext = false;
+        }
+    }
+
     _launchAnnotator(file) {
         const bin = GLib.build_filenamev([GLib.get_home_dir(), '.local', 'bin', 'screenshot-annotator']);
         try {

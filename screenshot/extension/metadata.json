@@ -1,7 +1,7 @@
 {
   "uuid": "screenshot-annotate@omar.local",
   "name": "Screenshot Annotate",
-  "description": "Adds an Annotate toggle to the GNOME screenshot UI. When on, the captured screenshot opens in the annotation editor (lines, arrows, shapes, text).",
+  "description": "Adds an Annotate button to the GNOME screenshot UI (Shift+Enter). It captures and opens the screenshot in the annotation editor (lines, arrows, shapes, text).",
   "shell-version": ["50"],
   "version": 1
 }

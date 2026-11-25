@@ -2,11 +2,11 @@
 
 Extends Ubuntu's built-in screenshot tool (the Print Screen overlay in GNOME Shell) with:
 
-- **Annotate** toggle: after a capture, opens an editor (pen, line, arrow, rectangle, ellipse, text, eraser, undo/redo, save, copy).
+- **Annotate** button (or **Shift+Enter**): captures and goes straight to an editor (pen, line, arrow, rectangle, ellipse, text, eraser, undo/redo, save, copy).
 - **OCR** button in the editor: extracts the text from the image into a copyable text box, keeping line breaks, indentation and wide gaps.
 - **Audio for screen recordings**: speaker (system audio) and microphone toggles, usable separately or together.
 
-It does not replace or modify any system files. Everything is installed under your home folder, and the stock tool is unchanged when the toggles are off.
+It does not replace or modify any system files. Everything is installed under your home folder, and the stock tool behaves as before unless you use the added buttons.
 
 Tested on Ubuntu 26.04 with GNOME Shell 50 on Wayland.
 
@@ -53,9 +53,9 @@ Then:
 
 Press **Print Screen**. The buttons sit at the bottom right of the overlay:
 
-- Screenshot mode: the **pencil** toggle. When on, each capture opens in the editor.
+- Screenshot mode: choose the area, screen or window, then click the **pencil** button or press **Shift+Enter**. It captures and opens the editor. The normal Capture button (or Enter) takes a plain screenshot.
 - Record mode (video-camera toggle): the **speaker** and **microphone** toggles. When on, audio is recorded alongside the video and added to the file when you stop (you get a notification).
-- Your toggle choices are remembered in `~/.config/screenshot-annotator/state.json`.
+- Your audio toggle choices are remembered in `~/.config/screenshot-annotator/state.json`.
 
 In the editor: **Save** writes `<name>-annotated.png` next to the original and copies the result to the clipboard. The original is never overwritten. **OCR** (or Ctrl+Shift+O) opens the extracted text.
 

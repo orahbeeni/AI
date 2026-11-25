@@ -14,4 +14,4 @@ cp "$here"/extension/{metadata.json,extension.js,stylesheet.css} "$dest/"
 gnome-extensions enable $uuid 2>/dev/null || true
 
 echo "Installed. On Wayland, log out and back in once so GNOME Shell loads the extension."
-echo "Then press Print Screen and switch on the 'Annotate' button."
+echo "Then press Print Screen and click the 'Annotate' button (or press Shift+Enter)."
