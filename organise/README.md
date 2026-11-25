@@ -10,6 +10,10 @@ move. The plan and designs are in [PLAN.md](PLAN.md) and [design/](design/).
 ORGANISE_DIR=/tmp/organise-try ./run.sh   # try it on a separate data folder
 ```
 
+`./tools/install-desktop.sh` adds Organise to the app launcher, which also gives its window the app icon in the
+dock and taskbar (`--remove` takes it out). The icon comes from `design/images/appimage.png`: after changing that,
+run `python3 design/tools/make_icon.py` and then `cd app && npx tauri icon ../design/images/icon.png`.
+
 Your data is plain text in `~/Organise`: one Markdown file per list in `lists/`, plus `workspace.yaml`,
 `board.yaml`, `links.yaml` and `.machines/<computer>.yaml` (where each linked file is on this computer).
 

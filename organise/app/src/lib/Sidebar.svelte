@@ -108,7 +108,7 @@
 
 <aside class="sidebar">
   <div class="brand">
-    <span class="logo"><Icon name="check" size={15} /></span>
+    <img class="logo" src="/logo.png" alt="" />
     <span>Organise</span>
   </div>
 
@@ -281,13 +281,9 @@
     padding: 2px 8px 10px;
   }
   .logo {
-    display: grid;
-    place-items: center;
-    width: 22px;
-    height: 22px;
-    border-radius: 6px;
-    background: var(--accent);
-    color: #fff;
+    width: 24px;
+    height: 24px;
+    flex: none;
   }
   .search {
     display: flex;
