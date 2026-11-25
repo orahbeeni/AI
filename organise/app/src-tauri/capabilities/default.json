@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions for the main window and cards opened in their own windows",
+  "windows": [
+    "main",
+    "card-*"
+  ],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "clipboard-manager:allow-write-text",
+    "core:window:allow-destroy",
+    "core:window:allow-close",
+    "core:window:allow-set-title"
+  ]
+}
