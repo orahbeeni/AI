@@ -7,3 +7,4 @@ gen/
 # Data created when running in portable mode during development
 ytgrab-data/
 downloads/
+*.dmg
