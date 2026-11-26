@@ -1,0 +1,46 @@
+[package]
+name = "wfd-transport"
+description = "Discovery/connection transports for a Miracast sink: Linux Wi-Fi Direct (wpa_supplicant), Windows Wi-Fi Direct (WinRT), MS-MICE"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = ["ms-mice", "linux-p2p", "windows-p2p"]
+# Miracast over Infrastructure (all platforms): mDNS + TCP 7250.
+ms-mice = ["dep:mdns-sd"]
+# Native Wi-Fi Direct sink via wpa_supplicant D-Bus (Linux only).
+linux-p2p = []
+# Native Wi-Fi Direct sink via WinRT (Windows only).
+windows-p2p = []
+
+[dependencies]
+wfd-core.workspace = true
+tokio.workspace = true
+futures-util.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+socket2.workspace = true
+sha2.workspace = true
+uuid.workspace = true
+mdns-sd = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus.workspace = true
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Devices_Enumeration",
+    "Devices_WiFiDirect",
+    "Foundation",
+    "Foundation_Collections",
+    "Networking",
+    "Networking_Connectivity",
+    "Storage_Streams",
+] }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tracing-subscriber.workspace = true

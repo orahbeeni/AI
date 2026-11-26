@@ -1,0 +1,20 @@
+[package]
+name = "wfd-core"
+description = "Wi-Fi Display (Miracast) sink protocol: RTSP M1-M16 state machine, WFD parameters, WFD IEs, UIBC"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = ["tokio"]
+# Async drivers that run the sans-IO sessions over a tokio TcpStream.
+tokio = ["dep:tokio"]
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

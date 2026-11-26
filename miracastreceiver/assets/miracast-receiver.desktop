@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Miracast Receiver
+GenericName=Wireless Display Receiver
+Comment=Show a phone (Samsung DeX, Android) or Windows PC screen cast over Miracast
+Exec=@BIN@
+Icon=miracast-receiver
+Terminal=false
+Categories=AudioVideo;Video;Network;
+Keywords=miracast;dex;smart view;cast;wireless display;screen mirroring;
+StartupWMClass=miracast-receiver

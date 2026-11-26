@@ -1,0 +1,28 @@
+[package]
+name = "wfd-app"
+description = "Miracast receiver: a desktop window that shows Samsung DeX / Android / Windows screens cast over Wi-Fi Display"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "miracast-receiver"
+path = "src/main.rs"
+
+[dependencies]
+wfd-core.workspace = true
+wfd-transport = { workspace = true, default-features = true }
+wfd-media.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+eframe.workspace = true
+egui.workspace = true
+egui_glow.workspace = true
+glow.workspace = true
+png.workspace = true

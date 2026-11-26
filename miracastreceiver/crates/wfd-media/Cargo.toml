@@ -1,0 +1,18 @@
+[package]
+name = "wfd-media"
+description = "Low-latency GStreamer pipeline for Wi-Fi Display RTP/MPEG-TS (H.264 + LPCM/AAC)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+gstreamer.workspace = true
+gstreamer-app.workspace = true
+gstreamer-video.workspace = true
+gstreamer-audio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true

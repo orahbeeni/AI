@@ -1,0 +1,65 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/wfd-core",
+    "crates/wfd-transport",
+    "crates/wfd-media",
+    "crates/wfd-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+wfd-core = { path = "crates/wfd-core" }
+wfd-transport = { path = "crates/wfd-transport", default-features = false }
+wfd-media = { path = "crates/wfd-media" }
+
+# async runtime + plumbing
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "fs"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
+thiserror = "2.0.21"
+anyhow = "1.0.105"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+bytes = "1.12"
+
+# media
+gstreamer = "0.25.4"
+gstreamer-app = "0.25.2"
+gstreamer-video = "0.25.4"
+gstreamer-audio = "0.25.4"
+
+# GUI
+# no "wayland": winit has no drag and drop there, so Wayland desktops use XWayland
+eframe = { version = "0.37.0", default-features = false, features = ["glow", "x11", "default_fonts"] }
+egui = "0.37.0"
+egui_glow = "0.37.0"
+glow = "0.17.0"
+
+# transports
+zbus = { version = "5.19", default-features = false, features = ["tokio"] }
+mdns-sd = "0.22.0"
+socket2 = { version = "0.6.5", features = ["all"] }
+libc = "0.2.191"
+sha2 = "0.11.1"
+uuid = { version = "1.29", features = ["v4"] }
+windows = "0.62.2"
+
+# app
+clap = { version = "4.6", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.154"
+png = "0.18.1"
+
+[profile.release]
+debug = 1
+lto = "thin"
+
+# GStreamer/glib are C; the bindings are cheap to optimise and the decode path
+# benefits even in dev builds.
+[profile.dev.package."*"]
+opt-level = 2

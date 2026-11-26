@@ -1,0 +1,5 @@
+/target
+/.devdeps
+/.cargo/config.toml
+*.png
+!assets/*.png
