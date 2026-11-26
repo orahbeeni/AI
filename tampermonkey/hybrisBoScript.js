@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         mpern-env-ribbon Top Bar + Toolbar
 // @namespace    http://tampermonkey.net/
-// @version      2.30
+// @version      2.31
 // @description  Moves mpern-env-ribbon to a top-center bar at 40% opacity, adds a quick-nav toolbar and a notes panel
 // @match        *://*/*backoffice/*
 // @match        https://localhost:4200/*
@@ -450,6 +450,8 @@
                 { label: 'PoS', onClick: () => filterAndOpenTreeNode('Point of Service') },
                 { label: 'Website', onClick: () => filterAndOpenTreeNode('Website') },
                 { label: 'BaseStore', onClick: () => filterAndOpenTreeNode('Base Store') },
+                { label: 'Page', onClick: () => filterAndOpenTreeNode('page') },
+                { label: 'Nav', onClick: () => filterAndOpenTreeNode('nav') },
             ],
         },
         {
