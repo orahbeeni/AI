@@ -41,6 +41,7 @@
     bullet: "M12 12h.01",
     board: "M4 4h4v16H4zM10 4h4v10h-4zM16 4h4v13h-4z",
     expand: "M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7",
+    "board-off": "M4 4h4v16H4zM10 4h4v6h-4zM16 4h4v5h-4zM14 14l6 6M20 14l-6 6",
     popout: "M10 5H5a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1v-5M14 4h6v6M20 4l-8 8",
     dock: "M10 5H5a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1v-5M20 4l-8 8M11 8v5h5",
   };

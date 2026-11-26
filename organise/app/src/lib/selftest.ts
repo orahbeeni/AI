@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { app, walk } from "./state.svelte";
 import { handleDrop } from "./drop";
 import { caretOffset, setCaret } from "./caret";
+import { dnd, draggedItem, ITEM_URI, systemDragOver, systemDrop } from "./dnd.svelte";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until(fn: () => boolean, ms = 10000) {
@@ -223,6 +224,104 @@ export async function selftest(file: string) {
     app.change(() => (app.doc.settings.cardOpens = "popup"));
     app.openList(list.id);
 
+    // the board's "Not on the board" tray, and dragging an item out of a card pop-up onto a column
+    const tl = app.addList("work");
+    app.setText(tl.id, "Tray test");
+    const kid = app.append(tl.id, "Kid item")!;
+    const sub = app.append(tl.id, "Sub-list")!;
+    app.append(sub.id, "Under it");
+    app.boardFilter = null;
+    app.view = "board";
+    await wait(120);
+    const trayCard = (id: string) => document.querySelector<HTMLElement>(`[data-tray-card="${id}"]`);
+    const po = (x: number, y: number) => ({ bubbles: true, button: 0, pointerId: 1, clientX: x, clientY: y });
+    /** Starts a drag on `from`, then drops it on the first visible spot of a board column (or `to`). */
+    const dragOut = async (from: Element, to?: Element | string) => {
+      const a = from.getBoundingClientRect();
+      from.dispatchEvent(new PointerEvent("pointerdown", po(a.left + 6, a.top + 6)));
+      window.dispatchEvent(new PointerEvent("pointermove", po(a.left + 30, a.top + 30)));
+      await wait(60); // the drag has started: a pop-up's backdrop now lets the board through
+      let x = 0;
+      let y = 0;
+      if (to) {
+        const b = (typeof to === "string" ? document.querySelector(to)! : to).getBoundingClientRect(); // a selector: it may only show once dragging
+        [x, y] = [b.left + b.width / 2, b.top + b.height / 2];
+      } else {
+        search: for (const col of document.querySelectorAll<HTMLElement>("[data-col]")) {
+          const b = col.getBoundingClientRect();
+          for (let yy = b.bottom - 12; yy > b.top + 30; yy -= 15)
+            if ((document.elementFromPoint(b.left + b.width / 2, yy) as HTMLElement | null)?.closest("[data-col]")) {
+              [x, y] = [b.left + b.width / 2, yy];
+              break search;
+            }
+        }
+      }
+      window.dispatchEvent(new PointerEvent("pointermove", po(x, y)));
+      await wait(40);
+      window.dispatchEvent(new PointerEvent("pointerup", po(x, y)));
+      await wait(100);
+    };
+    check("the tray lists lists that aren't on the board", !!trayCard(tl.id));
+    check("…and sub-lists, but not single items", !!trayCard(sub.id) && !trayCard(kid.id));
+    const tc = trayCard(tl.id)!.getBoundingClientRect();
+    trayCard(tl.id)!.dispatchEvent(new PointerEvent("pointerdown", po(tc.left + 6, tc.top + 6)));
+    window.dispatchEvent(new PointerEvent("pointerup", po(tc.left + 6, tc.top + 6)));
+    await wait(100);
+    check("clicking a tray card opens it in the pop-up", app.peekId === tl.id && !!peekEl());
+    await dragOut(peekEl()!.querySelector(`[data-row="${kid.id}"] .grip`)!);
+    check("an item dragged out of the pop-up onto a column becomes a card", !!app.columnOf(kid.id), JSON.stringify(app.toast));
+    check("…and says so", !!app.toast?.text.includes("is on the board in"), app.toast?.text);
+    check("…while staying in its list", app.find(kid.id)?.parent?.id === tl.id);
+    const tag = peekEl()?.querySelector(`[data-row="${kid.id}"] .board-tag`);
+    check("…and its row says which column it's in", !!tag && tag.textContent!.trim() === app.columnOf(kid.id)!.name, tag?.textContent ?? "no tag");
+    app.closePeek();
+    await wait(60);
+    await dragOut(trayCard(sub.id)!);
+    check("a sub-list dragged from the tray onto a column goes on the board", !!app.columnOf(sub.id) && !trayCard(sub.id));
+    await dragOut(document.querySelector(`[data-card="${sub.id}"]`)!, document.querySelector("[data-tray] .tray-items")!);
+    check("a card dragged onto the tray comes off the board", !app.columnOf(sub.id) && !!trayCard(sub.id));
+    await dragOut(trayCard(sub.id)!);
+    check("(back on the board)", !!app.columnOf(sub.id) && !document.querySelector("[data-offboard]"));
+    await dragOut(document.querySelector(`[data-card="${sub.id}"]`)!, "[data-offboard]");
+    check("a card dropped on the Take off the board icon comes off the board", !app.columnOf(sub.id) && !!app.toast?.text.includes("off the board"), app.toast?.text);
+    const trayBox = () => document.querySelector("[data-tray]")!.getBoundingClientRect().height;
+    const h0 = trayBox();
+    const sp = document.querySelector<HTMLElement>(".splitter")!.getBoundingClientRect();
+    document.querySelector(".splitter")!.dispatchEvent(new PointerEvent("pointerdown", po(sp.left + 50, sp.top + 4)));
+    window.dispatchEvent(new PointerEvent("pointermove", po(sp.left + 50, sp.top - 56)));
+    window.dispatchEvent(new PointerEvent("pointerup", po(sp.left + 50, sp.top - 56)));
+    await wait(60);
+    check("the tray's height can be dragged", Math.round(trayBox() - h0) === 60, `${h0} -> ${trayBox()}`);
+    // an item dragged out of a card window arrives as a system drag (organise://item/<id>) with positions
+    const handed = app.append(tl.id, "Handed over")!;
+    app.view = "board";
+    await wait(100);
+    const done = document.querySelector<HTMLElement>('[data-col="done"]')!.getBoundingClientRect();
+    const [dx, dy] = [done.left + done.width / 2, done.bottom - 30];
+    check("a system drag carrying an item is recognised", draggedItem([`${ITEM_URI}${handed.id}`]) === handed.id && !draggedItem(["/home/x.txt"]));
+    systemDragOver(handed.id, dx, dy);
+    await wait(50);
+    check("…the column under it lights up", !!document.querySelector('[data-col="done"].target'));
+    systemDrop(handed.id, dx, dy);
+    await wait(50);
+    check("…and letting go there puts it on the board", app.columnOf(handed.id)?.id === "done" && !dnd.s);
+    // the Windows/macOS way: the card window relays the pointer's screen position through the app
+    const relayed = app.append(tl.id, "Relayed")!;
+    await wait(50);
+    const sx = window.screenX + dx; // the main window's screen position (0,0 in the test display) plus the spot
+    const sy = window.screenY + dy;
+    await invoke("relay_drag", { id: relayed.id, phase: "over", x: sx, y: sy });
+    await wait(120);
+    check("relayed from a card window: the column under the pointer lights up", !!document.querySelector('[data-col="done"].target') && !!document.querySelector(".ghost"));
+    await invoke("relay_drag", { id: relayed.id, phase: "leave", x: sx, y: sy });
+    await wait(80);
+    check("…and stops when the pointer goes back", !dnd.s && !document.querySelector('[data-col="done"].target'));
+    await invoke("relay_drag", { id: relayed.id, phase: "drop", x: sx, y: sy });
+    await wait(120);
+    check("…and letting go there puts it on the board", app.columnOf(relayed.id)?.id === "done");
+    app.deleteNode(tl.id, false);
+    app.openList(list.id);
+
     // Backspace at the start of an item joins it to the item above (real key presses on the rows)
     const jl = app.addList("work");
     app.setText(jl.id, "Join test");
@@ -296,6 +395,18 @@ export async function selftest(file: string) {
     }
     check("…and closes its window", closed);
     app.closePeek();
+
+    // colour mode
+    const bg = () => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+    app.change(() => (app.doc.settings.theme = "dark"));
+    await wait(50);
+    check("Dark colour mode turns the app dark", document.documentElement.dataset.theme === "dark" && bg() === "#161719", bg());
+    app.change(() => (app.doc.settings.theme = "light"));
+    await wait(50);
+    check("Light colour mode turns it light", document.documentElement.dataset.theme === "light" && bg() !== "#161719", bg());
+    app.change(() => (app.doc.settings.theme = "system"));
+    await wait(50);
+    check("System follows the computer again", !document.documentElement.dataset.theme);
 
     app.addColumn("Waiting");
     const w = app.doc.columns.find((x) => x.name === "Waiting")!;

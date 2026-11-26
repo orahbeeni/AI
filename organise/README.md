@@ -43,6 +43,17 @@ Your data is plain text in `~/Organise`: one Markdown file per list in `lists/`,
   there, switch its column or category from the chips at the top, open an item's details beside it, and press
   **Open full page** to make it the main view (Esc or a click outside closes it). Settings › Board › *Clicking a
   card* switches to opening the list straight away; right-click a card for the other way.
+- **What's on the board** is tagged: a list or item with a card shows its column (e.g. "▥ Blocked") next to
+  its title. Click an item's tag to move its card to another column or take it off the board.
+- **From a card in its own window:** drag an item by its handle onto the main window. The column (or list or
+  item) under the pointer lights up as in any other drag, and letting go puts it there; on a column it becomes a
+  card. This uses a system drag (like dragging a file), which is how the main window learns where the pointer is.
+- **Drag an item out of the pop-up onto a board column** to put that item (or sub-list) on the board as a card
+  of its own; it stays where it is in its list. Move the pop-up aside first if it covers the column.
+- **Not on the board:** under the columns, lists and sub-lists without a card. Drag one onto a column to add it,
+  click it to open it in the pop-up, or drag a card down into this area to take it off the board. While you drag a card, a **Take off the board**
+  icon also shows at the top of the board: drop the card on it. Drag the line
+  above it to make it taller or shorter (double-click the line to reset); the height is remembered.
 - **Move the pop-up** by dragging its header (double-click the header to centre it again; where you leave it is
   remembered). **Drag it past the edge of the window** and let go, or press its pop-out button, and the card opens
   in a window of its own that you can put anywhere (another screen too). That window edits the same data: changes
@@ -61,7 +72,20 @@ Your data is plain text in `~/Organise`: one Markdown file per list in `lists/`,
 - **Details** (the › at the end of a row, or Ctrl+I): links, notes, and *More details* (type, board column,
   delete). Drag the panel's left edge to make it wider or narrower (double-click the edge to reset); the
   width is remembered. Actions whose result isn't obvious on screen (board, category, delete, remove link…)
-  show a short message with Undo. **Settings:** backup/restore, categories, columns; *Advanced* has watched folders.
+  show a short message with Undo. **Settings:** backup/restore, colour mode (System / Light / Dark), categories, columns; *Advanced* has watched folders.
+
+## Windows
+
+`./tools/build-windows.sh` (on Linux) builds `dist/Organise_<version>_x64-setup.exe`. It installs for the current
+user (no admin rights) into `%LOCALAPPDATA%\Organise`, with a Start-menu entry and an uninstaller; data goes to
+`C:\Users\<you>\Organise`. It needs 64-bit Windows 10 or 11 with Microsoft's WebView2 engine, which Windows 11 and
+updated Windows 10 already have; otherwise the installer downloads it. The installer isn't code-signed, so
+Windows SmartScreen asks first (*More info › Run anyway*).
+
+Not on Windows yet: moves are not watched while Organise runs (they're found the next time it starts), and
+Outlook emails. Dragging an item from a card window onto the main window works differently there: the card window
+passes the pointer's screen position to the main window (on Linux it's a system drag, because Wayland keeps
+screen positions to itself). `ORGANISE_ITEM_DRAG=relay ./run.sh` tries the Windows way on Linux (X11 only).
 
 ## How file tracking works on Linux
 
@@ -86,6 +110,6 @@ cargo test -p organise-core          # model, Markdown, storage, backup, live fi
 
 ## Not in v0.1 yet
 
-Outlook emails (Windows build), Windows/macOS file tracking, sync between devices, phone app, `[[item]]`
+Outlook emails, live file watching on Windows/macOS, sync between devices, phone app, `[[item]]`
 links between items, daily snapshots. Edits made to the Markdown files while the app is running are not
 picked up until the next start (and may be overwritten by the app's next save).

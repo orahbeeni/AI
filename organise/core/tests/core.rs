@@ -1,7 +1,7 @@
 use organise_core::engine::Engine;
 use organise_core::links::{Link, LinkStatus};
 use organise_core::markdown::{parse_list, write_list};
-use organise_core::model::{CardOpens, Doc, ItemKind, Node};
+use organise_core::model::{CardOpens, Doc, ItemKind, Node, Theme};
 use organise_core::scan::{search, Found, Target};
 use organise_core::store::Store;
 use organise_core::tracker::{FsEvent, Targets, Tracker};
@@ -67,6 +67,7 @@ fn store_save_load_rename_delete() {
     assert_eq!(st.doc.settings.card_opens, CardOpens::Popup, "cards open in a pop-up unless set otherwise");
     st.doc.categories[0].archived = true;
     st.doc.settings.card_opens = CardOpens::Page;
+    st.doc.settings.theme = Theme::Dark;
     st.save_doc().unwrap();
     let st2 = Store::open(&data).unwrap();
     assert_eq!(st2.doc, st.doc);
@@ -74,6 +75,7 @@ fn store_save_load_rename_delete() {
     let ws = std::fs::read_to_string(data.join("workspace.yaml")).unwrap();
     assert!(ws.contains("archived: true"));
     assert!(ws.contains("cardOpens: page"), "card setting is saved: {ws}");
+    assert!(ws.contains("theme: dark"), "colour mode is saved: {ws}");
     st.doc.categories[0].archived = false;
     assert_eq!(st2.links.get(&link.id).unwrap().path, link.path);
     assert_eq!(st2.links.get(&link.id).unwrap().inode, link.inode);

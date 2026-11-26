@@ -150,7 +150,7 @@
   </div>
 {/if}
 
-{#if dnd.s}
+{#if dnd.s && !dnd.s.native}
   <div class="ghost" style:left="{dnd.s.x + 14}px" style:top="{dnd.s.y + 10}px">{dnd.s.label}</div>
 {/if}
 

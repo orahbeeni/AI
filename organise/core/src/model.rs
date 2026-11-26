@@ -88,11 +88,23 @@ pub struct Settings {
     pub auto_search: bool,
     #[serde(default)]
     pub card_opens: CardOpens,
+    #[serde(default)]
+    pub theme: Theme,
+}
+
+/// Light or dark colours: as the system is set, or always one of them.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    #[default]
+    System,
+    Light,
+    Dark,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { watched: vec![], skip_hidden: true, auto_search: true, card_opens: CardOpens::Popup }
+        Settings { watched: vec![], skip_hidden: true, auto_search: true, card_opens: CardOpens::Popup, theme: Theme::System }
     }
 }
 

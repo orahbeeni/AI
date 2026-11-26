@@ -43,6 +43,8 @@ struct LoadResult {
     home: String,
     start_view: Option<String>,
     selftest_file: Option<String>,
+    /** test hook: ORGANISE_ITEM_DRAG=system|relay picks how items are dragged out of card windows */
+    item_drag: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -213,6 +215,7 @@ fn load_result(st: &Store, selftest: &Option<PathBuf>) -> LoadResult {
         home: home().display().to_string(),
         start_view: std::env::var("ORGANISE_VIEW").ok(),
         selftest_file: selftest.as_ref().map(|p| p.display().to_string()),
+        item_drag: std::env::var("ORGANISE_ITEM_DRAG").ok(),
     }
 }
 
@@ -407,6 +410,26 @@ struct CardAction {
     id: String,
 }
 
+#[derive(Serialize, Clone)]
+struct ItemDrag {
+    id: String,
+    phase: String,
+    x: f64,
+    y: f64,
+}
+
+/// From a card window (Windows, macOS): an item is dragged outside it. `x`/`y` are the pointer's screen position
+/// in CSS pixels; the main window gets them as a position inside itself, to show where the item would land
+/// ("over"), stop showing it ("leave") or put it there ("drop").
+#[tauri::command]
+fn relay_drag(app: AppHandle, id: String, phase: String, x: f64, y: f64) -> Result<(), String> {
+    let main = app.get_webview_window("main").ok_or("The main window is closed")?;
+    let scale = main.scale_factor().map_err(err)?;
+    let at = main.inner_position().map_err(err)?;
+    let (x, y) = (x - at.x as f64 / scale, y - at.y as f64 / scale);
+    app.emit_to("main", "item-drag", ItemDrag { id, phase, x, y }).map_err(err)
+}
+
 /// From a card window: "full" makes the card the main window's view, "dock" puts it back as a pop-up there.
 #[tauri::command]
 fn card_to_main(app: AppHandle, action: String, id: String) -> Result<(), String> {
@@ -527,6 +550,7 @@ pub fn run() {
             open_data_dir,
             open_card_window,
             card_to_main,
+            relay_drag,
             selftest_read_list,
             selftest_move,
             selftest_windows,

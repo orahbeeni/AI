@@ -149,7 +149,7 @@
         onkeydown={titleKey}
       ></div>
       <div class="meta">
-        {#if col}<span>{col.name}</span><span class="sep">·</span>{/if}
+        {#if col}<span class="board-tag" style:--col={col.color ?? "var(--accent)"} title="On the board in {col.name}"><Icon name="board" size={12} />{col.name}</span>{/if}
         {#if p.total}
           <span>{p.done} of {p.total} done</span>
           <span class="bar"><span style:width="{(100 * p.done) / p.total}%"></span></span>
@@ -244,8 +244,18 @@
     color: var(--text2);
     margin-bottom: 22px;
   }
-  .sep {
-    color: var(--text3);
+  .board-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 550;
+    color: var(--col);
+    background: color-mix(in srgb, var(--col) 14%, transparent);
+    margin-right: 4px;
   }
   .bar {
     width: 110px;

@@ -3,9 +3,12 @@
   // of the app window (or press the pop-out button) and it opens in a window of its own.
   import { onMount } from "svelte";
   import { app } from "./state.svelte";
+  import { dnd } from "./dnd.svelte";
   import CardView from "./CardView.svelte";
 
   const f = $derived(app.peekId ? app.find(app.peekId) : null);
+  // while an item is dragged out of the pop-up the board behind it takes drops (it becomes a card there)
+  const passThrough = $derived(dnd.s?.kind === "item");
 
   // the card went away (deleted, undone): nothing left to show
   $effect(() => {
@@ -116,7 +119,7 @@
 </script>
 
 {#if f}
-  <div class="scrim" bind:this={scrim} role="presentation" onpointerdown={(e) => e.target === e.currentTarget && app.closePeek()}>
+  <div class="scrim" class:pass={passThrough} bind:this={scrim} role="presentation" onpointerdown={(e) => e.target === e.currentTarget && app.closePeek()}>
     <div
       class="panel"
       class:dragging
@@ -149,6 +152,14 @@
     padding: 5vh 32px 32px;
     overflow: hidden;
     animation: fade 0.12s ease-out;
+  }
+  .scrim.pass {
+    pointer-events: none;
+    background: rgba(8, 12, 22, 0.12);
+    transition: background 0.15s;
+  }
+  .scrim.pass .panel {
+    pointer-events: auto;
   }
   .panel {
     position: relative;

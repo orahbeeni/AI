@@ -32,6 +32,8 @@ export interface Settings {
   autoSearch: boolean;
   /** what clicking a board card does (missing means "popup") */
   cardOpens?: "popup" | "page";
+  /** colour mode (missing means "system") */
+  theme?: "system" | "light" | "dark";
 }
 
 export interface Doc {
@@ -79,6 +81,7 @@ export interface LoadResult {
   home: string;
   startView: string | null;
   selftestFile: string | null;
+  itemDrag?: "system" | "relay" | null;
 }
 
 export interface TrackerStats {

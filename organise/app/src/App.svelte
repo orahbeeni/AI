@@ -5,7 +5,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { app } from "./lib/state.svelte";
   import { fileTargetAt, handleDrop } from "./lib/drop";
-  import { edgeScroll } from "./lib/dnd.svelte";
+  import { draggedItem, relayedDrag, edgeScroll, systemDragLeave, systemDragOver, systemDrop } from "./lib/dnd.svelte";
   import { cardSelftest, selftest } from "./lib/selftest";
   import type { Doc, Link, MoveRecord, View } from "./lib/types";
   import Sidebar from "./lib/Sidebar.svelte";
@@ -22,6 +22,28 @@
   // A window opened for one card (see open_card_window) is told which card before this runs.
   const myCard = (window as unknown as { __ORGANISE_CARD__?: string }).__ORGANISE_CARD__;
   if (myCard) app.cardWindow = myCard;
+
+  // colour mode: Settings › Appearance. Remembered here too so the window opens in it before the data loads.
+  function applyTheme(t: string) {
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+    else delete document.documentElement.dataset.theme;
+  }
+  try {
+    applyTheme(localStorage.getItem("organise.theme") ?? "system");
+  } catch {
+    /* first run */
+  }
+  $effect(() => {
+    if (!app.loaded) return;
+    const t = app.doc.settings.theme ?? "system";
+    applyTheme(t);
+    getCurrentWindow().setTheme(t === "system" ? null : t).catch(() => {}); // the title bar too
+    try {
+      localStorage.setItem("organise.theme", t);
+    } catch {
+      /* fine */
+    }
+  });
 
   // a card window follows its card: its title, and it closes if the card is deleted
   $effect(() => {
@@ -62,6 +84,7 @@
       unlisten.push(await listen<{ doc: Doc; from: string }>("doc-changed", (e) => e.payload.from !== me && app.remoteDoc(e.payload.doc)));
       // a card window asks the main window to show its card
       if (!app.cardWindow) {
+        unlisten.push(await listen<{ id: string; phase: string; x: number; y: number }>("item-drag", (e) => relayedDrag(e.payload.id, e.payload.phase, e.payload.x, e.payload.y)));
         unlisten.push(
           await listen<{ action: string; id: string }>("card-action", (e) => {
             if (e.payload.action === "full") app.openFull(e.payload.id);
@@ -82,6 +105,22 @@
         await getCurrentWebview().onDragDropEvent((ev) => {
           const p = ev.payload;
           const scale = window.devicePixelRatio || 1;
+          // an item dragged out of a card window (see startSystemDrag), not files
+          const item = draggedItem(p.type === "enter" || p.type === "drop" ? p.paths : dragPaths);
+          if (item) {
+            if (p.type === "enter") dragPaths = p.paths;
+            if (p.type === "enter" || p.type === "over") {
+              edgeScroll(p.position.x / scale, p.position.y / scale);
+              systemDragOver(item, p.position.x / scale, p.position.y / scale);
+            } else if (p.type === "drop") {
+              dragPaths = [];
+              systemDrop(item, p.position.x / scale, p.position.y / scale);
+            } else {
+              dragPaths = [];
+              systemDragLeave();
+            }
+            return;
+          }
           if (p.type === "enter") {
             dragPaths = p.paths;
             app.fileDrop = fileTargetAt(p.position.x / scale, p.position.y / scale);

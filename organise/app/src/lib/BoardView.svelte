@@ -80,10 +80,65 @@
     ]);
   }
 
+  // ---- the "Not on the board" tray under the columns; its height is dragged by the bar above it ----
+  const tray = $derived(app.notOnBoard(app.boardFilter));
+  const trayTarget = $derived(dnd.s?.target?.kind === "tray");
+  /** a card from the board is being dragged: show the "Take off the board" drop icon */
+  const offboard = $derived(dnd.s?.kind === "card" && !!app.columnOf(dnd.s.id));
+  const overIcon = $derived(trayTarget && !!dnd.s && document.elementFromPoint(dnd.s.x, dnd.s.y)?.closest("[data-offboard]"));
+  const TRAY_KEY = "organise.trayHeight";
+  const TRAY_DEFAULT = 170;
+  const TRAY_MIN = 46; // just its heading
+  function savedTray(): number {
+    try {
+      const h = Number(localStorage.getItem(TRAY_KEY));
+      return h >= TRAY_MIN ? h : TRAY_DEFAULT;
+    } catch {
+      return TRAY_DEFAULT;
+    }
+  }
+  let trayH = $state(savedTray());
+  let boardEl: HTMLDivElement | undefined = $state();
+  const trayMax = () => Math.max(TRAY_MIN, (boardEl?.clientHeight ?? 600) - 220);
+  function setTray(h: number) {
+    trayH = Math.round(Math.min(trayMax(), Math.max(TRAY_MIN, h)));
+    try {
+      localStorage.setItem(TRAY_KEY, String(trayH));
+    } catch {
+      /* not remembered */
+    }
+  }
+  function resizeTray(e: PointerEvent) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const y0 = e.clientY;
+    const h0 = trayH;
+    document.body.classList.add("resizing-rows");
+    const move = (ev: PointerEvent) => setTray(h0 + (y0 - ev.clientY));
+    const up = () => {
+      document.body.classList.remove("resizing-rows");
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+  function trayKey(e: KeyboardEvent) {
+    if (e.key === "ArrowUp") setTray(trayH + 20);
+    else if (e.key === "ArrowDown") setTray(trayH - 20);
+    else return;
+    e.preventDefault();
+  }
+
   const colTarget = (c: Column) => dnd.s && dnd.s.target?.kind === "column" && dnd.s.target.id === c.id ? dnd.s.target.index : -1;
 </script>
 
-<div class="board">
+<div class="board" bind:this={boardEl}>
+  {#if offboard}
+    <div class="offboard" class:hot={overIcon} data-offboard>
+      <Icon name="board-off" size={18} /> Take off the board
+    </div>
+  {/if}
   <header>
     <h1>Board</h1>
     <div class="filters">
@@ -151,6 +206,52 @@
       <Icon name="plus" size={18} />
     </button>
   </div>
+
+  <button
+    class="splitter"
+    title="Drag to resize · double-click to reset"
+    aria-label="Resize the Not on the board area"
+    onpointerdown={resizeTray}
+    ondblclick={() => setTray(TRAY_DEFAULT)}
+    onkeydown={trayKey}
+  ></button>
+  <section class="tray" data-tray class:target={trayTarget} style:height="{trayH}px">
+    <div class="tray-head">
+      <span class="tray-title">Not on the board</span>
+      <span class="faint">{tray.length}</span>
+      <span class="faint hint">{trayTarget ? "Drop to take it off the board" : "Drag onto a column to add it · click to open"}</span>
+    </div>
+    <div class="tray-items">
+      {#each tray as t (t.node.id)}
+        {@const cat = app.category(t.list.category)}
+        {@const p = progress(t.node)}
+        <div
+          class="tray-card"
+          data-tray-card={t.node.id}
+          class:dragging={dnd.s?.kind === "card" && dnd.s.id === t.node.id}
+          role="button"
+          tabindex="0"
+          title={t.sub ? `In ${t.list.text || "Untitled"}` : undefined}
+          onpointerdown={(e) => startDrag(e, "card", t.node.id, t.node.text || "Untitled", () => app.openCard(t.node.id, "popup"))}
+          onkeydown={(e) => e.key === "Enter" && app.openCard(t.node.id, "popup")}
+          oncontextmenu={(e) =>
+            app.openMenu(e, [
+              { label: "Open", icon: "external", run: () => app.openCard(t.node.id, "popup") },
+              { label: "Put on the board", icon: "board", submenu: app.doc.columns.map((c) => ({ label: c.name, run: () => app.putOnBoard(t.node.id, c.id) })) },
+            ])}
+        >
+          <span class="dot" style:background={cat?.color ?? "var(--text3)"}></span>
+          <span class="tc-text">
+            <span class="tc-title">{t.node.text || "Untitled"}</span>
+            {#if t.sub}<span class="tc-sub faint">in {t.list.text || "Untitled"}</span>{/if}
+          </span>
+          {#if p.total}<span class="faint tc-n">{p.done}/{p.total}</span>{/if}
+        </div>
+      {:else}
+        <div class="faint tray-empty">Everything is on the board</div>
+      {/each}
+    </div>
+  </section>
 </div>
 
 {#if app.peekId}<CardPeek />{/if}
@@ -161,6 +262,40 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    position: relative;
+  }
+  .offboard {
+    position: absolute;
+    top: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 15;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    height: 44px;
+    padding: 0 20px;
+    border-radius: 22px;
+    background: var(--bg);
+    border: 1.5px dashed var(--line-strong);
+    color: var(--text2);
+    font-size: 13.5px;
+    font-weight: 600;
+    box-shadow: var(--shadow);
+    animation: drop-in 0.15s ease-out;
+  }
+  .offboard.hot {
+    border-style: solid;
+    border-color: var(--red);
+    color: var(--red);
+    background: color-mix(in srgb, var(--red) 12%, var(--bg));
+    transform: translateX(-50%) scale(1.06);
+  }
+  @keyframes drop-in {
+    from {
+      opacity: 0;
+      transform: translate(-50%, -10px);
+    }
   }
   header {
     display: flex;
@@ -198,7 +333,7 @@
     flex: 1;
     display: flex;
     gap: 14px;
-    padding: 0 28px 24px;
+    padding: 0 28px 10px;
     overflow-x: auto;
     min-height: 0;
     align-items: stretch;
@@ -317,6 +452,117 @@
     font-size: 12.5px;
     padding: 16px 4px;
     text-align: center;
+  }
+  .splitter {
+    flex: none;
+    height: 9px;
+    margin: 0 28px;
+    cursor: row-resize;
+    position: relative;
+  }
+  .splitter::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 4px;
+    height: 1px;
+    background: var(--line);
+    transition: background 0.15s;
+  }
+  .splitter:hover::after,
+  .splitter:focus-visible::after,
+  :global(body.resizing-rows) .splitter::after {
+    height: 2px;
+    background: var(--accent);
+  }
+  :global(body.resizing-rows),
+  :global(body.resizing-rows *) {
+    cursor: row-resize !important;
+    user-select: none !important;
+  }
+  .tray {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    margin: 0 28px 14px;
+    border-radius: 12px;
+  }
+  .tray.target {
+    background: var(--sel);
+    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  .tray-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 4px 8px;
+    font-size: 13.5px;
+  }
+  .tray-title {
+    font-weight: 650;
+  }
+  .hint {
+    margin-left: auto;
+    font-size: 12px;
+  }
+  .tray-items {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 8px;
+    padding: 2px 2px 8px;
+  }
+  .tray-card {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 260px;
+    padding: 7px 11px;
+    border-radius: 9px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    cursor: pointer;
+    user-select: none;
+    touch-action: none;
+    font-size: 13px;
+  }
+  .tray-card:hover {
+    border-color: var(--line-strong);
+  }
+  .tray-card.dragging {
+    opacity: 0.4;
+  }
+  .tc-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .tc-title,
+  .tc-sub {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tc-title {
+    font-weight: 600;
+  }
+  .tc-sub {
+    font-size: 11.5px;
+  }
+  .tc-n {
+    font-size: 11.5px;
+    margin-left: 2px;
+  }
+  .tray-empty {
+    font-size: 12.5px;
+    padding: 6px 4px;
   }
   .add-col {
     width: 40px;

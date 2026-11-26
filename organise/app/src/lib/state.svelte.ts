@@ -43,7 +43,7 @@ export interface Toast {
 }
 
 function emptyDoc(): Doc {
-  return { categories: [], columns: [], lists: [], settings: { watched: [], skipHidden: true, autoSearch: true, cardOpens: "popup" } };
+  return { categories: [], columns: [], lists: [], settings: { watched: [], skipHidden: true, autoSearch: true, cardOpens: "popup", theme: "system" } };
 }
 
 class AppState {
@@ -63,6 +63,9 @@ class AppState {
   peekId = $state<string | null>(null);
   /** set in a window that shows one card on its own (popped out of the main window) */
   cardWindow = $state<string | null>(null);
+  /** how an item gets from a card window to the main window: a system drag (Linux: works on Wayland, which keeps
+   *  screen positions to itself) or relaying the pointer's screen position through the app (Windows, macOS) */
+  itemDrag = $state<"system" | "relay">(/Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent) ? "system" : "relay");
   focus = $state<{ id: string; caret: "start" | "end" | number } | null>(null);
   flashId = $state<string | null>(null);
   collapsed = $state<Record<string, boolean>>({});
@@ -96,6 +99,7 @@ class AppState {
     this.dataDir = r.dataDir;
     this.host = r.host;
     this.home = r.home;
+    if (r.itemDrag === "system" || r.itemDrag === "relay") this.itemDrag = r.itemDrag;
     if (!this.listId || !this.doc.lists.some((l) => l.id === this.listId)) this.listId = this.doc.lists[0]?.id ?? null;
     this.loaded = true;
   }
@@ -740,6 +744,32 @@ class AppState {
       col.cards.splice(Math.max(0, Math.min(index, col.cards.length)), 0, nodeId);
     });
     if (notify) this.done(`Moved ${this.q(this.find(nodeId)?.node)} to ${col.name}`);
+  }
+
+  /** A drag onto a board column: moves the card there, or puts something new on the board (and says so,
+   *  since it may have come from a pop-up or the tray). */
+  placeCard(nodeId: string, colId: string, index: number) {
+    const was = this.columnOf(nodeId);
+    const col = this.doc.columns.find((c) => c.id === colId);
+    if (!col || !this.find(nodeId)) return;
+    this.moveCard(nodeId, colId, index);
+    if (!was) this.done(`${this.q(this.find(nodeId)?.node)} is on the board in ${col.name}`);
+  }
+
+  /** Lists and sub-lists (items with items under them) that have no card on the board, list by list. */
+  notOnBoard(categoryId: string | null): { node: Node; list: Node; sub: boolean }[] {
+    const on = new Set(this.doc.columns.flatMap((c) => c.cards));
+    const out: { node: Node; list: Node; sub: boolean }[] = [];
+    for (const list of this.doc.lists) {
+      const cat = this.category(list.category);
+      if (cat?.archived || (categoryId && list.category !== categoryId)) continue;
+      walk(list, (n) => {
+        if (on.has(n.id)) return;
+        if (n === list) out.push({ node: n, list, sub: false });
+        else if (n.children.length) out.push({ node: n, list, sub: true });
+      });
+    }
+    return out;
   }
 
   addColumn(name: string) {

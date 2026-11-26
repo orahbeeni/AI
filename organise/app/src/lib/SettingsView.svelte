@@ -60,6 +60,11 @@
     ]);
   }
 
+  const theme = $derived(app.doc.settings.theme ?? "system");
+  function setTheme(v: "system" | "light" | "dark") {
+    if (v !== theme) app.change(() => (app.doc.settings.theme = v));
+  }
+
   const cardOpens = $derived(app.doc.settings.cardOpens ?? "popup");
   function setCardOpens(v: "popup" | "page") {
     if (v === cardOpens) return;
@@ -97,6 +102,19 @@
       </div>
       <button class="btn primary" onclick={exportBackup}><Icon name="download" size={14} /> Export</button>
       <button class="btn" onclick={restoreBackup}><Icon name="upload" size={14} /> Restore…</button>
+    </div>
+
+    <div class="section-label">Appearance</div>
+    <div class="row">
+      <div class="label">
+        <span>Colour mode</span>
+        <span class="muted small">{theme === "system" ? "Light or dark, as your computer is set." : theme === "dark" ? "Always dark." : "Always light."}</span>
+      </div>
+      <div class="seg" role="radiogroup" aria-label="Colour mode">
+        <button role="radio" aria-checked={theme === "system"} class:on={theme === "system"} onclick={() => setTheme("system")}>System</button>
+        <button role="radio" aria-checked={theme === "light"} class:on={theme === "light"} onclick={() => setTheme("light")}>Light</button>
+        <button role="radio" aria-checked={theme === "dark"} class:on={theme === "dark"} onclick={() => setTheme("dark")}>Dark</button>
+      </div>
     </div>
 
     <div class="section-label">Categories</div>

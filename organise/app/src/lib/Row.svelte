@@ -1,7 +1,7 @@
 <script lang="ts">
   import { open } from "@tauri-apps/plugin-dialog";
   import { app, isUrl } from "./state.svelte";
-  import { dnd, startDrag } from "./dnd.svelte";
+  import { dnd, startDrag, startSystemDrag } from "./dnd.svelte";
   import { caretOffset, caretOnEdge, setCaret } from "./caret";
   import LinkChip from "./LinkChip.svelte";
   import Icon from "./Icon.svelte";
@@ -29,6 +29,22 @@
   const t = $derived(dnd.s?.target?.kind === "row" && dnd.s.target.id === node.id ? dnd.s.target.pos : null);
   const fileTarget = $derived(app.fileDrop?.kind === "row" && app.fileDrop.id === node.id);
   const hiddenKids = $derived(app.collapsed[node.id] ? node.children.length : 0);
+  /** the board column this item has a card in, if any (shown as a tag on the row) */
+  const onBoard = $derived(app.columnOf(node.id));
+
+  function boardMenu(e: MouseEvent) {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    app.openMenu({ clientX: r.left, clientY: r.bottom + 4 }, [
+      ...app.doc.columns.map((c) => ({
+        label: c.name,
+        color: c.color ?? undefined,
+        checked: onBoard?.id === c.id,
+        run: () => onBoard?.id !== c.id && app.moveCard(node.id, c.id, c.cards.length, true),
+      })),
+      { separator: true, label: "" },
+      { label: "Take off the board", icon: "close", run: () => app.takeOffBoard(node.id) },
+    ]);
+  }
 
   function sync() {
     if (el) app.setText(node.id, el.textContent ?? "");
@@ -174,7 +190,17 @@
   oncontextmenu={menu}
   role="listitem"
 >
-  <span class="grip" role="button" tabindex="-1" aria-label="Drag to move" title="Drag to move" onpointerdown={(e) => startDrag(e, "item", node.id, node.text || "Untitled")}>
+  <!-- in a card window the handle starts a system drag, so the main window can show where it would land -->
+  <span
+    class="grip"
+    role="button"
+    tabindex="-1"
+    aria-label="Drag to move"
+    title="Drag to move"
+    draggable={app.cardWindow && app.itemDrag === "system" ? "true" : undefined}
+    ondragstart={(e) => app.cardWindow && app.itemDrag === "system" && startSystemDrag(e, node.id, node.text || "Untitled")}
+    onpointerdown={(e) => !(app.cardWindow && app.itemDrag === "system") && startDrag(e, "item", node.id, node.text || "Untitled")}
+  >
     <Icon name="grip" size={14} />
   </span>
   {#if node.children.length}
@@ -207,6 +233,11 @@
     {#each node.links as lid (lid)}
       <LinkChip id={lid} nodeId={node.id} />
     {/each}
+    {#if onBoard}
+      <button class="board-tag" style:--col={onBoard.color ?? "var(--accent)"} title="On the board in {onBoard.name}" onclick={boardMenu}>
+        <Icon name="board" size={12} />{onBoard.name}
+      </button>
+    {/if}
     {#if hiddenKids}
       <button class="hidden-kids" onclick={() => app.toggleCollapse(node.id)}>{hiddenKids} more</button>
     {/if}
@@ -296,7 +327,7 @@
     display: grid;
     place-items: center;
     flex: none;
-  }
+    }
   .bullet span {
     width: 6px;
     height: 6px;
@@ -330,6 +361,22 @@
     color: var(--text3);
     text-decoration: line-through;
     text-decoration-color: color-mix(in srgb, var(--text3) 60%, transparent);
+  }
+  .board-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 550;
+    flex: none;
+    color: var(--col);
+    background: color-mix(in srgb, var(--col) 14%, transparent);
+  }
+  .board-tag:hover {
+    background: color-mix(in srgb, var(--col) 24%, transparent);
   }
   .hidden-kids {
     font-size: 12px;

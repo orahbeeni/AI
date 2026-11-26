@@ -33,8 +33,35 @@
   -webkit-font-smoothing: antialiased;
 }
 
+/* dark: when chosen in Settings, or when the system is dark and Light isn't chosen */
+:root[data-theme="dark"] {
+    --bg: #161719;
+    --sidebar: #1c1d20;
+    --sidebar-sel: #2a2c31;
+    --hover: #24262a;
+    --row-hover: #1f2124;
+    --sel: #1d2b45;
+    --chip: #26282c;
+    --chip-hover: #30333a;
+    --card: #1f2124;
+    --column: #1b1c1f;
+    --line: #2c2e33;
+    --line-strong: #3a3d44;
+    --text: #e6e7ea;
+    --text2: #a0a5ae;
+    --text3: #6c717b;
+    --accent: #5b8df0;
+    --accent-hover: #6e9bf3;
+    --amber: #f0b45a;
+    --amber-bg: #3a2c16;
+    --green: #4cc38a;
+    --green-bg: #183326;
+    --shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.4);
+    color-scheme: dark;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #161719;
     --sidebar: #1c1d20;
     --sidebar-sel: #2a2c31;
@@ -194,4 +221,21 @@ select {
   border-radius: 10px;
   border: 3px solid transparent;
   background-clip: padding-box;
+}
+
+/* the image a system drag shows (an item dragged out of a card window) */
+.sys-drag-image {
+  position: fixed;
+  top: -100px;
+  left: 0;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  font-size: 13.5px;
+  white-space: nowrap;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
