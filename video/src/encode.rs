@@ -665,6 +665,40 @@ fn run_ffmpeg(tools: &Tools, args: &[OsString], total: f64, cancel: &AtomicBool,
     }
 }
 
+/// Joins whole videos end to end into one working file, so that they can be cut, cropped and sized as a single video.
+/// The file is made at a quality high enough that the final conversion cannot show the extra step (CRF 14), with the
+/// fast preset so that combining takes a fraction of the video's length. Written only once complete.
+pub fn combine(tools: &Tools, inputs: &[(PathBuf, Info)], output: &Path, cancel: &AtomicBool, report: &dyn Fn(Event)) -> Result<(), Error> {
+    if inputs.is_empty() || inputs.iter().any(|(path, _)| path == output) {
+        return Err(Error::Failed("nothing to combine, or the output would overwrite one of the videos".into()));
+    }
+    let job = Job {
+        clips: inputs.iter().map(|(path, info)| ClipJob { input: path.clone(), info: info.clone(), spans: vec![(0.0, info.duration)], crop: None }).collect(),
+        output: output.to_path_buf(),
+        format: Format::Mp4,
+        target_bytes: None,
+    };
+    let part = output.with_extension("part.mp4");
+    let mut args = input_args(&job);
+    let audio = job.has_audio();
+    args.extend(["-filter_complex".into(), graph(&job, None, audio, None).into(), "-map".into(), "[vout]".into()]);
+    if audio {
+        args.extend(["-map", "[a]"].map(OsString::from));
+    }
+    args.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-pix_fmt", "yuv420p"].map(OsString::from));
+    if audio {
+        args.extend(["-c:a", "aac", "-b:a", "192k"].map(OsString::from));
+    }
+    args.extend(["-movflags", "+faststart"].map(OsString::from));
+    args.push(part.clone().into());
+
+    report(Event::Status(format!("Combining {} videos…", inputs.len())));
+    let result = run_ffmpeg(tools, &args, job.duration(), cancel, &mut |p| report(Event::Progress(p)));
+    let result = result.and_then(|()| std::fs::rename(&part, output).map_err(|e| Error::Failed(format!("cannot write {}: {e}", output.display()))));
+    let _ = std::fs::remove_file(&part);
+    result
+}
+
 /// Removes `cut` from a sorted list of spans, splitting a span if the cut is in its middle. Slivers shorter than
 /// a tenth of a second are dropped.
 pub fn subtract(spans: &[Span], cut: Span) -> Vec<Span> {
@@ -880,6 +914,35 @@ mod tests {
             }
             assert!(!job.output.with_extension(format!("part.{}", format.extension())).exists());
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Needs ffmpeg on the machine; three videos of different sizes, one without sound, become one video as long as all.
+    #[test]
+    fn combine_makes_one_video_as_long_as_all() {
+        let Some(tools) = ffmpeg::locate() else { return };
+        let dir = std::env::temp_dir().join(format!("video-combine-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let inputs: Vec<(PathBuf, Info)> = [("a.mov", "1280x720", true, 4), ("b.mp4", "640x360", false, 3), ("c.mp4", "1280x720", true, 2)]
+            .iter()
+            .map(|&(name, size, audio, secs)| {
+                let path = dir.join(name);
+                make_clip(&tools, &path, size, audio, secs);
+                let info = ffmpeg::probe(&tools, &path).unwrap();
+                (path, info)
+            })
+            .collect();
+        let output = dir.join("joined.mp4");
+        combine(&tools, &inputs, &output, &AtomicBool::new(false), &|_| {}).unwrap();
+        let out = ffmpeg::probe(&tools, &output).unwrap();
+        assert!((out.duration - 9.0).abs() < 0.3, "{} s", out.duration);
+        assert_eq!((out.width, out.height), (1280, 720));
+        assert!(out.has_audio);
+        assert!(!output.with_extension("part.mp4").exists());
+        // Cancelling leaves nothing behind.
+        let other = dir.join("cancelled.mp4");
+        assert!(matches!(combine(&tools, &inputs, &other, &AtomicBool::new(true), &|_| {}), Err(Error::Cancelled)));
+        assert!(!other.exists() && !other.with_extension("part.mp4").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -8,6 +8,29 @@ pub enum Handle {
     End,
 }
 
+/// Where one video of a combined project ends and the next begins.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Join {
+    /// The time on the timeline where the next video starts.
+    pub at: f64,
+    /// 1-based position of the video that starts here.
+    pub number: usize,
+    pub before: String,
+    pub after: String,
+}
+
+/// The nearest join strictly before (`dir < 0`) or after (`dir > 0`) `t`, with a little room so that standing on a
+/// join finds the next one.
+pub fn neighbour_join(joins: &[Join], t: f64, dir: i32) -> Option<f64> {
+    const ROOM: f64 = 0.05;
+    let times = joins.iter().map(|j| j.at);
+    if dir < 0 { times.filter(|&a| a < t - ROOM).last() } else { times.filter(|&a| a > t + ROOM).next() }
+}
+
+/// How close, in pixels, a dragged handle has to come to a join to snap to it.
+const SNAP_PX: f32 = 7.0;
+const JOIN_COLOR: Color32 = Color32::from_rgb(255, 176, 46);
+
 /// The shortest part that can be selected.
 pub fn min_length(duration: f64) -> f64 {
     0.1_f64.min(duration / 2.0)
@@ -35,8 +58,17 @@ pub fn parse_time(text: &str) -> Option<f64> {
 }
 
 /// Draws the bar. Returns which handle moved, if one did. `playhead` is the time shown in the preview; `kept` are
-/// the parts that stay in the result (the area between the handles is the selection, drawn on top of them).
-pub fn range_slider(ui: &mut egui::Ui, duration: f64, start: &mut f64, end: &mut f64, playhead: f64, kept: &[(f64, f64)]) -> Option<Handle> {
+/// the parts that stay in the result (the area between the handles is the selection, drawn on top of them). `joins` are
+/// the places where combined videos meet: drawn as orange markers, and a dragged handle snaps to them (hold Alt not to).
+pub fn range_slider(
+    ui: &mut egui::Ui,
+    duration: f64,
+    start: &mut f64,
+    end: &mut f64,
+    playhead: f64,
+    kept: &[(f64, f64)],
+    joins: &[Join],
+) -> Option<Handle> {
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::click_and_drag());
     let track = Rect::from_min_max(pos2(rect.left() + 8.0, rect.center().y - 5.0), pos2(rect.right() - 8.0, rect.center().y + 5.0));
     let x_of = |t: f64| track.left() + (t / duration) as f32 * track.width();
@@ -53,7 +85,13 @@ pub fn range_slider(ui: &mut egui::Ui, duration: f64, start: &mut f64, end: &mut
     }
     if resp.drag_started() || resp.dragged() || resp.clicked() {
         if let (Some(pos), Some(handle)) = (resp.interact_pointer_pos(), ui.data(|d| d.get_temp::<Handle>(id))) {
-            let t = t_of(pos.x);
+            let mut t = t_of(pos.x);
+            if !ui.input(|i| i.modifiers.alt) {
+                let reach = SNAP_PX as f64 / track.width() as f64 * duration;
+                if let Some(j) = joins.iter().find(|j| (j.at - t).abs() <= reach) {
+                    t = j.at;
+                }
+            }
             let gap = min_length(duration);
             match handle {
                 Handle::Start => *start = t.min(*end - gap).max(0.0),
@@ -78,6 +116,17 @@ pub fn range_slider(ui: &mut egui::Ui, duration: f64, start: &mut f64, end: &mut
         Color32::from_white_alpha(170),
     );
 
+    for j in joins {
+        let x = x_of(j.at.clamp(0.0, duration));
+        painter.line_segment([pos2(x, rect.top() + 3.0), pos2(x, rect.bottom() - 1.0)], Stroke::new(2.0, JOIN_COLOR));
+        painter.add(egui::Shape::convex_polygon(
+            vec![pos2(x - 4.0, rect.top()), pos2(x + 4.0, rect.top()), pos2(x, rect.top() + 6.0)],
+            JOIN_COLOR,
+            Stroke::NONE,
+        ));
+        painter.text(pos2(x + 4.0, rect.top() - 1.0), egui::Align2::LEFT_TOP, j.number.to_string(), egui::FontId::monospace(10.0), JOIN_COLOR);
+    }
+
     let playhead_x = x_of(playhead.clamp(0.0, duration));
     painter.line_segment([pos2(playhead_x, rect.top() + 2.0), pos2(playhead_x, rect.bottom() - 2.0)], Stroke::new(1.5, Color32::from_gray(230)));
 
@@ -88,6 +137,11 @@ pub fn range_slider(ui: &mut egui::Ui, duration: f64, start: &mut f64, end: &mut
     }
     if resp.hovered() || resp.dragged() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    if let (Some(p), false) = (resp.hover_pos(), resp.dragged()) {
+        if let Some(j) = joins.iter().find(|j| (x_of(j.at) - p.x).abs() <= SNAP_PX) {
+            let _ = resp.clone().on_hover_text_at_pointer(format!("Join at {}\n{}  →  {}", format_time(j.at), j.before, j.after));
+        }
     }
     moved
 }
@@ -119,6 +173,20 @@ mod tests {
         assert_eq!(format_time(0.0), "0:00.00");
         assert_eq!(format_time(65.25), "1:05.25");
         assert_eq!(format_time(3725.5), "1:02:05.50");
+    }
+
+    #[test]
+    fn finds_the_join_before_and_after() {
+        let join = |at, number| Join { at, number, before: String::new(), after: String::new() };
+        let joins = [join(10.0, 2), join(25.0, 3)];
+        assert_eq!(neighbour_join(&joins, 0.0, 1), Some(10.0));
+        // Standing on a join finds the next one, in both directions.
+        assert_eq!(neighbour_join(&joins, 10.0, 1), Some(25.0));
+        assert_eq!(neighbour_join(&joins, 25.0, -1), Some(10.0));
+        assert_eq!(neighbour_join(&joins, 12.0, -1), Some(10.0));
+        assert_eq!(neighbour_join(&joins, 5.0, -1), None);
+        assert_eq!(neighbour_join(&joins, 30.0, 1), None);
+        assert_eq!(neighbour_join(&[], 1.0, 1), None);
     }
 
     #[test]

@@ -19,16 +19,16 @@ fn icon() -> egui::IconData {
 }
 
 fn main() -> eframe::Result {
-    let mut file = None;
+    let mut files = Vec::new();
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "-h" | "--help" => {
-                println!("video {}\n\nUsage: video [FILE]\n\nConvert, cut and crop a video, and keep it under a file size.", env!("CARGO_PKG_VERSION"));
+                println!("video {}\n\nUsage: video [FILE...]\n\nConvert, cut and crop a video, and keep it under a file size.\nSeveral files are combined, in the order given.", env!("CARGO_PKG_VERSION"));
                 return Ok(());
             }
             // macOS passes this when launched from Finder.
             s if s.starts_with("-psn_") => {}
-            s => file = Some(std::path::PathBuf::from(s)),
+            s => files.push(std::path::PathBuf::from(s)),
         }
     }
 
@@ -40,5 +40,5 @@ fn main() -> eframe::Result {
         .with_icon(icon())
         .with_drag_and_drop(true);
     let options = eframe::NativeOptions { viewport, ..Default::default() };
-    eframe::run_native("Video", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, file)))))
+    eframe::run_native("Video", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, files)))))
 }

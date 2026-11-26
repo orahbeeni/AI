@@ -3,7 +3,7 @@
 use crate::encode::{self, ClipJob, Crop, Format, Job, Span};
 use crate::ffmpeg::{self, Frame, Info, Tools};
 use crate::player::Player;
-use crate::timeline::{self, Handle};
+use crate::timeline::{self, Handle, Join};
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Id, Key, Modifiers, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, pos2,
     vec2,
@@ -57,10 +57,80 @@ enum AddMode {
 
 /// What the row of videos asked for.
 enum ClipAction {
+    Combine,
     Select(usize),
     Move(isize),
     Remove,
     Add(AddMode),
+}
+
+/// A working file made by combining videos; it is deleted when the last holder lets go (a running conversion holds
+/// on to it, so replacing the project meanwhile cannot pull it away).
+struct TempFile(PathBuf);
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+const TEMP_PREFIX: &str = "video-combined-";
+
+/// Working files left behind by a crash are removed once they are a day old.
+fn sweep_stale_temp_files() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else { return };
+    for entry in entries.flatten() {
+        let stale = entry.file_name().to_str().is_some_and(|n| n.starts_with(TEMP_PREFIX))
+            && entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs() > 24 * 3600);
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// The "Combine videos" window: the videos picked so far, in the order they will be joined.
+#[derive(Default)]
+struct Combine {
+    open: bool,
+    items: Vec<(PathBuf, Info)>,
+    error: Option<String>,
+    run: Option<CombineRun>,
+}
+
+struct CombineRun {
+    rx: Receiver<CombineMsg>,
+    status: String,
+    progress: f32,
+    cancel: Arc<AtomicBool>,
+    items: Vec<(PathBuf, Info)>,
+    output: Arc<TempFile>,
+}
+
+enum CombineMsg {
+    Event(encode::Event),
+    Finished(Result<(), encode::Error>),
+}
+
+/// What the combine window asked for.
+enum CombineAction {
+    Add,
+    Move(usize, isize),
+    Remove(usize),
+    Start,
+    Cancel,
+    Close,
+}
+
+/// The markers for the places where `items` meet: each is where the next video starts on the combined timeline.
+fn joins_of(items: &[(PathBuf, Info)]) -> Vec<Join> {
+    let name = |path: &Path| path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let mut at = 0.0;
+    let mut joins = Vec::new();
+    for (i, pair) in items.windows(2).enumerate() {
+        at += pair[0].1.duration;
+        joins.push(Join { at, number: i + 2, before: name(&pair[0].0), after: name(&pair[1].0) });
+    }
+    joins
 }
 
 /// The crop rectangle, in pixels of the source picture.
@@ -113,6 +183,8 @@ enum Transport {
     Step(i32),
     SetStart,
     SetEnd,
+    /// To the previous (-1) or next (1) place where combined videos meet.
+    ToJoin(i32),
 }
 
 /// Edits of the parts to keep.
@@ -202,6 +274,11 @@ struct Clip {
     crop_on: bool,
     crop: CropBox,
     preview: Preview,
+    /// Where the videos this one was combined from meet.
+    joins: Vec<Join>,
+    /// Shown instead of the file name (a combined video lives in a working file with a made-up name).
+    title: Option<String>,
+    temp: Option<Arc<TempFile>>,
 }
 
 fn in_spans(spans: &[Span], t: f64) -> bool {
@@ -223,12 +300,18 @@ impl Clip {
             crop_on: false,
             crop: CropBox::inset(info.width, info.height),
             preview: Preview::default(),
+            joins: Vec::new(),
+            title: None,
+            temp: None,
             path,
             info,
         }
     }
 
     fn name(&self) -> String {
+        if let Some(title) = &self.title {
+            return title.clone();
+        }
         self.path.file_name().unwrap_or_default().to_string_lossy().into_owned()
     }
 
@@ -348,11 +431,15 @@ pub struct App {
     run: RunState,
     run_rx: Option<Receiver<RunMsg>>,
     last_dir: Option<PathBuf>,
+    combine: Combine,
     frames: u32,
+    shot_asked: bool,
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, file: Option<PathBuf>) -> Self {
+    /// One file opens it; several (from the command line) go straight to the combine window, in the order given.
+    pub fn new(cc: &eframe::CreationContext<'_>, mut files: Vec<PathBuf>) -> Self {
+        sweep_stale_temp_files();
         let mut app = App {
             tools: ToolState::Failed(String::new()),
             install_rx: None,
@@ -360,7 +447,7 @@ impl App {
             current: 0,
             out_path: PathBuf::new(),
             format: Format::Mp4,
-            waiting: file.map(|f| (f, AddMode::Replace)),
+            waiting: if files.len() == 1 { files.pop().map(|f| (f, AddMode::Replace)) } else { None },
             error: None,
             limit_size: true,
             target_mb: DEFAULT_TARGET_MB,
@@ -368,13 +455,18 @@ impl App {
             run: RunState::Idle,
             run_rx: None,
             last_dir: None,
+            combine: Combine::default(),
             frames: 0,
+            shot_asked: false,
         };
         match ffmpeg::locate() {
             Some(tools) => app.tools = ToolState::Ready(tools),
             None => app.start_install(&cc.egui_ctx),
         }
         app.open_waiting(&cc.egui_ctx);
+        if files.len() > 1 {
+            app.add_to_combine(files);
+        }
         app
     }
 
@@ -441,6 +533,178 @@ impl App {
         }
     }
 
+    /// Puts videos at the end of the combine list, in the order given, and shows the window.
+    fn add_to_combine(&mut self, paths: Vec<PathBuf>) {
+        self.combine.open = true;
+        let Some(tools) = self.tools().cloned() else {
+            self.combine.error = Some("ffmpeg is still being installed; try again in a moment".into());
+            return;
+        };
+        let mut problems = Vec::new();
+        for path in paths {
+            match ffmpeg::probe(&tools, &path) {
+                Ok(info) => {
+                    self.last_dir = path.parent().map(Path::to_path_buf);
+                    self.combine.items.push((path, info));
+                }
+                Err(e) => problems.push(format!("{}: {e}", path.display())),
+            }
+        }
+        self.combine.error = (!problems.is_empty()).then(|| problems.join("\n"));
+    }
+
+    fn pick_files_to_combine(&mut self) {
+        let mut dialog = rfd::FileDialog::new().add_filter("Video", &VIDEO_EXTENSIONS);
+        if let Some(dir) = &self.last_dir {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(paths) = dialog.pick_files() {
+            self.add_to_combine(paths);
+        }
+    }
+
+    /// Joins the listed videos into one working file in the background.
+    fn start_combine(&mut self, ctx: &egui::Context) {
+        let Some(tools) = self.tools().cloned() else { return };
+        if self.combine.items.len() < 2 || self.combine.run.is_some() {
+            return;
+        }
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let output = Arc::new(TempFile(std::env::temp_dir().join(format!("{TEMP_PREFIX}{}-{nanos}.mp4", std::process::id()))));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::channel();
+        let items = self.combine.items.clone();
+        let (flag, ctx, job_items, target) = (cancel.clone(), ctx.clone(), items.clone(), output.0.clone());
+        thread::spawn(move || {
+            let report = |event| {
+                let _ = tx.send(CombineMsg::Event(event));
+                ctx.request_repaint();
+            };
+            let result = encode::combine(&tools, &job_items, &target, &flag, &report);
+            let _ = tx.send(CombineMsg::Finished(result));
+            ctx.request_repaint();
+        });
+        self.combine.error = None;
+        self.combine.run = Some(CombineRun { rx, status: "Starting…".into(), progress: 0.0, cancel, items, output });
+    }
+
+    /// The combined video becomes the project: one video, with markers where the originals meet.
+    fn finish_combine(&mut self, run: CombineRun, ctx: &egui::Context) {
+        let Some(tools) = self.tools().cloned() else { return };
+        let info = match ffmpeg::probe(&tools, &run.output.0) {
+            Ok(info) => info,
+            Err(e) => {
+                self.combine.error = Some(format!("the combined video cannot be read: {e}"));
+                return;
+            }
+        };
+        for clip in &mut self.clips {
+            clip.player.stop();
+        }
+        let first = run.items[0].0.clone();
+        let mut clip = Clip::new(run.output.0.clone(), info);
+        clip.joins = joins_of(&run.items);
+        clip.title = Some(format!("Combined: {} videos", run.items.len()));
+        clip.temp = Some(run.output.clone());
+        self.out_path = unique_path(first.parent().unwrap_or(Path::new("")), &format!("{}_combined", stem_of(&first)), self.format.extension());
+        self.clips = vec![clip];
+        self.current = 0;
+        self.clips[0].show_frame(&tools, ctx, 0.0);
+        self.error = None;
+        self.run = RunState::Idle;
+        self.combine = Combine::default();
+    }
+
+    fn combine_window(&mut self, ctx: &egui::Context) {
+        if !self.combine.open {
+            return;
+        }
+        let mut action = None;
+        let ready = self.tools().is_some();
+        let running = self.combine.run.as_ref().map(|r| (r.status.clone(), r.progress));
+        let items = &self.combine.items;
+        egui::Window::new("Combine videos").collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).default_width(540.0).show(ctx, |ui| {
+            ui.label("Pick the videos in the order they should play. They are joined into one video first, which you then edit as usual; orange markers on the timeline show where they meet.");
+            ui.add_space(6.0);
+            ui.add_enabled_ui(running.is_none(), |ui| {
+                if items.is_empty() {
+                    ui.label(RichText::new("Nothing picked yet. Add videos one at a time to choose the order as you go, or drop several files on the window.").weak());
+                }
+                egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                    for (i, (path, info)) in items.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(format!("{:>2}", i + 1)).strong().monospace());
+                            if ui.add_enabled(i > 0, egui::Button::new("Up").small()).on_hover_text("Play earlier").clicked() {
+                                action = Some(CombineAction::Move(i, -1));
+                            }
+                            if ui.add_enabled(i + 1 < items.len(), egui::Button::new("Down").small()).on_hover_text("Play later").clicked() {
+                                action = Some(CombineAction::Move(i, 1));
+                            }
+                            if ui.add(egui::Button::new("Remove").small()).on_hover_text("Take it out of the list").clicked() {
+                                action = Some(CombineAction::Remove(i));
+                            }
+                            ui.label(RichText::new(timeline::format_time(info.duration)).monospace().weak());
+                            let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                            ui.add(egui::Label::new(name).truncate()).on_hover_text(path.display().to_string());
+                        });
+                    }
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(ready, egui::Button::new("+ Add videos…")).on_hover_text("They go to the end of the list").clicked() {
+                        action = Some(CombineAction::Add);
+                    }
+                    let total: f64 = items.iter().map(|(_, i)| i.duration).sum();
+                    ui.label(RichText::new(format!("{} video{}, {} in all", items.len(), if items.len() == 1 { "" } else { "s" }, timeline::format_time(total))).weak());
+                });
+            });
+            if let Some(e) = &self.combine.error {
+                ui.colored_label(BAD, e);
+            }
+            ui.add_space(6.0);
+            match &running {
+                Some((status, progress)) => {
+                    ui.label(status);
+                    ui.add(egui::ProgressBar::new(*progress).show_percentage());
+                    if ui.button("Cancel").clicked() {
+                        action = Some(CombineAction::Cancel);
+                    }
+                }
+                None => {
+                    ui.horizontal(|ui| {
+                        let button = egui::Button::new(RichText::new("Combine").strong().color(Color32::WHITE)).fill(ACCENT).min_size(vec2(110.0, 28.0));
+                        if ui.add_enabled(ready && items.len() >= 2, button).on_hover_text("Needs at least two videos").clicked() {
+                            action = Some(CombineAction::Start);
+                        }
+                        if ui.button("Close").clicked() {
+                            action = Some(CombineAction::Close);
+                        }
+                    });
+                }
+            }
+        });
+        match action {
+            Some(CombineAction::Add) => self.pick_files_to_combine(),
+            Some(CombineAction::Move(i, delta)) => {
+                let to = i as isize + delta;
+                if (0..self.combine.items.len() as isize).contains(&to) {
+                    self.combine.items.swap(i, to as usize);
+                }
+            }
+            Some(CombineAction::Remove(i)) => {
+                self.combine.items.remove(i);
+            }
+            Some(CombineAction::Start) => self.start_combine(ctx),
+            Some(CombineAction::Cancel) => {
+                if let Some(run) = &self.combine.run {
+                    run.cancel.store(true, Ordering::Relaxed);
+                }
+            }
+            Some(CombineAction::Close) => self.combine = Combine::default(),
+            None => {}
+        }
+    }
+
     /// The output file follows the chosen format, and never lands on a file that is already there.
     fn format_changed(&mut self) {
         let dir = self.out_path.parent().map(Path::to_path_buf).unwrap_or_default();
@@ -491,6 +755,28 @@ impl App {
             }
         }
 
+        let msgs: Vec<CombineMsg> = self.combine.run.as_ref().map(|r| r.rx.try_iter().collect()).unwrap_or_default();
+        for msg in msgs {
+            match msg {
+                CombineMsg::Event(event) => {
+                    if let Some(run) = &mut self.combine.run {
+                        match event {
+                            encode::Event::Status(s) => run.status = s,
+                            encode::Event::Progress(p) => run.progress = p,
+                        }
+                    }
+                }
+                CombineMsg::Finished(result) => {
+                    let Some(run) = self.combine.run.take() else { continue };
+                    match result {
+                        Ok(()) => self.finish_combine(run, ctx),
+                        Err(encode::Error::Cancelled) => {}
+                        Err(encode::Error::Failed(msg)) => self.combine.error = Some(msg),
+                    }
+                }
+            }
+        }
+
         if let (Some(v), Some(tools)) = (self.clips.get_mut(self.current), self.tools.as_tools()) {
             if let Some(t) = v.preview.poll(ctx) {
                 v.preview.request(tools, &v.path, t, ctx);
@@ -522,9 +808,18 @@ impl App {
         }
         self.open_waiting(ctx);
 
-        // Dropping a video on the window starts a project, or joins it to the end of the current one.
-        let dropped = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf()));
-        if let Some(path) = dropped {
+        // Dropping one video on the window starts a project, or joins it to the end of the current one. Dropping
+        // several (or any while the combine window is open) puts them in the combine list.
+        let mut dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
+        if self.combine.open || dropped.len() > 1 {
+            if dropped.len() > 1 {
+                // The order a drop arrives in is arbitrary; by name is at least predictable.
+                dropped.sort();
+            }
+            if self.combine.run.is_none() && !dropped.is_empty() {
+                self.add_to_combine(dropped);
+            }
+        } else if let Some(path) = dropped.pop() {
             let mode = if self.clips.is_empty() { AddMode::Replace } else { AddMode::After };
             self.waiting = Some((path, mode));
             self.open_waiting(ctx);
@@ -552,10 +847,16 @@ impl App {
             }
             Transport::SetStart => v.start = v.scrub.min(v.end - gap).max(0.0),
             Transport::SetEnd => v.end = v.scrub.max(v.start + gap).min(duration),
+            Transport::ToJoin(dir) => {
+                if let Some(t) = timeline::neighbour_join(&v.joins, v.scrub, dir) {
+                    v.seek(&tools, ctx, t);
+                }
+            }
         }
     }
 
-    /// Space plays and pauses, arrows step (with Shift: jump 5 s), I and O set the start and end.
+    /// Space plays and pauses, arrows step (with Shift: jump 5 s), I and O set the start and end, [ and ] go to the
+/// previous and next place where combined videos meet.
     fn keys(&mut self, ctx: &egui::Context) {
         if self.clips.is_empty() || ctx.egui_wants_keyboard_input() {
             return;
@@ -576,6 +877,10 @@ impl App {
                 Some(Transport::SetStart)
             } else if pressed(Modifiers::NONE, Key::O) {
                 Some(Transport::SetEnd)
+            } else if pressed(Modifiers::NONE, Key::OpenBracket) {
+                Some(Transport::ToJoin(-1))
+            } else if pressed(Modifiers::NONE, Key::CloseBracket) {
+                Some(Transport::ToJoin(1))
             } else {
                 None
             }
@@ -591,12 +896,15 @@ impl App {
         let cancel = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
         let (flag, ctx) = (cancel.clone(), ctx.clone());
+        // Combined videos live in working files; they must outlive this conversion even if the project is replaced.
+        let working_files: Vec<Arc<TempFile>> = self.clips.iter().filter_map(|c| c.temp.clone()).collect();
         thread::spawn(move || {
             let report = |event| {
                 let _ = tx.send(RunMsg::Event(event));
                 ctx.request_repaint();
             };
             let result = encode::run(&tools, &job, &flag, &report);
+            drop(working_files);
             let _ = tx.send(RunMsg::Finished(result));
             ctx.request_repaint();
         });
@@ -616,6 +924,13 @@ impl App {
             if ui.add_enabled(ready, egui::Button::new("Open video…")).on_hover_text("Start over with another video").clicked() {
                 action = Some(ClipAction::Add(AddMode::Replace));
             }
+            if ui
+                .add_enabled(ready, egui::Button::new("Combine videos…"))
+                .on_hover_text("Pick several videos in order and join them into one before editing")
+                .clicked()
+            {
+                action = Some(ClipAction::Combine);
+            }
             match self.clips.get(self.current) {
                 Some(v) => {
                     let i = &v.info;
@@ -634,7 +949,7 @@ impl App {
                     );
                 }
                 None => {
-                    ui.label(RichText::new("Open a video, or drop one on this window").weak());
+                    ui.label(RichText::new("Open a video, drop one on this window, or combine several").weak());
                 }
             }
         });
@@ -725,6 +1040,7 @@ impl App {
                 }
             }
             Some(ClipAction::Add(mode)) => self.pick_file(mode, &ctx),
+            Some(ClipAction::Combine) => self.combine.open = true,
             _ => {}
         }
     }
@@ -758,6 +1074,14 @@ impl App {
                 ] {
                     if ui.button(label).on_hover_text(tip).clicked() {
                         transport = Some(action);
+                    }
+                }
+                if !v.joins.is_empty() {
+                    ui.separator();
+                    for (label, tip, dir) in [("◀ Join", "Previous place where videos meet ([)", -1), ("Join ▶", "Next place where videos meet (])", 1)] {
+                        if ui.button(label).on_hover_text(tip).clicked() {
+                            transport = Some(Transport::ToJoin(dir));
+                        }
                     }
                 }
                 ui.separator();
@@ -795,7 +1119,7 @@ impl App {
 
             ui.add_space(4.0);
             let spans = v.spans();
-            if let Some(handle) = timeline::range_slider(ui, duration, &mut v.start, &mut v.end, v.scrub, &spans) {
+            if let Some(handle) = timeline::range_slider(ui, duration, &mut v.start, &mut v.end, v.scrub, &spans, &v.joins) {
                 show = Some(if handle == Handle::Start { v.start } else { v.end });
             }
             ui.horizontal_wrapped(|ui| {
@@ -830,6 +1154,15 @@ impl App {
                 ))
                 .weak(),
             );
+            if !v.joins.is_empty() {
+                ui.label(
+                    RichText::new(format!(
+                        "Orange markers: where your {} videos meet. [ and ] jump between them, and the handles snap to them (hold Alt to place them freely).",
+                        v.joins.len() + 1
+                    ))
+                    .color(Color32::from_rgb(255, 176, 46)),
+                );
+            }
             if let Some(edit) = edit {
                 v.edit(edit);
                 show = Some(v.scrub);
@@ -1066,13 +1399,22 @@ impl App {
 impl App {
     /// Testing hook: `VIDEO_SCREENSHOT=out.png` saves the window to a PNG a moment after start and quits.
     /// `VIDEO_DEMO=1` turns the crop box on and selects part of the video; `play` starts playback at 10 s;
-    /// `edit` cuts a piece out of the middle and joins a second copy of the video on the end.
+    /// `edit` cuts a piece out of the middle and joins a second copy of the video on the end; `combine-list` fills the
+/// combine window and `combine` also runs it, both with the comma-separated files in `VIDEO_COMBINE`.
     fn screenshot_hook(&mut self, ctx: &egui::Context) {
         let Some(path) = std::env::var_os("VIDEO_SCREENSHOT") else { return };
         self.frames += 1;
         ctx.request_repaint();
         if self.frames == 5 && std::env::var_os("VIDEO_DEMO").is_some() {
             let demo = std::env::var("VIDEO_DEMO").unwrap_or_default();
+            if demo.starts_with("combine") {
+                let files = std::env::var("VIDEO_COMBINE").unwrap_or_default().split(',').filter(|f| !f.is_empty()).map(PathBuf::from).collect();
+                self.add_to_combine(files);
+                if demo == "combine" {
+                    self.start_combine(ctx);
+                }
+                return;
+            }
             if let (Some(v), Some(tools)) = (self.clips.get_mut(self.current), self.tools.as_tools().cloned()) {
                 let duration = v.info.duration;
                 match demo.as_str() {
@@ -1100,7 +1442,8 @@ impl App {
                 v.show_frame(&tools, ctx, v.end);
             }
         }
-        if self.frames == 300 {
+        if self.frames >= 300 && !self.shot_asked && self.combine.run.is_none() {
+            self.shot_asked = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
         }
         let shot = ctx.input(|i| {
@@ -1143,6 +1486,7 @@ impl eframe::App for App {
             egui::Panel::bottom("controls").show(ui, |ui| self.controls(ui));
         }
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| self.preview(ui));
+        self.combine_window(&ctx);
     }
 }
 

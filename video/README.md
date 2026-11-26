@@ -8,6 +8,7 @@ and keep the file under a size (for example 20 MB). It is a front end for ffmpeg
 ```sh
 cargo run --release                  # then open a video, or drop one on the window
 cargo run --release -- clip.mov      # open a file straight away
+cargo run --release -- a.mov b.mov c.mov   # several files: the combine window, in the order given
 cargo build --release                # target/release/video
 ```
 
@@ -29,7 +30,7 @@ comes with every desktop). Building needs the ALSA development files for sound p
    the *Convert to* menu; any video ffmpeg can read can be the source.
 2. **Play** the video in the window to find the points: Play/Pause, back/forward 5 s, previous/next picture, a position
    slider, volume and mute. *Set start* / *Set end* take the current position.
-   Keys: `Space` play/pause, `←` `→` one picture (with `Shift` 5 s), `I` start, `O` end.
+   Keys: `Space` play/pause, `←` `→` one picture (with `Shift` 5 s), `I` start, `O` end, `[` `]` previous/next join.
 3. **Cut**: the two handles on the timeline (or typed times like `1:30.5`) are a selection.
    - Used as they are, the selection is the part that is kept (plain trimming).
    - *Keep only selection* throws away everything outside it, *Remove selection* cuts the selection out and joins what is
@@ -40,9 +41,19 @@ comes with every desktop). Building needs the ALSA development files for sound p
    window adds it to the end). Click a video in the *Videos* row to edit it; each has its own cuts and crop. ◀ ▶ reorder,
    *Remove* takes one out. The result is as big as the first video's picture (after its crop); the others are fitted into
    it with black bars, and a video without sound gets silence so the rest stays in step.
-5. **Crop** (per video): tick *Crop this video*, then drag on the picture to draw the area, drag inside it to move it,
+5. **Combine first, then edit**: *Combine videos…* opens a list where you pick the videos in the order they should
+   play (*+ Add videos…* appends, so adding one at a time sets the order as you go; *Up*/*Down*/*Remove* fix it
+   afterwards). Dropping several files on the window, or giving several on the command line, fills the list too
+   (a drop is sorted by name; a command line keeps your order). *Combine* joins them into one working file in the
+   background (a temp file at near-lossless quality, CRF 14, deleted when you replace the project or quit), and that
+   becomes the project: one video you cut, crop and size as above. **Orange markers** on the timeline, numbered by the
+   video that starts there, show where the originals meet (hover one for the file names). `[` and `]` (or the
+   *◀ Join* / *Join ▶* buttons) move the playhead to the previous/next marker, and the selection handles snap to them
+   (hold Alt to place them freely), so removing exactly one video's part is two drags. The picture size is the first
+   video's; the others are fitted into it with black bars.
+6. **Crop** (per video): tick *Crop this video*, then drag on the picture to draw the area, drag inside it to move it,
    drag its edges to resize. The 16:9, 9:16, 1:1, 4:3 and 4:5 buttons make the biggest centred box of that shape.
-6. **Size**: *Keep the file under* takes any size you type: `20`, `12.5`, `500kb`, `1.5gb` (a plain number is megabytes;
+7. **Size**: *Keep the file under* takes any size you type: `20`, `12.5`, `500kb`, `1.5gb` (a plain number is megabytes;
    1 MB is 1,000,000 bytes, so a 20 MB file is also under 20 MiB). The buttons are shortcuts. Untick it for plain high
    quality.
 
@@ -97,5 +108,6 @@ Downloaded copies go to the app's data folder (`~/Library/Application Support/vi
 cargo test                                                    # logic, plus a real trim + crop + size-limit run if ffmpeg is installed
 VIDEO_TEST_FILE=clip.mov [VIDEO_TEST_OUT=out.mp4] cargo test real_file -- --ignored --nocapture   # a real file to under 20 MB
 VIDEO_SCREENSHOT=ui.png VIDEO_DEMO=1 cargo run -- clip.mov    # saves the window to a PNG and quits (VIDEO_DEMO=play | edit for other states)
+VIDEO_SCREENSHOT=ui.png VIDEO_DEMO=combine VIDEO_COMBINE=a.mp4,b.mp4,c.mp4 cargo run   # combines them, then saves the window (combine-list: stop at the list)
 VIDEO_MANAGED_FFMPEG_ONLY=1 cargo run                         # ignore the system ffmpeg: forces the download path
 ```
