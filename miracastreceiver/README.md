@@ -66,20 +66,25 @@ sudo ufw allow in on p2p-+ to any port 67 proto udp   # DHCP on Wi-Fi Direct lin
 
 ## Using it
 
+The header has buttons for activity, stats, full screen and settings (hover for their names). While a device is
+connected, the bar at the bottom shows the session with volume, refresh, file sharing and **Disconnect**. Settings,
+file sharing and the activity log open in a side panel; **Esc** closes it.
+
 | | |
 |---|---|
 | **F11** / double-click | full screen (double-click when input isn't going to the device) |
-| **F3** / Stats | overlay: decoder, fps, bitrate, packet loss, decode-to-display latency |
+| **F3** / stats button | overlay: decoder, fps, bitrate, packet loss, decode-to-display latency |
 | click the picture | locks the mouse to the device (relative HID mouse); **Ctrl+Alt** releases |
-| Refresh | ask the device for a fresh key frame (if the picture is smeared) |
-| Settings | name, Wi-Fi Direct / MS-MICE, auto-accept, input on/off, max quality, decoder, latency vs. smooth |
+| refresh button | ask the device for a fresh key frame (if the picture is smeared) |
+| settings button | name, Wi-Fi Direct / MS-MICE, auto-accept, input on/off, max quality, decoder, latency vs. smooth, pointer, file sharing |
+| activity button | recent events, with **Copy log** for bug reports |
 
 On desktops where NetworkManager manages Wi-Fi, it makes the Wi-Fi Direct connection when you click Allow (it deletes
 groups it did not start). That path supports push-button pairing only and connects without extra network capabilities. With `cap_net_admin`
 (granted by the setup script) the app also turns Wi-Fi power saving off on the link, which otherwise adds lag.
 
 **Files.** Miracast carries no files, so while a device is connected the app serves a small page on the link to it
-(shown under **Files**, usually `http://192.168.49.200:8765`). Drag files onto the window, then open that address in
+(shown by the folder button in the bottom bar, usually `http://192.168.49.200:8765`). Drag files onto the window, then open that address in
 the device's web browser to download them, or to send files back (saved in `~/Downloads/Miracast`, never
 overwriting). Only the connected device is answered, only the files you added can be downloaded, the list is cleared
 when the session ends, and Settings can turn it off. The transfer is plain HTTP over the encrypted Wi-Fi Direct link
@@ -162,10 +167,14 @@ miracast-receiver --selftest shot.png  # same with the window; saves a screensho
 
 ## Not done / known limits
 
-* **No real phone has been tested yet.** Wi-Fi Direct on Linux has been tested against a mock wpa_supplicant,
-  not a Samsung phone. The first real DeX connection is the next thing to try. Logs with `RUST_LOG=debug`
-  will show where it stops if it does.
+* **Real hardware:** only one phone (a Galaxy S24 Ultra) on one Ubuntu laptop has been tried. File sharing hasn't
+  been tried from a phone yet. Logs with `RUST_LOG=debug` show where a connection stops.
 * **Windows Wi-Fi Direct** (WinRT) and all macOS/Windows builds have only been compile-checked.
 * **HDCP** isn't supported (`wfd_content_protection: none`), so protected video apps may refuse to cast.
 * **MS-MICE** without DTLS/PIN: the receiver advertises neither, so Windows uses an unencrypted session.
 * One source at a time. A second device is refused while one is connected.
+
+## Credits
+
+The interface uses the [Inter](https://rsms.me/inter/) typeface, under the SIL Open Font License 1.1
+(see `assets/fonts/LICENSE-Inter.txt`).

@@ -162,6 +162,7 @@ fn run_gui(cli: Cli) -> i32 {
         viewport: egui::ViewportBuilder::default()
             .with_title(title)
             .with_app_id("miracast-receiver")
+            .with_icon(window_icon())
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([480.0, 320.0])
             .with_fullscreen(cli.fullscreen),
@@ -187,6 +188,16 @@ fn run_gui(cli: Cli) -> i32 {
         return 4;
     }
     ui::SELFTEST_EXIT.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// The icon for the title bar and task switcher (assets/miracast-receiver.svg).
+fn window_icon() -> egui::IconData {
+    let png = png::Decoder::new(std::io::Cursor::new(include_bytes!("../../../assets/miracast-receiver-128.png")));
+    let mut reader = png.read_info().expect("embedded icon");
+    let mut rgba = vec![0; reader.output_buffer_size().expect("embedded icon size")];
+    let frame = reader.next_frame(&mut rgba).expect("embedded icon pixels");
+    rgba.truncate(frame.buffer_size());
+    egui::IconData { rgba, width: frame.width, height: frame.height }
 }
 
 fn headless_selftest(seconds: u64) -> i32 {
@@ -373,4 +384,13 @@ fn doctor() -> i32 {
     println!("Primary IPv4: {}", wfd_transport::net::primary_ipv4().map_or("none".into(), |i| i.to_string()));
     info!("doctor finished");
     0
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn window_icon_is_rgba() {
+        let icon = super::window_icon();
+        assert_eq!(icon.rgba.len(), (icon.width * icon.height * 4) as usize);
+    }
 }
